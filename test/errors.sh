@@ -252,6 +252,13 @@ expect_error "1:17: error: unsupported non-standard concatenation of string lite
 char *s = u8"a" u"b";
 EOF
 
+# "a" is re-read as a wide string to join it with L"b"; it must keep its line.
+expect_error "3:11: error: cannot convert 'int *' to 'char *' in initialization (use a cast if this is intended)" <<'EOF'
+int x;
+int y;
+char *p = "a" L"b";
+EOF
+
 expect_ok 'u8 string concatenated with a plain string' <<'EOF'
 _Static_assert(sizeof(u8"ab" "cd") == 5, "");
 EOF
