@@ -1784,6 +1784,10 @@ static void emit_text(Obj *prog) {
 void codegen(Obj *prog, FILE *out) {
   output_file = out;
 
+  // Names the object's source file in its symbol table. Without it, ld
+  // uses the temporary .o's random name, and no two builds are identical.
+  println("  .file \"%s\"", base_file);
+
   File **files = get_input_files();
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);

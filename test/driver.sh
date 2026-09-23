@@ -309,4 +309,11 @@ echo 'int main() {}' | $mucc -c -o $tmp/baz.o -xc -
 cc -Xlinker -z -Xlinker muldefs -Xlinker --gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
 check -Xlinker
 
+# Reproducible builds: the same source links to the same bytes every time
+echo 'static int s = 1; int main() { return s; }' > $tmp/repro.c
+$mucc -o $tmp/repro1 $tmp/repro.c
+$mucc -o $tmp/repro2 $tmp/repro.c
+cmp -s $tmp/repro1 $tmp/repro2
+check 'reproducible builds'
+
 echo OK
