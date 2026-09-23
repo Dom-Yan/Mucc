@@ -21,6 +21,9 @@ static bool at_bol;
 // True if the current position follows a space character
 static bool has_space;
 
+// Line number of the current position
+static int line_no;
+
 //---------- Error reporting -------------------------------------------------
 
 // Diagnostics look like this, which editors and terminals can jump to:
@@ -154,9 +157,12 @@ void error_expected(Token *tok, char *what) {
 
 //---------- Token matching helpers ------------------------------------------
 
-// Consumes the current token if it matches `op`.
+// Returns true if the current token is `op`. The parser calls this
+// constantly and nearly every call fails, usually on the first character,
+// so check that before comparing the rest.
 bool equal(Token *tok, char *op) {
-  return memcmp(tok->loc, op, tok->len) == 0 && op[tok->len] == '\0';
+  return tok->loc[0] == op[0] && memcmp(tok->loc, op, tok->len) == 0 &&
+         op[tok->len] == '\0';
 }
 
 // Ensure that the current token is `op`.
@@ -185,6 +191,7 @@ static Token *new_token(TokenKind kind, char *start, char *end) {
   tok->len = end - start;
   tok->file = current_file;
   tok->filename = current_file->display_name;
+  tok->line_no = line_no;
   tok->at_bol = at_bol;
   tok->has_space = has_space;
 
@@ -208,6 +215,14 @@ static int read_ident(char *start) {
     return 0;
 
   for (;;) {
+    // Fast path: plain ASCII letters, digits, _ and $.
+    if (isalnum((unsigned char)*p) || *p == '_' || *p == '$') {
+      p++;
+      continue;
+    }
+    if ((unsigned char)*p < 128)
+      return p - start;
+
     char *q;
     c = decode_utf8(&q, p);
     if (!is_ident2(c))
@@ -233,7 +248,7 @@ static int read_punct(char *p) {
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
-    if (startswith(p, kw[i]))
+    if (p[0] == kw[i][0] && startswith(p, kw[i]))
       return strlen(kw[i]);
 
   return ispunct(*p) ? 1 : 0;
@@ -567,29 +582,20 @@ void convert_pp_tokens(Token *tok) {
 
 //---------- Main tokenizer loop ---------------------------------------------
 
-// Initialize line info for all tokens.
-static void add_line_numbers(Token *tok) {
-  char *p = current_file->contents;
-  int n = 1;
-
-  do {
-    if (p == tok->loc) {
-      tok->line_no = n;
-      tok = tok->next;
-    }
-    if (*p == '\n')
-      n++;
-  } while (*p++);
-}
-
+// Re-reads string literal `tok` as a wide string of `basety` characters.
+// The result keeps tok's source position; only its type and bytes change.
 Token *tokenize_string_literal(Token *tok, Type *basety) {
   Token *t;
   if (basety->size == 2)
     t = read_utf16_string_literal(tok->loc, tok->loc);
   else
     t = read_utf32_string_literal(tok->loc, tok->loc, basety);
-  t->next = tok->next;
-  return t;
+
+  Token *res = arena_alloc(sizeof(Token));
+  *res = *tok;
+  res->ty = t->ty;
+  res->str = t->str;
+  return res;
 }
 
 // Tokenize a given string and returns new tokens.
@@ -602,6 +608,7 @@ Token *tokenize(File *file) {
 
   at_bol = true;
   has_space = false;
+  line_no = 1;
 
   while (*p) {
     // Skip line comments.
@@ -618,6 +625,9 @@ Token *tokenize(File *file) {
       char *q = strstr(p + 2, "*/");
       if (!q)
         error_at(p, "unclosed block comment");
+      for (; p < q; p++)
+        if (*p == '\n')
+          line_no++;
       p = q + 2;
       has_space = true;
       continue;
@@ -626,6 +636,7 @@ Token *tokenize(File *file) {
     // Skip newline.
     if (*p == '\n') {
       p++;
+      line_no++;
       at_bol = true;
       has_space = false;
       continue;
@@ -740,7 +751,6 @@ Token *tokenize(File *file) {
   }
 
   cur = cur->next = new_token(TK_EOF, p, p);
-  add_line_numbers(head.next);
   return head.next;
 }
 
@@ -897,9 +907,15 @@ Token *tokenize_file(char *path) {
   if (!memcmp(p, "\xef\xbb\xbf", 3))
     p += 3;
 
-  canonicalize_newline(p);
-  remove_backslash_newline(p);
-  convert_universal_chars(p);
+  // Most files need none of these rewrites, and each is a full pass over
+  // the file, so first do a fast search for anything to rewrite.
+  if (strchr(p, '\r'))
+    canonicalize_newline(p);
+  char *splice = strstr(p, "\\\n");
+  if (splice)
+    remove_backslash_newline(splice);
+  if (strstr(p, "\\u") || strstr(p, "\\U"))
+    convert_universal_chars(p);
 
   // Save the filename for assembler .file directive.
   static int file_no;
