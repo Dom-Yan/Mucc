@@ -238,6 +238,21 @@ int a;
 int b;
 EOF
 
+expect_error "2:2: error: #error int must be 4 bytes" <<'EOF'
+#if __SIZEOF_INT__ != 8
+#error int must be 4 bytes
+#endif
+EOF
+
+expect_error "1:2: error: #error" <<'EOF'
+#error
+EOF
+
+expect_warning "1:2: warning: #warning this is deprecated" <<'EOF'
+#warning this is deprecated
+int x;
+EOF
+
 #---------- Valid code that must still compile -------------------------------
 
 expect_ok 'implicit conversions' <<'EOF'
