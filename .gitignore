@@ -1,0 +1,13 @@
+**/*~
+**/\#*
+**/*.o
+**/*.s
+**/a.out
+/tmp*
+/thirdparty
+/mucc
+/test/*.exe
+/stage2
+hello.c
+/stage3
+/difftest-failures

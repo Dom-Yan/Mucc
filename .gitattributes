@@ -1,0 +1,2 @@
+# Always use LF so the compiler and its shell tests work under Linux/WSL.
+* text=auto eol=lf
