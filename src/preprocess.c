@@ -1219,7 +1219,9 @@ typedef enum {
 } StringKind;
 
 static StringKind getStringKind(Token *tok) {
-  if (!strcmp(tok->loc, "u8"))
+  // tok->loc points into the source and isn't NUL-terminated after the
+  // prefix, so compare the prefix and the opening quote only.
+  if (!strncmp(tok->loc, "u8\"", 3))
     return STR_UTF8;
 
   switch (tok->loc[0]) {
