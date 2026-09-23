@@ -1050,8 +1050,17 @@ static Token *preprocess2(Token *tok) {
       continue;
     }
 
-    if (equal(tok, "error"))
-      error_tok(tok, "error");
+    // #error stops with the rest of the line as the message. #warning
+    // (C23) prints it and carries on.
+    if (equal(tok, "error") || equal(tok, "warning")) {
+      Token *dir = tok;
+      char *msg = join_tokens(copy_line(&tok, tok->next), NULL);
+      char *text = format("#%.*s%s%s", dir->len, dir->loc, *msg ? " " : "", msg);
+      if (equal(dir, "error"))
+        error_tok(dir, "%s", text);
+      warn_tok(dir, "%s", text);
+      continue;
+    }
 
     // `#`-only line is legal. It's called a null directive.
     if (tok->at_bol)
