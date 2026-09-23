@@ -429,6 +429,11 @@ void check_assign(Type *to, Node *from, char *what);
 
 void codegen(Obj *prog, FILE *out);
 int align_to(int n, int align);
+extern bool has_inline_asm;
+
+//---------- asm.c: assembler (stage 5) --------------------------------------
+
+bool assemble_text(char *src, char *path, char **why);
 
 //---------- unicode.c: UTF-8 helpers ----------------------------------------
 

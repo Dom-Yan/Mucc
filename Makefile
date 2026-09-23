@@ -33,6 +33,7 @@ test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./mucc
 	test/errors.sh ./mucc
+	test/asm.sh ./mucc
 
 test-all: test test-stage2 selfhost
 
@@ -64,6 +65,7 @@ test-stage2: $(TESTS:test/%=stage2/test/%)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/mucc
 	test/errors.sh ./stage2/mucc
+	test/asm.sh ./stage2/mucc
 
 # Stage 3 (mucc compiled by the mucc that was compiled by mucc)
 #

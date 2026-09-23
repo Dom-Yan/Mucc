@@ -19,6 +19,11 @@ static size_t out_len;
 static size_t out_cap;
 
 static int depth;
+
+// Whether the program has asm("...") statements, whose instructions the
+// built-in assembler may not know (see cc1() in main.c).
+bool has_inline_asm;
+
 static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
 static char *argreg16[] = {"%di", "%si", "%dx", "%cx", "%r8w", "%r9w"};
 static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
@@ -1579,6 +1584,7 @@ static void gen_stmt(Node *node) {
     gen_expr(node->lhs);
     return;
   case ND_ASM:
+    has_inline_asm = true;
     println("  %s", node->asm_str);
     return;
   }
