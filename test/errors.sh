@@ -248,6 +248,14 @@ expect_error "1:2: error: #error" <<'EOF'
 #error
 EOF
 
+expect_error "1:17: error: unsupported non-standard concatenation of string literals" <<'EOF'
+char *s = u8"a" u"b";
+EOF
+
+expect_ok 'u8 string concatenated with a plain string' <<'EOF'
+_Static_assert(sizeof(u8"ab" "cd") == 5, "");
+EOF
+
 expect_warning "1:2: warning: #warning this is deprecated" <<'EOF'
 #warning this is deprecated
 int x;
