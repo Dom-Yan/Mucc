@@ -291,6 +291,7 @@ static bool is_keyword(Token *tok) {
       "__restrict", "__restrict__", "_Noreturn", "float", "double",
       "typeof", "asm", "_Thread_local", "__thread", "_Atomic",
       "__attribute__", "_Static_assert", "true", "false", "nullptr",
+      "constexpr",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -733,6 +734,15 @@ Token *tokenize(File *file) {
       continue;
     }
 
+    // UTF-8 character literal (C23): one byte, of type unsigned char
+    if (startswith(p, "u8'")) {
+      cur = cur->next = read_char_literal(p, p + 2, ty_uchar);
+      if (p[3] != '\\' && cur->val > 0x7F)
+        error_at(p, "u8 character literal must be a single byte; use a u8 string");
+      p += cur->len;
+      continue;
+    }
+
     // UTF-16 character literal
     if (startswith(p, "u'")) {
       cur = cur->next = read_char_literal(p, p + 1, ty_ushort);
@@ -941,15 +951,18 @@ Token *tokenize_file(char *path) {
   if (strstr(p, "\\u") || strstr(p, "\\U"))
     convert_universal_chars(p);
 
-  // Save the filename for assembler .file directive.
-  static int file_no;
-  File *file = new_file(path, file_no + 1, p);
+  return tokenize(add_input_file(path, p));
+}
 
-  // Save the filename for assembler .file directive.
-  input_files = realloc(input_files, sizeof(char *) * (file_no + 2));
+// Records a file this compilation reads, for the assembler's .file
+// directives and for -M dependency lists.
+File *add_input_file(char *path, char *contents) {
+  static int file_no;
+  File *file = new_file(path, file_no + 1, contents);
+
+  input_files = realloc(input_files, sizeof(File *) * (file_no + 2));
   input_files[file_no] = file;
   input_files[file_no + 1] = NULL;
   file_no++;
-
-  return tokenize(file);
+  return file;
 }

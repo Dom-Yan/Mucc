@@ -10,7 +10,8 @@ typedef struct {
 
 typedef __va_elem va_list[1];
 
-#define va_start(ap, last) \
+// In C23 the second argument is optional (and was never needed here).
+#define va_start(ap, ...) \
   do { *(ap) = *(__va_elem *)__va_area__; } while (0)
 
 #define va_end(ap)

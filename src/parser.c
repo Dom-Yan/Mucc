@@ -55,6 +55,7 @@ typedef struct {
   bool is_inline;
   bool is_tls;
   bool is_noreturn;
+  bool is_constexpr;
   int align;
 } VarAttr;
 
@@ -115,6 +116,11 @@ static char *cont_label;
 static Node *current_switch;
 
 static Obj *builtin_alloca;
+
+// declspec() returns this for `auto` with no other type, as in C23's
+// `auto x = 1;`. declaration() and global_variable() then take the type
+// from the initializer. Anywhere else it acts as the old implicit int.
+static Type auto_type = {TY_INT, 4, 4};
 
 static bool is_typename(Token *tok);
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
@@ -497,11 +503,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   Type *ty = ty_int;
   int counter = 0;
   bool is_atomic = false;
+  bool is_auto = false;
 
   while (is_typename(tok)) {
     // Handle storage class specifiers.
     if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern") ||
-        equal(tok, "inline") || equal(tok, "_Thread_local") || equal(tok, "__thread")) {
+        equal(tok, "inline") || equal(tok, "_Thread_local") ||
+        equal(tok, "__thread") || equal(tok, "constexpr")) {
       if (!attr)
         error_tok(tok, "storage class specifier is not allowed in this context");
 
@@ -513,6 +521,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
         attr->is_extern = true;
       else if (equal(tok, "inline"))
         attr->is_inline = true;
+      else if (equal(tok, "constexpr"))
+        attr->is_constexpr = true;
       else
         attr->is_tls = true;
 
@@ -526,10 +536,17 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
 
     // These keywords are recognized but ignored.
     if (consume(&tok, tok, "const") || consume(&tok, tok, "volatile") ||
-        consume(&tok, tok, "auto") || consume(&tok, tok, "register") ||
-        consume(&tok, tok, "restrict") || consume(&tok, tok, "__restrict") ||
-        consume(&tok, tok, "__restrict__"))
+        consume(&tok, tok, "register") || consume(&tok, tok, "restrict") ||
+        consume(&tok, tok, "__restrict") || consume(&tok, tok, "__restrict__"))
       continue;
+
+    // With a type, `auto` is the old storage class and means nothing.
+    // Alone, it's C23 type inference (see auto_type).
+    if (equal(tok, "auto")) {
+      is_auto = true;
+      tok = tok->next;
+      continue;
+    }
 
     // _Noreturn only matters for the missing-return warning.
     if (equal(tok, "_Noreturn")) {
@@ -681,6 +698,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   }
 
   *rest = tok;
+  if (is_auto && counter == 0 && !is_atomic)
+    return &auto_type;
   return ty;
 }
 
@@ -919,6 +938,86 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
   return ty;
 }
 
+//---------- C23 auto and constexpr ------------------------------------------
+
+// The type `auto x = init;` gives x: init's type, with arrays and
+// functions turned into pointers and _Atomic dropped.
+static Type *auto_type_of(Node *init) {
+  add_type(init);
+  Type *ty = init->ty;
+
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+    return pointer_to(ty->base);
+  if (ty->kind == TY_FUNC)
+    return pointer_to(ty);
+  if (ty->kind == TY_VOID)
+    error_tok(init->tok, "cannot infer a type from a void expression");
+  if (ty->is_atomic) {
+    ty = copy_type(ty);
+    ty->is_atomic = false;
+  }
+  return ty;
+}
+
+// For `auto` at file scope or with `static`, where the initializer is
+// read by gvar_initializer(): parses it once just to learn its type.
+static Type *peek_auto_type(Token *tok) {
+  return auto_type_of(assign(&tok, tok));
+}
+
+// `auto *p = ...` and the like aren't allowed; `auto` needs a bare name.
+static void check_auto_declarator(Type *ty, Token *tok) {
+  if (ty != &auto_type && equal(tok, "="))
+    error_tok(ty->name ? ty->name : tok,
+              "'auto' can only declare a plain variable, as in 'auto x = 1'");
+}
+
+// C23 constexpr: `init` must be a constant whose value fits var's type
+// exactly. Records the value, so later constant expressions (array sizes,
+// case labels, static_assert, other constexprs) can use var. Arrays and
+// structs are accepted but act as ordinary initialized objects.
+static void set_constexpr_value(Obj *var, Node *init) {
+  Type *ty = var->ty;
+  if (!is_numeric(ty) && ty->kind != TY_PTR)
+    return;
+
+  add_type(init);
+  if (!is_const_expr(init))
+    error_tok(init->tok, "constexpr '%s' needs a constant initializer", var->name);
+  var->is_constexpr = true;
+
+  if (is_flonum(ty)) {
+    var->constexpr_fval = eval_double(init);
+    return;
+  }
+
+  if (is_flonum(init->ty))
+    error_tok(init->tok, "constexpr '%s' of type '%s' can't be initialized "
+              "with a floating value", var->name, type_name(ty));
+
+  int64_t val = eval(init);
+  if (ty->kind == TY_PTR && val != 0)
+    error_tok(init->tok, "a constexpr pointer can only be null");
+
+  // The value must survive conversion unchanged, sign included.
+  int64_t conv = eval(new_cast(init, ty));
+  bool sign_flip = val < 0 && ty->is_unsigned != init->ty->is_unsigned &&
+                   ty->kind != TY_BOOL;
+  if (conv != val || sign_flip)
+    error_tok(init->tok, "value doesn't fit in constexpr '%s' of type '%s'",
+              var->name, type_name(ty));
+  var->constexpr_val = conv;
+}
+
+// Like set_constexpr_value(), reading the initializer at `tok` (just
+// after the '='), which the caller then parses again as usual.
+static void peek_constexpr_value(Obj *var, Token *tok) {
+  if (!is_numeric(var->ty) && var->ty->kind != TY_PTR)
+    return;
+  consume(&tok, tok, "{"); // as in `constexpr int x = {1};`
+  set_constexpr_value(var, assign(&tok, tok));
+}
+
 //---------- Variable declarations and VLAs ----------------------------------
 
 // Generate code for computing a VLA size.
@@ -976,12 +1075,35 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
 
+    Token *name = ty->name;
+    bool is_constexpr = attr && attr->is_constexpr;
+    if (is_constexpr && !equal(tok, "="))
+      error_tok(name, "constexpr '%s' needs an initializer", get_ident(name));
+    if (basety == &auto_type)
+      check_auto_declarator(ty, tok);
+
     if (attr && attr->is_static) {
       // static local variable
+      if (ty == &auto_type && equal(tok, "="))
+        ty = peek_auto_type(tok->next);
       Obj *var = new_anon_gvar(ty);
-      push_scope(get_ident(ty->name))->var = var;
+      push_scope(get_ident(name))->var = var;
+      if (is_constexpr)
+        peek_constexpr_value(var, tok->next);
       if (equal(tok, "="))
         gvar_initializer(&tok, tok->next, var);
+      continue;
+    }
+
+    // C23 `auto x = init;`: x takes init's type.
+    if (ty == &auto_type && equal(tok, "=")) {
+      Node *init = assign(&tok, tok->next);
+      Obj *var = new_lvar(get_ident(name), auto_type_of(init));
+      var->tok = name;
+      if (is_constexpr)
+        set_constexpr_value(var, init);
+      Node *set = new_binary(ND_ASSIGN, new_var_node(var, name), init, name);
+      cur = cur->next = new_unary(ND_EXPR_STMT, set, name);
       continue;
     }
 
@@ -1012,6 +1134,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     var->tok = ty->name;
     if (attr && attr->align)
       var->align = attr->align;
+    if (is_constexpr)
+      peek_constexpr_value(var, tok->next);
 
     if (equal(tok, "=")) {
       Node *expr = lvar_initializer(&tok, tok->next, var);
@@ -1593,6 +1717,13 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     return cur;
   }
 
+  // A bool is 0 or 1, not the low byte of the value (see eval2's ND_CAST).
+  if (ty->kind == TY_BOOL) {
+    char **label = NULL;
+    buf[offset] = eval2(new_cast(init->expr, ty_bool), &label);
+    return cur;
+  }
+
   char **label = NULL;
   uint64_t val = eval2(init->expr, &label);
 
@@ -1635,7 +1766,7 @@ static bool is_typename(Token *tok) {
       "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
       "const", "volatile", "auto", "register", "restrict", "__restrict",
       "__restrict__", "_Noreturn", "float", "double", "typeof", "inline",
-      "_Thread_local", "__thread", "_Atomic",
+      "_Thread_local", "__thread", "_Atomic", "constexpr",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -2121,6 +2252,18 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_LOGOR:
     return eval(node->lhs) || eval(node->rhs);
   case ND_CAST: {
+    // To bool, anything nonzero is 1: 2, 256, 0.5 and an address too.
+    if (node->ty->kind == TY_BOOL) {
+      if (is_flonum(node->lhs->ty))
+        return eval_double(node->lhs) != 0;
+      int64_t val = eval2(node->lhs, label);
+      if (label && *label) {
+        *label = NULL;
+        return 1;
+      }
+      return val != 0;
+    }
+
     int64_t val = eval2(node->lhs, label);
     if (is_integer(node->ty)) {
       switch (node->ty->size) {
@@ -2143,6 +2286,8 @@ static int64_t eval2(Node *node, char ***label) {
       error_tok(node->tok, "invalid initializer");
     return eval_rval(node->lhs, label) + node->member->offset;
   case ND_VAR:
+    if (node->var->is_constexpr)
+      return node->var->constexpr_val;
     if (!label)
       error_tok(node->tok, "not a compile-time constant");
     if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
@@ -2205,6 +2350,8 @@ static bool is_const_expr(Node *node) {
     return is_const_expr(node->lhs);
   case ND_NUM:
     return true;
+  case ND_VAR:
+    return node->var->is_constexpr;
   }
 
   return false;
@@ -2245,6 +2392,10 @@ static double eval_double(Node *node) {
     return eval(node->lhs);
   case ND_NUM:
     return node->fval;
+  case ND_VAR:
+    if (node->var->is_constexpr)
+      return node->var->constexpr_fval;
+    break;
   }
 
   error_tok(node->tok, "not a compile-time constant");
@@ -2258,9 +2409,18 @@ static double eval_double(Node *node) {
 // However, if a given expression is of form `A.x op= C`, the input is
 // converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
 // to bitfields.
+// A constexpr can't change after its initialization. (mucc doesn't track
+// `const` in general, but a constexpr's value is also baked into
+// constant expressions, so a change would be silently half-applied.)
+static void check_modifiable(Node *lhs) {
+  if (lhs->kind == ND_VAR && lhs->var->is_constexpr)
+    error_tok(lhs->tok, "cannot modify constexpr '%s'", lhs->var->name);
+}
+
 static Node *to_assign(Node *binary) {
   add_type(binary->lhs);
   add_type(binary->rhs);
+  check_modifiable(binary->lhs);
   Token *tok = binary->tok;
 
   // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
@@ -2376,6 +2536,7 @@ static Node *assign(Token **rest, Token *tok) {
   if (equal(tok, "=")) {
     Node *rhs = assign(rest, tok->next);
     add_type(node);
+    check_modifiable(node);
     check_assign(node->ty, rhs, "assignment");
     return new_binary(ND_ASSIGN, node, rhs, tok);
   }
@@ -3319,6 +3480,15 @@ static Node *primary(Token **rest, Token *tok) {
     return new_num(2, start);
   }
 
+  // C23's unreachable() in <stddef.h>. Reaching it traps (ud2).
+  if (equal(tok, "__builtin_unreachable")) {
+    tok = skip(tok->next, "(");
+    *rest = skip(tok, ")");
+    Node *node = new_node(ND_UNREACHABLE, start);
+    node->ty = ty_void;
+    return node;
+  }
+
   if (equal(tok, "__builtin_compare_and_swap")) {
     Node *node = new_node(ND_CAS, tok);
     tok = skip(tok->next, "(");
@@ -3484,6 +3654,8 @@ static bool falls_through(Node *node) {
     return false;
   case ND_EXPR_STMT: {
     Node *e = node->lhs;
+    if (e->kind == ND_UNREACHABLE)
+      return false;
     return !(e->kind == ND_FUNCALL && e->lhs->kind == ND_VAR &&
              e->lhs->var->is_noreturn);
   }
@@ -3557,12 +3729,12 @@ static Token *parse_typedef(Token *tok, Type *basety) {
   return tok;
 }
 
+// C23 allows unnamed parameters in a definition, as in `int f(int) {...}`;
+// they still get a stack slot, just no name.
 static void create_param_lvars(Type *param) {
   if (param) {
     create_param_lvars(param->next);
-    if (!param->name)
-      error_tok(param->name_pos, "parameter name omitted");
-    new_lvar(get_ident(param->name), param);
+    new_lvar(param->name ? get_ident(param->name) : "", param);
   }
 }
 
@@ -3698,12 +3870,28 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
 
-    Obj *var = new_gvar(get_ident(ty->name), ty);
+    Token *name = ty->name;
+    if (basety == &auto_type) {
+      check_auto_declarator(ty, tok);
+      if (ty == &auto_type && equal(tok, "="))
+        ty = peek_auto_type(tok->next);
+    }
+
+    Obj *var = new_gvar(get_ident(name), ty);
     var->is_definition = !attr->is_extern;
     var->is_static = attr->is_static;
     var->is_tls = attr->is_tls;
     if (attr->align)
       var->align = attr->align;
+
+    // A file-scope constexpr is internal to this file, like a static, so
+    // a header can define one without clashing at link time.
+    if (attr->is_constexpr) {
+      if (!equal(tok, "="))
+        error_tok(name, "constexpr '%s' needs an initializer", var->name);
+      var->is_static = true;
+      peek_constexpr_value(var, tok->next);
+    }
 
     if (equal(tok, "="))
       gvar_initializer(&tok, tok->next, var);
@@ -3760,21 +3948,39 @@ static void declare_builtin_functions(void) {
 
 // C23 attributes like [[nodiscard]] and [[fallthrough]] are hints mucc
 // doesn't use, so drop every [[...]] before parsing. In C, `[[` can't
-// start anything else.
+// start anything else. The one exception is [[noreturn]], which becomes
+// the keyword _Noreturn so the missing-return warning knows about it.
 static Token *remove_attributes(Token *tok) {
   Token head = {};
   Token *cur = &head;
 
   while (tok->kind != TK_EOF) {
     if (equal(tok, "[") && equal(tok->next, "[")) {
+      Token *start = tok;
+      bool has_noreturn = false;
       int depth = 0;
       do {
         if (equal(tok, "["))
           depth++;
         else if (equal(tok, "]"))
           depth--;
+        else if (equal(tok, "noreturn") || equal(tok, "_Noreturn") ||
+                 equal(tok, "__noreturn__"))
+          has_noreturn = true;
         tok = tok->next;
       } while (depth > 0 && tok->kind != TK_EOF);
+
+      // Its text lives in a "<built-in>" file; errors report `start`.
+      if (has_noreturn) {
+        Token *kw = arena_alloc(sizeof(Token));
+        *kw = *start;
+        kw->kind = TK_KEYWORD;
+        kw->file = new_file("<built-in>", start->file->file_no, "_Noreturn");
+        kw->loc = kw->file->contents;
+        kw->len = 9;
+        kw->origin = start;
+        cur = cur->next = kw;
+      }
       continue;
     }
     cur = cur->next = tok;
