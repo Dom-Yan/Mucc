@@ -36,6 +36,23 @@ expect_ok() {
     echo "testing ok '$1' ... passed"
 }
 
+# Fails, and the error lines must be exactly these (one argument each).
+expect_errors() {
+    cat > $tmp/t.c
+    if $mucc -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
+        echo "testing errors '$1' ... failed (compiled without error)"
+        exit 1
+    fi
+    got=$(grep -E 'error:|mucc:' $tmp/err | sed "s|^$tmp/t.c:||")
+    want=$(printf '%s\n' "$@")
+    if [ "$got" != "$want" ]; then
+        echo "testing errors '$1' ... failed"
+        echo "  got:"; echo "$got" | sed 's/^/    /'
+        exit 1
+    fi
+    echo "testing errors '$1' ... passed"
+}
+
 # Compiles, but the first line of stderr must be this warning.
 expect_warning() {
     cat > $tmp/t.c
@@ -227,6 +244,74 @@ int main(void) {
   return x;
 }
 EOF
+
+#---------- Several errors in one run ----------------------------------------
+
+expect_errors "2:11: error: undeclared identifier 'y'" \
+              "3:3: error: call to undeclared function 'foo' (missing #include?)" \
+              "4:11: error: expected ';'" <<'EOF'
+int main(void) {
+  int x = y;
+  foo(1);
+  return 0
+}
+EOF
+
+expect_errors "1:22: error: undeclared identifier 'a'" \
+              "2:22: error: undeclared identifier 'b'" <<'EOF'
+int f(void) { return a; }
+int g(void) { return b; }
+int h(void) { return 1; }
+EOF
+
+expect_errors "3:13: error: undeclared identifier 'q'" \
+              "4:13: error: undeclared identifier 'r'" \
+              "6:10: error: undeclared identifier 'z'" <<'EOF'
+int main(void) {
+  if (1) {
+    int x = q;
+    int y = r;
+  }
+  return z;
+}
+EOF
+
+expect_errors "2:20: error: undeclared identifier 'e1'" \
+              "3:16: error: undeclared identifier 'e2'" \
+              "4:10: error: undeclared identifier 'e3'" <<'EOF'
+int main(void) {
+  if (1) { int a = e1; } else { int b = 2; }
+  do { int c = e2; } while (0);
+  return e3;
+}
+EOF
+
+# A goto whose label was in a skipped statement isn't a second error.
+expect_errors "3:11: error: undeclared identifier 'bad'" <<'EOF'
+int main(void) {
+  goto out;
+  int y = bad;
+out: return 0;
+}
+EOF
+
+expect_errors "3:12: error: expected '}'" <<'EOF'
+int main(void) {
+  int x = 1;
+  return x;
+EOF
+
+# After 20 errors, mucc stops.
+printf 'int main(void) {\n' > $tmp/many.c
+for i in $(seq 25); do printf '  a%d;\n' $i >> $tmp/many.c; done
+printf '}\n' >> $tmp/many.c
+$mucc -c -o $tmp/t.o $tmp/many.c 2> $tmp/err
+[ $(grep -c 'error:' $tmp/err) = 20 ] && tail -1 $tmp/err | grep -q 'too many errors'
+if [ $? = 0 ]; then
+    echo "testing errors 'stops after 20' ... passed"
+else
+    echo "testing errors 'stops after 20' ... failed"; exit 1
+fi
 
 #---------- Preprocessor directives ------------------------------------------
 

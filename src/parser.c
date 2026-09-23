@@ -203,6 +203,82 @@ static Type *find_tag(Token *tok) {
   return NULL;
 }
 
+//---------- Error recovery --------------------------------------------------
+
+// On an error, error_tok() jumps back to the statement or declaration
+// being parsed (see token.c). That item is skipped and parsing goes on,
+// so one run reports every independent error. These are the globals a
+// half-parsed item can leave changed; they're saved before each item.
+typedef struct {
+  Scope *scope;
+  Obj *current_fn;
+  Node *gotos;
+  Node *labels;
+  char *brk_label;
+  char *cont_label;
+  Node *current_switch;
+} ParserState;
+
+static ParserState save_state(void) {
+  return (ParserState){scope, current_fn, gotos, labels,
+                       brk_label, cont_label, current_switch};
+}
+
+static void restore_state(ParserState s) {
+  scope = s.scope;
+  current_fn = s.current_fn;
+  gotos = s.gotos;
+  labels = s.labels;
+  brk_label = s.brk_label;
+  cont_label = s.cont_label;
+  current_switch = s.current_switch;
+}
+
+// Returns the token after the statement or declaration that starts at
+// `tok`, found by bracket matching alone: past its `;`, or past the `}`
+// of a body such as `if (x) {...}` or a function's. A `)`, `]` or `}`
+// that closes something opened before `tok` is left for the caller.
+static Token *skip_bad_item(Token *tok) {
+  Token *start = tok;
+  Token *prev = NULL;
+  int depth = 0;
+  bool is_body = false; // Is the outermost `{` a statement body?
+
+  for (; tok->kind != TK_EOF; prev = tok, tok = tok->next) {
+    if (equal(tok, "(") || equal(tok, "[")) {
+      depth++;
+      continue;
+    }
+
+    // `{` after `)`, `else` or `do`, or starting the item, opens a
+    // statement body; otherwise it's a struct or an initializer, and
+    // the item goes on to a `;`.
+    if (equal(tok, "{")) {
+      if (depth == 0)
+        is_body = !prev || equal(prev, ")") || equal(prev, "else") ||
+                  equal(prev, "do");
+      depth++;
+      continue;
+    }
+
+    if (equal(tok, ")") || equal(tok, "]") || equal(tok, "}")) {
+      if (depth == 0)
+        break;
+      depth--;
+      if (depth == 0 && is_body && equal(tok, "}") &&
+          !equal(tok->next, "else") && !equal(tok->next, "while"))
+        return tok->next;
+      continue;
+    }
+
+    if (depth == 0 && equal(tok, ";") && !equal(tok->next, "else"))
+      return tok->next;
+  }
+
+  // Always move forward, or the caller would retry the same token.
+  return (tok == start && tok->kind != TK_EOF) ? tok->next : tok;
+}
+
 //---------- AST node constructors -------------------------------------------
 
 static Node *new_node(NodeKind kind, Token *tok) {
@@ -1892,6 +1968,29 @@ static Node *label_body(Token **rest, Token *tok) {
   return node ? node : new_node(ND_BLOCK, tok);
 }
 
+// Parses a block item like block_item(). If it has an error, that's
+// reported, the item is skipped and NULL returned, so the rest of the
+// block is still checked. (See "Error recovery".)
+static Node *block_item_or_skip(Token **rest, Token *tok) {
+  ParserState saved = save_state();
+  jmp_buf *outer = error_recovery;
+  jmp_buf here;
+
+  if (setjmp(here)) {
+    error_recovery = outer;
+    restore_state(saved);
+    *rest = skip_bad_item(tok);
+    return NULL;
+  }
+
+  error_recovery = &here;
+  Node *node = block_item(rest, tok);
+  if (node)
+    add_type(node);
+  error_recovery = outer;
+  return node;
+}
+
 // compound-stmt = block-item* "}"
 static Node *compound_stmt(Token **rest, Token *tok) {
   Node *node = new_node(ND_BLOCK, tok);
@@ -1900,18 +1999,16 @@ static Node *compound_stmt(Token **rest, Token *tok) {
 
   enter_scope();
 
-  while (!equal(tok, "}")) {
-    Node *item = block_item(&tok, tok);
-    if (item) {
+  while (!equal(tok, "}") && tok->kind != TK_EOF) {
+    Node *item = block_item_or_skip(&tok, tok);
+    if (item)
       cur = cur->next = item;
-      add_type(cur);
-    }
   }
 
   leave_scope();
 
   node->body = head.next;
-  *rest = tok->next;
+  *rest = skip(tok, "}");
   return node;
 }
 
@@ -3339,7 +3436,9 @@ static void resolve_goto_labels(void) {
       }
     }
 
-    if (x->unique_label == NULL)
+    // After an error, the label may be in a statement that was skipped,
+    // so only report this while there have been no other errors.
+    if (x->unique_label == NULL && error_count == 0)
       error_tok(x->tok->next, "use of undeclared label");
   }
 
@@ -3533,36 +3632,51 @@ static Token *remove_attributes(Token *tok) {
   return head.next;
 }
 
-// program = (static-assert | typedef | function-definition | global-variable)*
+// top-level-item = static-assert | typedef | function-definition
+//                | global-variable
+static Token *top_level_item(Token *tok) {
+  if (equal(tok, "_Static_assert"))
+    return static_assertion(tok);
+
+  VarAttr attr = {};
+  Type *basety = declspec(&tok, tok, &attr);
+
+  if (attr.is_typedef)
+    return parse_typedef(tok, basety);
+  if (is_function(tok))
+    return function(tok, basety, &attr);
+  return global_variable(tok, basety, &attr);
+}
+
+// Like top_level_item(), but on an error skips the item and goes on, as
+// block_item_or_skip() does inside functions.
+static Token *top_level_item_or_skip(Token *tok) {
+  ParserState saved = save_state();
+  jmp_buf here;
+
+  if (setjmp(here)) {
+    error_recovery = NULL;
+    restore_state(saved);
+    return skip_bad_item(tok);
+  }
+
+  error_recovery = &here;
+  Token *rest = top_level_item(tok);
+  error_recovery = NULL;
+  return rest;
+}
+
+// program = top-level-item*
+//
+// The caller must check error_count: after errors, the result is
+// incomplete and must not be compiled.
 Obj *parse(Token *tok) {
   declare_builtin_functions();
   globals = NULL;
   tok = remove_attributes(tok);
 
-  while (tok->kind != TK_EOF) {
-    if (equal(tok, "_Static_assert")) {
-      tok = static_assertion(tok);
-      continue;
-    }
-
-    VarAttr attr = {};
-    Type *basety = declspec(&tok, tok, &attr);
-
-    // Typedef
-    if (attr.is_typedef) {
-      tok = parse_typedef(tok, basety);
-      continue;
-    }
-
-    // Function
-    if (is_function(tok)) {
-      tok = function(tok, basety, &attr);
-      continue;
-    }
-
-    // Global variable
-    tok = global_variable(tok, basety, &attr);
-  }
+  while (tok->kind != TK_EOF)
+    tok = top_level_item_or_skip(tok);
 
   for (Obj *var = globals; var; var = var->next)
     if (var->is_root)

@@ -32,7 +32,29 @@ static int line_no;
 //      10 |   x = y + 1;
 //         |       ^
 //
-// mucc stops at the first error.
+// Errors in the tokenizer and preprocessor stop mucc at once. Errors
+// found while parsing don't: the parser points `error_recovery` at the
+// statement or declaration it's in, and error_tok() jumps back there
+// after printing. The parser skips that item and carries on, so one run
+// reports many errors. cc1 then exits before generating any code.
+
+jmp_buf *error_recovery;
+int error_count;
+
+// Past this many, the rest are probably caused by the earlier ones.
+#define MAX_ERRORS 20
+
+// After printing an error: resume parsing if we can, else exit.
+static noreturn void after_error(void) {
+  error_count++;
+  if (error_count >= MAX_ERRORS) {
+    fprintf(stderr, "mucc: too many errors, stopping\n");
+    exit(1);
+  }
+  if (error_recovery)
+    longjmp(*error_recovery, 1);
+  exit(1);
+}
 
 // Returns "error:" or "warning:", in color if stderr is a terminal.
 static char *label(char *kind) {
@@ -99,7 +121,7 @@ void error_at(char *loc, char *fmt, ...) {
   va_start(ap, fmt);
   print_diag("error", current_file->name, current_file->contents, line_no,
              loc, vformat(fmt, ap));
-  exit(1);
+  after_error();
 }
 
 // A token from a predefined macro like static_assert comes from a
@@ -117,7 +139,7 @@ void error_tok(Token *tok, char *fmt, ...) {
   va_start(ap, fmt);
   print_diag("error", tok->file->name, tok->file->contents, tok->line_no,
              tok->loc, vformat(fmt, ap));
-  exit(1);
+  after_error();
 }
 
 void warn_tok(Token *tok, char *fmt, ...) {
@@ -146,7 +168,7 @@ void error_expected(Token *tok, char *what) {
     if (input < p) {
       print_diag("error", tok->file->name, input, line_no, p,
                  format("expected %s", what));
-      exit(1);
+      after_error();
     }
   }
 
