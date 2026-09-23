@@ -30,6 +30,8 @@ static bool opt_MP;
 static bool opt_S;
 static bool opt_c;
 static bool opt_cc1;
+static bool opt_cc1_obj;               // cc1 writes an object, not assembly
+static bool opt_integrated_as = true;  // -fno-integrated-as: run `as`
 static bool opt_hash_hash_hash;
 static bool opt_static;
 static bool opt_shared;
@@ -310,6 +312,21 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    if (!strcmp(argv[i], "-cc1-obj")) {
+      opt_cc1_obj = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-fintegrated-as")) {
+      opt_integrated_as = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-fno-integrated-as")) {
+      opt_integrated_as = false;
+      continue;
+    }
+
     if (!strcmp(argv[i], "-idirafter")) {
       strarray_push(&idirafter, argv[++i]);
       continue;
@@ -448,7 +465,9 @@ static void run_subprocess(char **argv) {
     exit(1);
 }
 
-static void run_cc1(int argc, char **argv, char *input, char *output) {
+// Runs `mucc -cc1` to compile `input`. It writes assembly to `output`,
+// or, if `obj` is true, an object file (see cc1()).
+static void run_cc1(int argc, char **argv, char *input, char *output, bool obj) {
   char **args = calloc(argc + 10, sizeof(char *));
   memcpy(args, argv, argc * sizeof(char *));
   args[argc++] = "-cc1";
@@ -462,6 +481,9 @@ static void run_cc1(int argc, char **argv, char *input, char *output) {
     args[argc++] = "-cc1-output";
     args[argc++] = output;
   }
+
+  if (obj)
+    args[argc++] = "-cc1-obj";
 
   run_subprocess(args);
 }
@@ -539,6 +561,59 @@ static void print_dependencies(void) {
   }
 }
 
+//---------- Assembling: built in (asm.c), or with `as` ----------------------
+
+static void run_as(char *input, char *output) {
+  char *cmd[] = {"as", "-c", input, "-o", output, NULL};
+  run_subprocess(cmd);
+}
+
+static void write_file(char *path, char *buf, size_t len) {
+  FILE *out = open_file(path);
+  fwrite(buf, len, 1, out);
+  fclose(out);
+}
+
+// Reads a file, or standard input if `path` is "-".
+static char *read_whole_file(char *path, size_t *len) {
+  FILE *fp = !strcmp(path, "-") ? stdin : fopen(path, "rb");
+  if (!fp)
+    error("%s: %s", path, strerror(errno));
+  char *buf;
+  FILE *out = open_memstream(&buf, len);
+  char chunk[4096];
+  size_t n;
+  while ((n = fread(chunk, 1, sizeof(chunk), fp)) > 0)
+    fwrite(chunk, 1, n, out);
+  if (fp != stdin)
+    fclose(fp);
+  fclose(out);
+  return buf;
+}
+
+// Assembles a .s file given on the command line. It may use anything,
+// so if the built-in assembler doesn't know something, say so and use
+// `as`.
+static void assemble_file(char *input, char *output) {
+  if (!opt_integrated_as) {
+    run_as(input, output);
+    return;
+  }
+
+  size_t len;
+  char *text = read_whole_file(input, &len);
+  char *copy = strndup(text, len); // assemble_text() changes `text`
+  char *why;
+  if (assemble_text(text, output, &why))
+    return;
+  fprintf(stderr, "mucc: note: %s: using the system assembler (%s)\n", input, why);
+
+  // The input may have been stdin, which is used up now.
+  char *tmp = create_tmpfile();
+  write_file(tmp, copy, len);
+  run_as(tmp, output);
+}
+
 //---------- cc1: compile one C file to assembly -----------------------------
 
 static Token *must_tokenize_file(char *path) {
@@ -610,18 +685,28 @@ static void cc1(void) {
   codegen(prog, output_buf);
   fclose(output_buf);
 
-  // Write the asembly text to a file.
-  FILE *out = open_file(output_file);
-  fwrite(buf, buflen, 1, out);
-  fclose(out);
+  if (!opt_cc1_obj) {
+    write_file(output_file, buf, buflen);
+    return;
+  }
+
+  // Assemble it right here. The built-in assembler knows everything
+  // cgen.c writes, so a failure is a bug, unless it's an instruction in
+  // an asm("...") statement; then fall back to `as`.
+  char *copy = has_inline_asm ? strndup(buf, buflen) : NULL;
+  char *why;
+  if (assemble_text(buf, output_file, &why))
+    return;
+  if (!has_inline_asm)
+    error("internal error in the built-in assembler: %s "
+          "(-fno-integrated-as uses the system assembler instead)", why);
+
+  char *tmp = create_tmpfile();
+  write_file(tmp, copy, buflen);
+  run_as(tmp, output_file);
 }
 
-//---------- Assemble (as) and link (ld) -------------------------------------
-
-static void assemble(char *input, char *output) {
-  char *cmd[] = {"as", "-c", input, "-o", output, NULL};
-  run_subprocess(cmd);
-}
+//---------- Linking (ld) ----------------------------------------------------
 
 static char *find_file(char *pattern) {
   char *path = NULL;
@@ -800,10 +885,17 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    // Handle .s
+    // Handle .s: assemble it, and link it unless -c.
     if (type == FILE_ASM) {
-      if (!opt_S)
-        assemble(input, output);
+      if (opt_S)
+        continue;
+      if (opt_c) {
+        assemble_file(input, output);
+        continue;
+      }
+      char *tmp = create_tmpfile();
+      assemble_file(input, tmp);
+      strarray_push(&ld_args, tmp);
       continue;
     }
 
@@ -811,31 +903,30 @@ int main(int argc, char **argv) {
 
     // Just preprocess
     if (opt_E || opt_M) {
-      run_cc1(argc, argv, input, NULL);
+      run_cc1(argc, argv, input, NULL, false);
       continue;
     }
 
     // Compile
     if (opt_S) {
-      run_cc1(argc, argv, input, output);
+      run_cc1(argc, argv, input, output, false);
       continue;
     }
 
-    // Compile and assemble
-    if (opt_c) {
+    // Compile and assemble: cc1 writes the object itself, or writes
+    // assembly for `as` with -fno-integrated-as.
+    char *obj = opt_c ? output : create_tmpfile();
+    if (opt_integrated_as) {
+      run_cc1(argc, argv, input, obj, true);
+    } else {
       char *tmp = create_tmpfile();
-      run_cc1(argc, argv, input, tmp);
-      assemble(tmp, output);
-      continue;
+      run_cc1(argc, argv, input, tmp, false);
+      run_as(tmp, obj);
     }
 
-    // Compile, assemble and link
-    char *tmp1 = create_tmpfile();
-    char *tmp2 = create_tmpfile();
-    run_cc1(argc, argv, input, tmp1);
-    assemble(tmp1, tmp2);
-    strarray_push(&ld_args, tmp2);
-    continue;
+    // And link, unless -c.
+    if (!opt_c)
+      strarray_push(&ld_args, obj);
   }
 
   if (ld_args.len > 0)

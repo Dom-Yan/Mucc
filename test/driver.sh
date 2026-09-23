@@ -309,6 +309,31 @@ echo 'int main() {}' | $mucc -c -o $tmp/baz.o -xc -
 cc -Xlinker -z -Xlinker muldefs -Xlinker --gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
 check -Xlinker
 
+# Built-in assembler: a .s file and a C file link together
+printf '  .globl answer\n  .text\nanswer:\n  mov $42, %%eax\n  ret\n' > $tmp/answer.s
+printf 'int answer(void);\nint main(void) { return answer(); }\n' > $tmp/main.c
+$mucc -o $tmp/answer $tmp/answer.s $tmp/main.c
+$tmp/answer
+[ $? = 42 ]
+check '.s and .c linked together'
+
+# ... an instruction it doesn't know in a .s file: a note, then `as`
+printf '  .text\n  .globl f\nf:\n  cpuid\n  ret\n' > $tmp/cpuid.s
+$mucc -c -o $tmp/cpuid.o $tmp/cpuid.s 2>&1 | grep -q 'using the system assembler'
+check 'unknown instruction in a .s file falls back to as'
+
+# ... and in an asm() statement: quietly `as`
+echo 'int main() { asm("pushq %rbx; cpuid; popq %rbx"); return 0; }' > $tmp/cpuid.c
+$mucc -o $tmp/cpuid $tmp/cpuid.c 2> $tmp/err && [ ! -s $tmp/err ] && $tmp/cpuid
+check 'unknown instruction in asm() falls back to as'
+
+# -fno-integrated-as uses `as`, with the same result
+echo 'int main() { return 7; }' > $tmp/seven.c
+$mucc -fno-integrated-as -o $tmp/seven $tmp/seven.c
+$tmp/seven
+[ $? = 7 ]
+check -fno-integrated-as
+
 # Reproducible builds: the same source links to the same bytes every time
 echo 'static int s = 1; int main() { return s; }' > $tmp/repro.c
 $mucc -o $tmp/repro1 $tmp/repro.c

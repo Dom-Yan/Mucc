@@ -1,11 +1,11 @@
 # Mucc
 
-Mucc (`mucc`) is a small, self-hosting C11 compiler for x86-64
+Mucc (`mucc`) is a small, self-hosting C23 compiler for x86-64
 Linux, written in C. It aims to be minimal, easy to read and fast to compile
 with. It is not trying to replace gcc or clang.
 
-mucc translates C to x86-64 assembly, then uses the system `as` and `ld` to
-produce an ELF executable.
+mucc translates C to x86-64 machine code with its own assembler, then uses
+the system `ld` to produce an ELF executable.
 
 x86-64 Linux is mucc's only target, on purpose: one target keeps the code
 small enough to read end to end. It runs anywhere that is x86-64 Linux,
@@ -15,7 +15,8 @@ compiler made for that platform.
 ## Setup
 
 mucc needs an x86-64 Linux environment, because it emits Linux code and uses
-Linux's `as` and `ld`. Windows users get one with WSL 2.
+Linux's `ld` (and `as`, only for `asm()` statements it can't assemble
+itself). Windows users get one with WSL 2.
 
 ### Linux
 
@@ -76,7 +77,8 @@ Add `-static` to get a binary that does not depend on the system's C library
 at run time, so it runs on almost any x86-64 Linux machine.
 
 mucc accepts the usual flags: `-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-U`, `-static`,
-`-shared`, `-l`, `-L`, `-M*` and more (see `src/main.c`).
+`-shared`, `-l`, `-L`, `-M*`, `-w`, `-fno-integrated-as` and more (see
+`src/main.c`).
 
 The executables mucc produces are Linux ELF binaries. They run on Linux and
 inside WSL.
@@ -127,41 +129,41 @@ example input is `int main(void) { return 42; }`. The flags `-E`, `-S` and
     |
     v
 +----------------------------------------------------------------------+
-| DRIVER [mucc]  main.c                                                 |
-|   Reads the flags, then runs itself again as `mucc -cc1` for each C   |
-|   file. It also calls the system tools in stages 5 and 6.            |
+| DRIVER [mucc]  main.c                                                |
+|   Reads the flags, then runs itself again as `mucc -cc1` for each C  |
+|   file, which does stages 1 to 5. Then it runs `ld` for stage 6.     |
 +----------------------------------------------------------------------+
     |
     v
 +----------------------------------------------------------------------+
-| 1. TOKENIZE [mucc]  token.c                                           |
+| 1. TOKENIZE [mucc]  token.c                                          |
 |   characters -> tokens                                               |
 |   int  main  (  void  )  {  return  42  ;  }                         |
 +----------------------------------------------------------------------+
     |
     v
 +----------------------------------------------------------------------+
-| 2. PREPROCESS [mucc]  preprocess.c                      -E stops here |
+| 2. PREPROCESS [mucc]  preprocess.c                     -E stops here |
 |   expands #include, #define, #if (nothing to expand in this file)    |
 +----------------------------------------------------------------------+
     |
     v
 +----------------------------------------------------------------------+
-| 3. PARSE [mucc]  parser.c, type.c                                     |
+| 3. PARSE [mucc]  parser.c, type.c                                    |
 |   tokens -> typed syntax tree (AST); type errors are caught here     |
 |   function main -> return -> constant 42 (type int)                  |
 +----------------------------------------------------------------------+
     |
     v
 +----------------------------------------------------------------------+
-| 4. CODEGEN [mucc]  cgen.c                               -S stops here |
+| 4. CODEGEN [mucc]  cgen.c                              -S stops here |
 |   AST -> x86-64 assembly text (AT&T syntax)                          |
 |   main:  push %rbp ... mov $42, %rax ... ret                         |
 +----------------------------------------------------------------------+
-    |   hello.s  (temporary assembly file; mucc's own work ends here)
+    |
     v
 +----------------------------------------------------------------------+
-| 5. ASSEMBLE [system]  as                               -c stops here |
+| 5. ASSEMBLE [mucc]  asm.c                              -c stops here |
 |   assembly text -> machine code, stored in an object file (hello.o)  |
 |   "mov $42, %rax" becomes the bytes  48 c7 c0 2a 00 00 00            |
 +----------------------------------------------------------------------+
@@ -180,16 +182,20 @@ example input is `int main(void) { return 42; }`. The flags `-E`, `-S` and
  $ ./hello ; echo $?      ->  42
 ```
 
-Stages 1 to 4 are the compiler proper. Its job ends at assembly text; mucc
-never writes machine code itself. Optimizing (see the Roadmap) means changing
-stages 3 and 4. Writing your own assembler and linker would replace stages 5
-and 6.
+Stages 1 to 4 are the compiler proper; stage 5 turns their assembly text
+into machine code in the same process. Optimizing (see the Roadmap) means
+changing stages 3 and 4. A linker of our own would replace stage 6.
 
 ## What mucc emits
 
 mucc is a compiler front end plus a code generator. Its output is x86-64
-assembly text in AT&T syntax (`./mucc -S file.c` prints it). Without `-S`, it
-hands that text to the system `as` and `ld`.
+assembly text in AT&T syntax (`./mucc -S file.c` prints it), which its
+assembler (`src/asm.c`) turns into an ELF object file. The assembler knows
+exactly the instructions and directives the code generator uses, and its
+objects are byte-for-byte the same as GNU `as` makes from the same text
+(`test/asm.sh` checks this on every test program). For an `asm()`
+statement or a `.s` file with anything else, mucc runs the system `as`
+instead; `-fno-integrated-as` always does.
 
 The code generator is a simple stack machine. Every local variable lives in
 the stack frame, each expression leaves its result in `%rax`, and
@@ -303,7 +309,8 @@ re-checked.
 - Emit real DWARF debug info.
 
 **Stand on its own**
-- Write our own assembler and ELF linker, so `as` and `ld` are no longer needed.
+- Write our own ELF linker, so `ld` is no longer needed: static linking
+  first, then dynamic. (The assembler is done: `src/asm.c`.)
 
 ## Layout
 
@@ -317,12 +324,13 @@ All compiler code is in `src/`, listed here in pipeline order:
 | `src/parser.c`      | Stage 3: recursive-descent parser, builds typed AST |
 | `src/type.c`        | Stage 3: type system and type checking      |
 | `src/cgen.c`        | Stage 4: AST to x86-64 assembly             |
+| `src/asm.c`         | Stage 5: assembly to an ELF object file     |
 | `src/mucc.h`         | Declarations shared by every file           |
 | `src/hashmap.c`     | Hash table (keywords, macros, scopes)       |
 | `src/strings.c`     | Growable string arrays, `format()`          |
 | `src/unicode.c`     | UTF-8 encoding and identifier rules         |
 | `include/`          | Headers mucc ships for the programs it compiles (`stddef.h`, ...) |
-| `test/`             | Tests (`driver.sh` checks command-line flags; `thirdparty/` builds real projects) |
+| `test/`             | Tests (`driver.sh` checks command-line flags, `errors.sh` diagnostics, `asm.sh` the assembler against GNU `as`; `thirdparty/` builds real projects) |
 
 Each source file starts with a header saying which stage it is and is
 split into sections marked like this:
