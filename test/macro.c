@@ -333,6 +333,11 @@ int main() {
 #include M13 >
   ASSERT(4, foo);
 
+#include "include5.h"
+#define INCLUDE5_WANT
+#include "include5.h"
+  ASSERT(1, include5_second);
+
 #undef foo
 
   ASSERT(1, __STDC__);
