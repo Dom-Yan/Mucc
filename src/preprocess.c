@@ -66,13 +66,13 @@ static bool is_hash(Token *tok) {
   return tok->at_bol && equal(tok, "#");
 }
 
-// Some preprocessor directives such as #include allow extraneous
-// tokens before newline. This function skips such tokens.
+// Some preprocessor directives such as #endif allow extraneous tokens
+// before the newline. Warn about them and skip to the next line.
 static Token *skip_line(Token *tok) {
   if (tok->at_bol)
     return tok;
-  warn_tok(tok, "extra token");
-  while (tok->at_bol)
+  warn_tok(tok, "extra tokens at end of directive");
+  while (!tok->at_bol)
     tok = tok->next;
   return tok;
 }
