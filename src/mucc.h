@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <glob.h>
 #include <libgen.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -98,6 +99,11 @@ struct Token {
   Hideset *hideset; // For macro expansion
   Token *origin;    // If this is expanded from a macro, the original token
 };
+
+// Where the parser resumes after an error (see token.c), and how many
+// errors have been reported.
+extern jmp_buf *error_recovery;
+extern int error_count;
 
 noreturn void error(char *fmt, ...) __attribute__((format(printf, 1, 2)));
 noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 2, 3)));

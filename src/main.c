@@ -593,6 +593,8 @@ static void cc1(void) {
   }
 
   Obj *prog = parse(tok);
+  if (error_count)
+    exit(1);
 
   // Open a temporary output buffer.
   char *buf;
