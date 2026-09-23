@@ -364,6 +364,81 @@ expect_warning "1:2: warning: #warning this is deprecated" <<'EOF'
 int x;
 EOF
 
+#---------- C23: constexpr, auto, u8'', #embed -------------------------------
+
+expect_error "2:21: error: constexpr 'x' needs a constant initializer" <<'EOF'
+int f(int n) {
+  constexpr int x = n;
+  return x;
+}
+EOF
+
+expect_errors "1:29: error: value doesn't fit in constexpr 'a' of type 'unsigned char'" \
+              "2:24: error: value doesn't fit in constexpr 'b' of type 'unsigned int'" \
+              "3:19: error: constexpr 'c' of type 'int' can't be initialized with a floating value" \
+              "4:20: error: a constexpr pointer can only be null" \
+              "5:20: error: value doesn't fit in constexpr 'd' of type '_Bool'" <<'EOF'
+constexpr unsigned char a = 300;
+constexpr unsigned b = -1;
+constexpr int c = 1.5;
+constexpr int *p = (int *)8;
+constexpr bool d = 2;
+constexpr int ok = 255;
+EOF
+
+expect_errors "1:15: error: constexpr 'z' needs an initializer" \
+              "4:3: error: cannot modify constexpr 'n'" \
+              "5:3: error: cannot modify constexpr 'n'" \
+              "6:3: error: cannot modify constexpr 'n'" <<'EOF'
+constexpr int z;
+int f(void) {
+  constexpr int n = 1;
+  n = 2;
+  n++;
+  n += 3;
+  return n;
+}
+EOF
+
+expect_error "1:32: error: 'auto' can only declare a plain variable, as in 'auto x = 1'" <<'EOF'
+int f(void) { int x = 1; auto *p = &x; return 0; }
+EOF
+
+expect_error "2:24: error: cannot infer a type from a void expression" <<'EOF'
+void g(void);
+int f(void) { auto v = g(); return 0; }
+EOF
+
+expect_error "1:9: error: u8 character literal must be a single byte; use a u8 string" <<'EOF'
+int c = u8'é';
+EOF
+
+expect_error "1:8: error: no-such-file.bin: cannot open file: No such file or directory" <<'EOF'
+#embed "no-such-file.bin"
+EOF
+
+expect_error "2:14: error: unknown #embed parameter 'frobnicate'" <<'EOF'
+char a[] = {
+#embed "t.c" frobnicate(1)
+};
+EOF
+
+# [[noreturn]] and unreachable() end a function as surely as return.
+expect_clean 'no missing-return warning after [[noreturn]] or unreachable()' <<'EOF'
+#include <stddef.h>
+[[noreturn]] void die(void);
+int f(int x) { if (x) return 1; die(); }
+int g(int x) { if (x) return 1; unreachable(); }
+EOF
+
+# unreachable() only comes with a direct #include <stddef.h>.
+expect_clean 'a program may define its own unreachable' <<'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+static void unreachable(void) { puts("x"); }
+int main(void) { unreachable(); return 0; }
+EOF
+
 #---------- Warnings ---------------------------------------------------------
 
 expect_warning "3:7: warning: unused variable 'unused'" <<'EOF'

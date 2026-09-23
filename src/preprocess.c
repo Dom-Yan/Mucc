@@ -59,11 +59,18 @@ static Token *preprocess2(Token *tok);
 static Macro *find_macro(Token *tok);
 static char *join_tokens(Token *tok, Token *end);
 static bool find_include(char *filename);
+static int has_embed(Token **rest, Token *tok);
 
 //---------- Token helpers and hidesets --------------------------------------
 
 static bool is_hash(Token *tok) {
   return tok->at_bol && equal(tok, "#");
+}
+
+// Is `tok` `name`, spelled either `name` or `__name__`? (#embed
+// parameters and attribute names may be written both ways.)
+static bool is_name(Token *tok, char *name) {
+  return equal(tok, name) || equal(tok, format("__%s__", name));
 }
 
 // Some preprocessor directives such as #endif allow extraneous tokens
@@ -293,6 +300,41 @@ static Token *read_const_expr(Token **rest, Token *tok) {
       continue;
     }
 
+    // C23: "__has_embed(...)" (see "#embed").
+    if (equal(tok, "__has_embed")) {
+      Token *start = tok;
+      cur = cur->next = new_num_token(has_embed(&tok, tok), start);
+      continue;
+    }
+
+    // C23: "__has_c_attribute(x)" is the version of standard attribute x
+    // that mucc accepts. It accepts them all (and ignores most).
+    if (equal(tok, "__has_c_attribute")) {
+      Token *start = tok;
+      tok = skip(tok->next, "(");
+      Token *name = tok;
+      int val = 0;
+      if (equal(tok->next, ")")) {
+        if (is_name(name, "deprecated") || is_name(name, "fallthrough") ||
+            is_name(name, "maybe_unused"))
+          val = 201904;
+        else if (is_name(name, "nodiscard"))
+          val = 202003;
+        else if (is_name(name, "noreturn") || equal(name, "_Noreturn"))
+          val = 202202;
+        else if (is_name(name, "unsequenced") || is_name(name, "reproducible"))
+          val = 202207;
+      }
+      while (!equal(tok, ")")) {
+        if (tok->kind == TK_EOF)
+          error_tok(start, "expected ')'");
+        tok = tok->next;
+      }
+      tok = tok->next;
+      cur = cur->next = new_num_token(val, start);
+      continue;
+    }
+
     cur = cur->next = tok;
     tok = tok->next;
   }
@@ -301,10 +343,9 @@ static Token *read_const_expr(Token **rest, Token *tok) {
   return head.next;
 }
 
-// Read and evaluate a constant expression.
-static long eval_const_expr(Token **rest, Token *tok) {
-  Token *start = tok;
-  Token *expr = read_const_expr(rest, tok->next);
+// Evaluates `expr`, an EOF-terminated copy of the tokens of an #if
+// expression (or of an #embed limit). `start` is for error messages.
+static long eval_pp_expr(Token *start, Token *expr) {
   expr = preprocess2(expr);
 
   if (expr->kind == TK_EOF)
@@ -331,6 +372,11 @@ static long eval_const_expr(Token **rest, Token *tok) {
   if (rest2->kind != TK_EOF)
     error_tok(rest2, "extra token");
   return val;
+}
+
+// Read and evaluate the constant expression of an #if or #elif.
+static long eval_const_expr(Token **rest, Token *tok) {
+  return eval_pp_expr(tok, read_const_expr(rest, tok->next));
 }
 
 static CondIncl *push_cond_incl(Token *tok, bool included) {
@@ -871,6 +917,239 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok) {
   return append(tok2, tok);
 }
 
+//---------- #embed (C23) ----------------------------------------------------
+
+// #embed "file" (or <file>) turns into the file's bytes as a list of
+// numbers, for an initializer:
+//
+//   static const unsigned char icon[] = {
+//   #embed "icon.png"
+//   };
+//
+// After the name it takes these parameters (each may also be spelled
+// __name__):
+//   limit(N)          use at most N bytes
+//   prefix(tokens)    put these before the bytes, if there are any
+//   suffix(tokens)    put these after the bytes, if there are any
+//   if_empty(tokens)  put these instead, if there are no bytes
+
+typedef struct {
+  char *name;      // as written
+  Token *name_tok; // for error messages
+  char *path;      // where it was found, or NULL
+  long limit;      // -1 for none
+  Token *prefix;   // each an EOF-terminated token list, or NULL
+  Token *suffix;
+  Token *if_empty;
+  Token *unknown;  // the first parameter mucc doesn't know, if any
+} EmbedArgs;
+
+// Copies the tokens inside a parameter's parentheses (which may nest),
+// ending the copy with EOF. `tok` is the "(".
+static Token *read_embed_param(Token **rest, Token *tok) {
+  Token *start = tok;
+  tok = skip(tok, "(");
+
+  Token head = {};
+  Token *cur = &head;
+  int depth = 0;
+  while (depth > 0 || !equal(tok, ")")) {
+    if (tok->kind == TK_EOF)
+      error_tok(start, "expected ')'");
+    if (equal(tok, "("))
+      depth++;
+    else if (equal(tok, ")"))
+      depth--;
+    cur = cur->next = copy_token(tok);
+    tok = tok->next;
+  }
+
+  cur->next = new_eof(tok);
+  *rest = tok->next;
+  return head.next;
+}
+
+// Finds the file the way #include would.
+static char *find_embed(char *name, bool is_dquote, Token *hash) {
+  if (name[0] == '/')
+    return file_exists(name) ? name : NULL;
+
+  if (is_dquote) {
+    char *path = format("%s/%s", dirname(strdup(hash->file->name)), name);
+    if (file_exists(path))
+      return path;
+  }
+
+  for (int i = 0; i < include_paths.len; i++) {
+    char *path = format("%s/%s", include_paths.data[i], name);
+    if (file_exists(path))
+      return path;
+  }
+  return NULL;
+}
+
+// Reads the file name and parameters from `tok`, an EOF-terminated list.
+static EmbedArgs read_embed_args(Token *tok, Token *hash) {
+  EmbedArgs args = {.limit = -1};
+  bool is_dquote;
+  args.name_tok = tok;
+
+  if (tok->kind == TK_STR) {
+    args.name = strndup(tok->loc + 1, tok->len - 2);
+    is_dquote = true;
+    tok = tok->next;
+  } else if (equal(tok, "<")) {
+    Token *lt = tok;
+    while (!equal(tok, ">")) {
+      if (tok->kind == TK_EOF)
+        error_tok(lt, "expected '>'");
+      tok = tok->next;
+    }
+    args.name = join_tokens(lt->next, tok);
+    is_dquote = false;
+    tok = tok->next;
+  } else {
+    error_tok(tok, "expected a file name");
+  }
+  args.path = find_embed(args.name, is_dquote, hash);
+
+  while (tok->kind != TK_EOF) {
+    Token *param = tok;
+    if (tok->kind != TK_IDENT && tok->kind != TK_KEYWORD)
+      error_tok(tok, "expected an #embed parameter");
+
+    if (is_name(tok, "limit")) {
+      Token *expr = read_embed_param(&tok, tok->next);
+      args.limit = eval_pp_expr(param, expr);
+      if (args.limit < 0)
+        error_tok(param, "#embed limit can't be negative");
+    } else if (is_name(tok, "prefix")) {
+      args.prefix = read_embed_param(&tok, tok->next);
+    } else if (is_name(tok, "suffix")) {
+      args.suffix = read_embed_param(&tok, tok->next);
+    } else if (is_name(tok, "if_empty")) {
+      args.if_empty = read_embed_param(&tok, tok->next);
+    } else {
+      // Unknown, maybe vendor::name. Skip it and any (...).
+      if (!args.unknown)
+        args.unknown = param;
+      tok = tok->next;
+      while (equal(tok, ":") || tok->kind == TK_IDENT)
+        tok = tok->next;
+      if (equal(tok, "("))
+        read_embed_param(&tok, tok);
+    }
+  }
+  return args;
+}
+
+// Reads up to `limit` bytes (or all, if -1) of the file.
+static unsigned char *read_embed_file(EmbedArgs *args, size_t *len) {
+  FILE *fp = fopen(args->path, "rb");
+  if (!fp)
+    error_tok(args->name_tok, "%s: cannot open file: %s", args->path, strerror(errno));
+
+  size_t cap = 4096;
+  size_t n = 0;
+  unsigned char *buf = malloc(cap);
+
+  while (args->limit < 0 || n < args->limit) {
+    if (n == cap)
+      buf = realloc(buf, cap *= 2);
+    size_t want = cap - n;
+    if (args->limit >= 0 && want > args->limit - n)
+      want = args->limit - n;
+    size_t got = fread(buf + n, 1, want, fp);
+    if (got == 0)
+      break;
+    n += got;
+  }
+
+  fclose(fp);
+  *len = n;
+  return buf;
+}
+
+// Puts token list `list` (EOF-terminated, may be NULL) in front of `rest`.
+static Token *splice(Token *list, Token *rest) {
+  if (!list || list->kind == TK_EOF)
+    return rest;
+  Token *t = list;
+  while (t->next->kind != TK_EOF)
+    t = t->next;
+  t->next = rest;
+  return list;
+}
+
+// Handles `#embed ...` (`tok` is just after "embed") and returns the
+// tokens it becomes, followed by the rest of the input.
+static Token *embed(Token *hash, Token *tok) {
+  Token *rest;
+  Token *line = copy_line(&rest, tok);
+
+  // #embed MACRO: the name comes from a macro.
+  if (line->kind == TK_IDENT)
+    line = preprocess2(line);
+
+  EmbedArgs args = read_embed_args(line, hash);
+  if (args.unknown)
+    error_tok(args.unknown, "unknown #embed parameter '%.*s'",
+              args.unknown->len, args.unknown->loc);
+  if (!args.path)
+    error_tok(args.name_tok, "%s: cannot open file: No such file or directory",
+              args.name);
+
+  size_t len;
+  unsigned char *bytes = read_embed_file(&args, &len);
+
+  // List each embedded file once in -M output.
+  static HashMap embedded;
+  if (!hashmap_get(&embedded, args.path)) {
+    hashmap_put(&embedded, args.path, (void *)1);
+    add_input_file(args.path, "");
+  }
+
+  if (len == 0)
+    return splice(args.if_empty, rest);
+
+  // Write the bytes as "1,2,3" and tokenize that. Each byte takes at
+  // most 4 characters ("255,").
+  char *text = malloc(len * 4 + 1);
+  char *p = text;
+  for (size_t i = 0; i < len; i++) {
+    if (i > 0)
+      *p++ = ',';
+    int b = bytes[i];
+    if (b >= 100)
+      *p++ = '0' + b / 100;
+    if (b >= 10)
+      *p++ = '0' + b / 10 % 10;
+    *p++ = '0' + b % 10;
+  }
+  *p = '\0';
+  free(bytes);
+
+  Token *nums = tokenize(new_file(hash->file->name, hash->file->file_no, text));
+  return splice(args.prefix, splice(nums, splice(args.suffix, rest)));
+}
+
+// __has_embed(...) in #if: 0 if the file isn't found (or a parameter
+// isn't supported), 2 if it's empty (or limit(0)), otherwise 1. These are
+// __STDC_EMBED_NOT_FOUND__, __STDC_EMBED_EMPTY__ and __STDC_EMBED_FOUND__.
+static int has_embed(Token **rest, Token *tok) {
+  Token *start = tok;
+  Token *inner = read_embed_param(rest, tok->next);
+  EmbedArgs args = read_embed_args(inner, start);
+  if (!args.path || args.unknown)
+    return 0;
+
+  // An empty file or limit(0) embeds nothing.
+  args.limit = args.limit < 0 ? 1 : MIN(args.limit, 1);
+  size_t len;
+  free(read_embed_file(&args, &len));
+  return len ? 1 : 2;
+}
+
 //---------- Directives: the main preprocessor loop --------------------------
 
 // Read #line arguments
@@ -936,6 +1215,11 @@ static Token *preprocess2(Token *tok) {
       char *filename = read_include_filename(&tok, tok->next, &ignore);
       char *path = search_include_next(filename);
       tok = include_file(tok, path ? path : filename, start->next->next);
+      continue;
+    }
+
+    if (equal(tok, "embed")) {
+      tok = embed(start, tok->next);
       continue;
     }
 
@@ -1163,7 +1447,7 @@ void init_macros(void) {
   define_macro("__STDC_NO_COMPLEX__", "1");
   define_macro("__STDC_UTF_16__", "1");
   define_macro("__STDC_UTF_32__", "1");
-  define_macro("__STDC_VERSION__", "201112L");
+  define_macro("__STDC_VERSION__", "202311L");
   define_macro("__STDC__", "1");
   define_macro("__USER_LABEL_PREFIX__", "");
   define_macro("__alignof__", "_Alignof");
@@ -1196,9 +1480,16 @@ void init_macros(void) {
   define_macro("__asm__", "asm");
   define_macro("__asm", "asm");
 
-  // Lets `#if defined(__has_include)` work. The operator itself is
-  // handled in read_const_expr().
+  // Lets `#if defined(__has_include)` etc. work. The operators themselves
+  // are handled in read_const_expr().
   define_macro("__has_include", "__has_include");
+  define_macro("__has_embed", "__has_embed");
+  define_macro("__has_c_attribute", "__has_c_attribute");
+
+  // What __has_embed returns (see "#embed").
+  define_macro("__STDC_EMBED_NOT_FOUND__", "0");
+  define_macro("__STDC_EMBED_FOUND__", "1");
+  define_macro("__STDC_EMBED_EMPTY__", "2");
 
   add_builtin("__FILE__", file_macro);
   add_builtin("__LINE__", line_macro);

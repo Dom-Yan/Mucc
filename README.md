@@ -246,24 +246,37 @@ Errors and warnings (see `test/errors.sh`):
   never given for system headers. Functions marked `_Noreturn` and C
   library ones like `exit()` and `abort()` count as not returning.
 
-From C23 (see `test/c23.c`):
+C23 is the default: `__STDC_VERSION__` is `202311L`. From C23 (see
+`test/c23.c`):
 
 - `bool`, `true`, `false` and `nullptr` (with `nullptr_t` in `<stddef.h>`)
+- `auto x = expr;` takes its type from the initializer
+- `constexpr` variables. Scalar ones are true constants: usable in array
+  sizes, `case` labels, `static_assert` and other `constexpr`s. mucc checks
+  that the value fits the type exactly and that nothing modifies them.
+  Arrays and structs are accepted as ordinary initialized objects.
+- `#embed "file"` with `limit`, `prefix`, `suffix` and `if_empty`, and
+  `__has_embed`
 - `static_assert` with or without a message, `alignas`, `alignof`,
   `thread_local`, `typeof_unqual`
-- `[[attributes]]`, accepted and ignored
-- Digit separators: `1'000'000`
+- `[[attributes]]`, accepted and ignored, except `[[noreturn]]`, which the
+  missing-return warning uses; `__has_c_attribute`
+- `unreachable()` in `<stddef.h>` (it traps if reached)
+- Unnamed parameters in definitions, `f(...)` with one-argument `va_start`
+- `u8'a'` character literals and digit separators: `1'000'000`
 - Labels before declarations and at the end of a block
-- `#elifdef`, `#elifndef`, `__has_include`
+- `#elifdef`, `#elifndef`, `#warning`, `__has_include`
 - Empty initializers: `int a[3] = {};`
 
 Inline assembly works only in its plain form, `asm("...")` (or `__asm__`)
 with a string and no operands.
 
 Not supported yet: `_Complex`, K&R-style function definitions, `asm` with
-operands, the C23 features `auto` type inference, `constexpr`, `#embed` and
-`_BitInt`, and any target other than x86-64 Linux with glibc. `__STDC_VERSION__` stays C11 (`201112L`),
-since mucc doesn't have all of C23.
+operands, the C23 features `_BitInt`, `enum E : type`, `<stdckdint.h>` and
+decimal floats, and any target other than x86-64 Linux with glibc. mucc
+doesn't enforce `const` (except for `constexpr`), and still treats
+`int f();` as a function with unspecified parameters, as C17 did, rather
+than as `int f(void)`.
 
 SQLite 3.45 (about 285,000 lines) compiles with mucc and runs correctly. Git,
 libpng and the other builds scripted in `test/thirdparty/` have not been
@@ -276,7 +289,9 @@ re-checked.
 - More warnings (e.g. `if (x = 0)`, implicit narrowing), and clearer
   messages for a stray `}` or an unknown type inside a struct.
 - K&R function definitions, `_Complex`, `asm` with operands.
-- The rest of C23: `auto` type inference, `constexpr`, `#embed`.
+- The rest of C23: `_BitInt`, `enum E : type`, `<stdckdint.h>`.
+- Make `#embed` of large files lighter: each byte is a full token now,
+  about 250 bytes of memory per embedded byte.
 - Re-verify the third-party builds (Git, libpng, ...).
 - Grow `test/gen_random.py` to cover more of C (unions, long double,
   function pointers, goto).

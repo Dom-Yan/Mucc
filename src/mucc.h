@@ -116,6 +116,7 @@ bool consume(Token **rest, Token *tok, char *str);
 void convert_pp_tokens(Token *tok);
 File **get_input_files(void);
 File *new_file(char *name, int file_no, char *contents);
+File *add_input_file(char *path, char *contents);
 Token *tokenize_string_literal(Token *tok, Type *basety);
 Token *tokenize(File *file);
 Token *tokenize_file(char *filename);
@@ -157,6 +158,11 @@ struct Obj {
   bool is_tls;
   char *init_data;
   Relocation *rel;
+
+  // C23 constexpr scalar: its value, for use in constant expressions
+  bool is_constexpr;
+  int64_t constexpr_val;
+  long double constexpr_fval;
 
   // Function
   bool is_inline;
@@ -235,6 +241,7 @@ typedef enum {
   ND_ASM,       // "asm"
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
+  ND_UNREACHABLE, // __builtin_unreachable() (C23 unreachable())
 } NodeKind;
 
 // AST node type

@@ -1239,6 +1239,9 @@ static void gen_expr(Node *node) {
   case ND_LABEL_VAL:
     println("  lea %s(%%rip), %%rax", node->unique_label);
     return;
+  case ND_UNREACHABLE:
+    println("  ud2");
+    return;
   case ND_CAS: {
     gen_expr(node->cas_addr);
     push();
