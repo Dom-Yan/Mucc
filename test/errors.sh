@@ -36,6 +36,23 @@ expect_ok() {
     echo "testing ok '$1' ... passed"
 }
 
+# Compiles, but the first line of stderr must be this warning.
+expect_warning() {
+    cat > $tmp/t.c
+    if ! $mucc -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
+        echo "testing warning '$1' ... failed (did not compile)"
+        cat $tmp/err
+        exit 1
+    fi
+    got=$(head -1 $tmp/err | sed "s|^$tmp/t.c:||")
+    if [ "$got" != "$1" ]; then
+        echo "testing warning '$1' ... failed"
+        echo "  got: $got"
+        exit 1
+    fi
+    echo "testing warning '$1' ... passed"
+}
+
 #---------- Syntax errors point at the right place ---------------------------
 
 expect_error "2:12: error: expected ';'" <<'EOF'
@@ -209,6 +226,16 @@ int main(void) {
   int x = nullptr;
   return x;
 }
+EOF
+
+#---------- Preprocessor directives ------------------------------------------
+
+# The extra tokens are skipped, not compiled: `junk` would be an error.
+expect_warning "3:8: warning: extra tokens at end of directive" <<'EOF'
+#if 1
+int a;
+#endif junk
+int b;
 EOF
 
 #---------- Valid code that must still compile -------------------------------
