@@ -54,6 +54,7 @@ typedef struct {
   bool is_extern;
   bool is_inline;
   bool is_tls;
+  bool is_noreturn;
   int align;
 } VarAttr;
 
@@ -527,8 +528,16 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     if (consume(&tok, tok, "const") || consume(&tok, tok, "volatile") ||
         consume(&tok, tok, "auto") || consume(&tok, tok, "register") ||
         consume(&tok, tok, "restrict") || consume(&tok, tok, "__restrict") ||
-        consume(&tok, tok, "__restrict__") || consume(&tok, tok, "_Noreturn"))
+        consume(&tok, tok, "__restrict__"))
       continue;
+
+    // _Noreturn only matters for the missing-return warning.
+    if (equal(tok, "_Noreturn")) {
+      if (attr)
+        attr->is_noreturn = true;
+      tok = tok->next;
+      continue;
+    }
 
     if (equal(tok, "_Atomic")) {
       tok = tok->next;
@@ -989,6 +998,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       // For example, `int x[n+2]` is translated to `tmp = n + 2,
       // x = alloca(tmp)`.
       Obj *var = new_lvar(get_ident(ty->name), ty);
+      var->tok = ty->name;
       Token *tok = ty->name;
       Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
                               new_alloca(new_var_node(ty->vla_size, tok)),
@@ -999,6 +1009,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     }
 
     Obj *var = new_lvar(get_ident(ty->name), ty);
+    var->tok = ty->name;
     if (attr && attr->align)
       var->align = attr->align;
 
@@ -3358,8 +3369,10 @@ static Node *primary(Token **rest, Token *tok) {
     }
 
     if (sc) {
-      if (sc->var)
+      if (sc->var) {
+        sc->var->is_used = true;
         return new_var_node(sc->var, tok);
+      }
       if (sc->enum_ty)
         return new_num(sc->enum_val, tok);
     }
@@ -3393,6 +3406,137 @@ static Node *primary(Token **rest, Token *tok) {
   }
 
   error_tok(tok, "expected an expression");
+}
+
+//---------- Warnings --------------------------------------------------------
+
+// Two warnings, checked once a function is parsed: unused local
+// variables, and non-void functions that can end without a return.
+// Neither is given in system headers, after errors, or with -w.
+
+// C library functions that never return. glibc marks them with
+// __attribute__((noreturn)), which mucc doesn't read, so they're listed.
+static bool is_libc_noreturn(char *name) {
+  static char *names[] = {
+    "abort", "exit", "_exit", "_Exit", "quick_exit", "longjmp", "_longjmp",
+    "siglongjmp", "pthread_exit", "err", "errx", "verr", "verrx",
+    "__assert_fail", "__assert_perror_fail", "__stack_chk_fail",
+  };
+  for (int i = 0; i < sizeof(names) / sizeof(*names); i++)
+    if (!strcmp(name, names[i]))
+      return true;
+  return false;
+}
+
+// Warns about each local variable that is declared but never named
+// again, in declaration order (the list is newest first).
+static void warn_unused_locals(Obj *var) {
+  if (!var)
+    return;
+  warn_unused_locals(var->next);
+
+  // Parameters and compiler temporaries have no `tok`.
+  if (var->tok && !var->is_used && !in_system_header(var->tok))
+    warn_tok(var->tok, "unused variable '%s'", var->name);
+}
+
+// Does statement `node` contain a jump to `label`, such as the `break`
+// or `continue` of a loop?
+static bool has_jump_to(Node *node, char *label) {
+  if (!node)
+    return false;
+
+  switch (node->kind) {
+  case ND_GOTO:
+    return node->unique_label == label;
+  case ND_BLOCK:
+    for (Node *n = node->body; n; n = n->next)
+      if (has_jump_to(n, label))
+        return true;
+    return false;
+  case ND_LABEL:
+  case ND_CASE:
+    return has_jump_to(node->lhs, label);
+  case ND_IF:
+  case ND_FOR:
+  case ND_DO:
+  case ND_SWITCH:
+    return has_jump_to(node->then, label) || has_jump_to(node->els, label);
+  default:
+    return false;
+  }
+}
+
+static bool is_always_true(Node *cond) {
+  return !cond || (is_const_expr(cond) && eval(cond) != 0);
+}
+
+// Can control run off the end of statement `node`, on to whatever comes
+// after it?
+static bool falls_through(Node *node) {
+  if (!node)
+    return true;
+
+  switch (node->kind) {
+  case ND_RETURN:
+  case ND_GOTO: // also break and continue
+  case ND_GOTO_EXPR:
+    return false;
+  case ND_EXPR_STMT: {
+    Node *e = node->lhs;
+    return !(e->kind == ND_FUNCALL && e->lhs->kind == ND_VAR &&
+             e->lhs->var->is_noreturn);
+  }
+  case ND_BLOCK: {
+    // Code after a return is unreachable, unless it has a label that
+    // can be jumped to.
+    bool reachable = true;
+    for (Node *n = node->body; n; n = n->next) {
+      if (n->kind == ND_LABEL || n->kind == ND_CASE)
+        reachable = true;
+      if (reachable)
+        reachable = falls_through(n);
+    }
+    return reachable;
+  }
+  case ND_LABEL:
+  case ND_CASE:
+    return falls_through(node->lhs);
+  case ND_IF:
+    return !node->els || falls_through(node->then) || falls_through(node->els);
+  case ND_FOR:
+    // `for (;;)` and `while (1)` only end with a break.
+    if (is_always_true(node->cond))
+      return has_jump_to(node->then, node->brk_label);
+    return true;
+  case ND_DO:
+    if (has_jump_to(node->then, node->brk_label))
+      return true;
+    if (is_always_true(node->cond))
+      return false;
+    // The condition is reached only if the body finishes or continues.
+    return falls_through(node->then) ||
+           has_jump_to(node->then, node->cont_label);
+  case ND_SWITCH:
+    // With no default, it's possible that no case runs.
+    return !node->default_case || falls_through(node->then) ||
+           has_jump_to(node->then, node->brk_label);
+  default:
+    return true;
+  }
+}
+
+// `rbrace` is the `}` that ends the function's body.
+static void warn_function(Obj *fn, Token *rbrace) {
+  if (error_count)
+    return;
+
+  warn_unused_locals(fn->locals);
+
+  // main() returns 0 if it runs off the end (C99).
+  if (fn->ty->return_ty->kind != TY_VOID && strcmp(fn->name, "main") &&
+      !in_system_header(rbrace) && falls_through(fn->body))
+    warn_tok(rbrace, "control reaches end of non-void function '%s'", fn->name);
 }
 
 //---------- Top level: functions and global variables -----------------------
@@ -3484,12 +3628,14 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     if (!fn->is_static && attr->is_static)
       error_tok(tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || equal(tok, "{");
+    fn->is_noreturn = fn->is_noreturn || attr->is_noreturn;
   } else {
     fn = new_gvar(name_str, ty);
     fn->is_function = true;
     fn->is_definition = equal(tok, "{");
     fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
     fn->is_inline = attr->is_inline;
+    fn->is_noreturn = attr->is_noreturn || is_libc_noreturn(name_str);
   }
 
   fn->is_root = !(fn->is_static && fn->is_inline);
@@ -3526,10 +3672,17 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   push_scope("__FUNCTION__")->var =
     new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
 
+  Token *body = tok;
   fn->body = compound_stmt(&tok, tok);
   fn->locals = locals;
   leave_scope();
   resolve_goto_labels();
+
+  // Find the body's closing `}`, the token before `tok`.
+  Token *rbrace = body;
+  while (rbrace->next != tok)
+    rbrace = rbrace->next;
+  warn_function(fn, rbrace);
   return tok;
 }
 

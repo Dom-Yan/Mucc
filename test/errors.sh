@@ -53,6 +53,17 @@ expect_errors() {
     echo "testing errors '$1' ... passed"
 }
 
+# Compiles with nothing at all on stderr: no errors and no warnings.
+expect_clean() {
+    cat > $tmp/t.c
+    if ! $mucc -c -o $tmp/t.o $tmp/t.c 2> $tmp/err || [ -s $tmp/err ]; then
+        echo "testing clean '$1' ... failed"
+        cat $tmp/err
+        exit 1
+    fi
+    echo "testing clean '$1' ... passed"
+}
+
 # Compiles, but the first line of stderr must be this warning.
 expect_warning() {
     cat > $tmp/t.c
@@ -352,6 +363,57 @@ expect_warning "1:2: warning: #warning this is deprecated" <<'EOF'
 #warning this is deprecated
 int x;
 EOF
+
+#---------- Warnings ---------------------------------------------------------
+
+expect_warning "3:7: warning: unused variable 'unused'" <<'EOF'
+int f(void) {
+  int used = 1;
+  int unused = used;
+  return 0;
+}
+EOF
+
+expect_warning "4:1: warning: control reaches end of non-void function 'f'" <<'EOF'
+int f(int x) {
+  if (x)
+    return 1;
+}
+EOF
+
+expect_warning "1:49: warning: control reaches end of non-void function 'g'" <<'EOF'
+int g(int x) { switch (x) { case 1: return 1; } }
+EOF
+
+expect_warning "1:35: warning: control reaches end of non-void function 'h'" <<'EOF'
+int h(void) { for (;;) { break; } }
+EOF
+
+# None of these can reach the end of the function without a return.
+expect_clean 'no false warnings' <<'EOF'
+#include <stdlib.h>
+#include <stdnoreturn.h>
+noreturn void die(const char *msg);
+int a(int x) { if (x) return 1; else return 2; }
+int b(void) { for (;;) {} }
+int c(void) { while (1) { if (rand()) return 1; } }
+int d(int x) { switch (x) { case 1: return 1; default: return 2; } }
+int e(void) { exit(1); }
+int f(void) { die("x"); }
+int g(void) { abort(); }
+int h(void) { do { return 1; } while (0); }
+int i(int x) { goto end; end: return x; }
+int j(void) { do { if (rand()) return 1; } while (1); }
+int k(void) { int v; (void)v; int w = 1; return sizeof(w); }
+int main(void) { }
+EOF
+
+printf 'int f(void) { int unused; }\n' > $tmp/t.c
+if $mucc -w -c -o $tmp/t.o $tmp/t.c 2> $tmp/err && [ ! -s $tmp/err ]; then
+    echo "testing clean '-w silences warnings' ... passed"
+else
+    echo "testing clean '-w silences warnings' ... failed"; exit 1
+fi
 
 #---------- Valid code that must still compile -------------------------------
 

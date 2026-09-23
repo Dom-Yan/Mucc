@@ -145,6 +145,7 @@ struct Obj {
 
   // Local variable
   int offset;
+  bool is_used; // named somewhere after its declaration (for warnings)
 
   // Global variable or function
   bool is_function;
@@ -159,6 +160,7 @@ struct Obj {
 
   // Function
   bool is_inline;
+  bool is_noreturn; // _Noreturn, or a C library function like exit()
   Obj *params;
   Node *body;
   Obj *locals;
@@ -457,6 +459,7 @@ bool file_exists(char *path);
 bool in_system_header(Token *tok);
 
 extern StringArray include_paths;
+extern bool opt_w;
 extern bool opt_fpic;
 extern bool opt_fcommon;
 extern char *base_file;

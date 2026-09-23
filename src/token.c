@@ -143,6 +143,8 @@ void error_tok(Token *tok, char *fmt, ...) {
 }
 
 void warn_tok(Token *tok, char *fmt, ...) {
+  if (opt_w)
+    return;
   tok = user_token(tok);
   va_list ap;
   va_start(ap, fmt);
