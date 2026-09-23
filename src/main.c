@@ -16,6 +16,7 @@ typedef enum {
 } FileType;
 
 StringArray include_paths;
+bool opt_w; // -w: no warnings
 bool opt_fcommon = true;
 bool opt_fpic;
 
@@ -338,6 +339,11 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    if (!strcmp(argv[i], "-w")) {
+      opt_w = true;
+      continue;
+    }
+
     if (!strcmp(argv[i], "-hashmap-test")) {
       hashmap_test();
       exit(0);
@@ -354,8 +360,7 @@ static void parse_args(int argc, char **argv) {
         !strcmp(argv[i], "-fno-stack-protector") ||
         !strcmp(argv[i], "-fno-strict-aliasing") ||
         !strcmp(argv[i], "-m64") ||
-        !strcmp(argv[i], "-mno-red-zone") ||
-        !strcmp(argv[i], "-w"))
+        !strcmp(argv[i], "-mno-red-zone"))
       continue;
 
     if (argv[i][0] == '-' && argv[i][1] != '\0')

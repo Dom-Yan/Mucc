@@ -216,7 +216,7 @@ add:
 ```
 
 The code is correct but slow, and there is no optimizer: `-O` is accepted
-and ignored, as are `-W*`, `-g` and `-std=`. It follows the System V AMD64
+and ignored, as are `-W*` (except `-w`), `-g` and `-std=`. It follows the System V AMD64
 ABI, so its objects link with gcc/clang-built code and glibc. It emits
 `.file`/`.loc` line directives, so debuggers see source lines, but no
 variable or type debug info.
@@ -236,6 +236,16 @@ Covered by the tests in `test/`:
 - `-c`, `-S`, `-E`, `-static`, `-shared`, `-fPIC`, linking `.a`/`.so` files
 - Compiling itself (see Test)
 
+Errors and warnings (see `test/errors.sh`):
+
+- Every error in a file is reported, each with its line and a caret, up to
+  20. After an error, mucc skips to the end of that statement or
+  declaration and carries on.
+- Warnings for unused local variables and for non-void functions that can
+  reach their end without a `return`. `-w` turns warnings off. They're
+  never given for system headers. Functions marked `_Noreturn` and C
+  library ones like `exit()` and `abort()` count as not returning.
+
 From C23 (see `test/c23.c`):
 
 - `bool`, `true`, `false` and `nullptr` (with `nullptr_t` in `<stddef.h>`)
@@ -252,8 +262,7 @@ with a string and no operands.
 
 Not supported yet: `_Complex`, K&R-style function definitions, `asm` with
 operands, the C23 features `auto` type inference, `constexpr`, `#embed` and
-`_BitInt`, warnings (it reports the first error and stops), and any target
-other than x86-64 Linux with glibc. `__STDC_VERSION__` stays C11 (`201112L`),
+`_BitInt`, and any target other than x86-64 Linux with glibc. `__STDC_VERSION__` stays C11 (`201112L`),
 since mucc doesn't have all of C23.
 
 SQLite 3.45 (about 285,000 lines) compiles with mucc and runs correctly. Git,
@@ -264,8 +273,8 @@ re-checked.
 
 
 **Fill the gaps**
-- Keep going after the first error, and add basic warnings (unused variable,
-  missing return).
+- More warnings (e.g. `if (x = 0)`, implicit narrowing), and clearer
+  messages for a stray `}` or an unknown type inside a struct.
 - K&R function definitions, `_Complex`, `asm` with operands.
 - The rest of C23: `auto` type inference, `constexpr`, `#embed`.
 - Re-verify the third-party builds (Git, libpng, ...).
