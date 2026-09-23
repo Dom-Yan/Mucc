@@ -93,8 +93,11 @@ uninstall:
 
 # Misc.
 
+# test/asm-forms.s is a source file (see test/asm.sh); other .s files in
+# test/ are build output.
 clean:
-	rm -rf mucc tmp* $(TESTS) test/*.s test/*.exe stage2 stage3 difftest-failures
+	rm -rf mucc tmp* $(TESTS) test/*.exe stage2 stage3 difftest-failures
+	rm -f $(filter-out test/asm-forms.s,$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 .PHONY: test clean test-stage2 selfhost install uninstall difftest
