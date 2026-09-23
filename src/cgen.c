@@ -13,7 +13,11 @@
 #define GP_MAX 6
 #define FP_MAX 8
 
-static FILE *output_file;
+// The assembly text, written to the output file in one go at the end.
+static char *out_buf;
+static size_t out_len;
+static size_t out_cap;
+
 static int depth;
 static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
 static char *argreg16[] = {"%di", "%si", "%dx", "%cx", "%r8w", "%r9w"};
@@ -30,13 +34,92 @@ static void gen_stmt(Node *node);
 
 //---------- Output and stack helpers ----------------------------------------
 
+// Every line of assembly goes through println(). It used to call glibc's
+// vfprintf, which was about 30% of all compile time, so it has its own
+// small formatter that knows only what this file uses: %s, %d, %u, %ld,
+// %lu, %+ld, %Lf and %%. Anything else is an internal error.
+
+static void out_bytes(char *s, size_t n) {
+  if (out_len + n > out_cap) {
+    out_cap = MAX(out_cap * 2, out_len + n + (1 << 20));
+    out_buf = realloc(out_buf, out_cap);
+    if (!out_buf)
+      error("out of memory");
+  }
+  memcpy(out_buf + out_len, s, n);
+  out_len += n;
+}
+
+static void out_ulong(unsigned long v) {
+  char buf[20];
+  int i = sizeof(buf);
+  do {
+    buf[--i] = '0' + v % 10;
+    v /= 10;
+  } while (v);
+  out_bytes(buf + i, sizeof(buf) - i);
+}
+
+static void out_long(long v) {
+  if (v < 0) {
+    out_bytes("-", 1);
+    out_ulong(-(unsigned long)v);
+  } else {
+    out_ulong(v);
+  }
+}
+
 __attribute__((format(printf, 1, 2)))
 static void println(char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  vfprintf(output_file, fmt, ap);
+
+  for (char *p = fmt; *p;) {
+    // Copy the plain text up to the next '%' in one piece.
+    char *pct = strchr(p, '%');
+    if (!pct) {
+      out_bytes(p, strlen(p));
+      break;
+    }
+    out_bytes(p, pct - p);
+    p = pct + 1;
+
+    if (*p == '%') {
+      out_bytes("%", 1);
+      p++;
+    } else if (*p == 's') {
+      char *s = va_arg(ap, char *);
+      out_bytes(s, strlen(s));
+      p++;
+    } else if (*p == 'd') {
+      out_long(va_arg(ap, int));
+      p++;
+    } else if (*p == 'u') {
+      out_ulong(va_arg(ap, unsigned));
+      p++;
+    } else if (p[0] == 'l' && p[1] == 'd') {
+      out_long(va_arg(ap, long));
+      p += 2;
+    } else if (p[0] == 'l' && p[1] == 'u') {
+      out_ulong(va_arg(ap, unsigned long));
+      p += 2;
+    } else if (p[0] == '+' && p[1] == 'l' && p[2] == 'd') {
+      long v = va_arg(ap, long);
+      if (v >= 0)
+        out_bytes("+", 1);
+      out_long(v);
+      p += 3;
+    } else if (p[0] == 'L' && p[1] == 'f') {
+      char *s = format("%Lf", va_arg(ap, long double));
+      out_bytes(s, strlen(s));
+      p += 2;
+    } else {
+      unreachable();
+    }
+  }
+
   va_end(ap);
-  fprintf(output_file, "\n");
+  out_bytes("\n", 1);
 }
 
 static int count(void) {
@@ -1782,8 +1865,6 @@ static void emit_text(Obj *prog) {
 //---------- Entry point -----------------------------------------------------
 
 void codegen(Obj *prog, FILE *out) {
-  output_file = out;
-
   // Names the object's source file in its symbol table. Without it, ld
   // uses the temporary .o's random name, and no two builds are identical.
   println("  .file \"%s\"", base_file);
@@ -1795,4 +1876,6 @@ void codegen(Obj *prog, FILE *out) {
   assign_lvar_offsets(prog);
   emit_data(prog);
   emit_text(prog);
+
+  fwrite(out_buf, 1, out_len, out);
 }
