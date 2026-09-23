@@ -820,20 +820,29 @@ static char *detect_include_guard(Token *tok) {
   if (!is_hash(tok) || !equal(tok->next, "define") || !equal(tok->next->next, macro))
     return NULL;
 
-  // Read until the end of the file.
+  // The #endif matching the #ifndef must be the last thing in the file.
+  // Skip nested #if blocks whole, so their #endifs aren't mistaken for it.
   while (tok->kind != TK_EOF) {
     if (!is_hash(tok)) {
       tok = tok->next;
       continue;
     }
 
-    if (equal(tok->next, "endif") && tok->next->next->kind == TK_EOF)
-      return macro;
+    Token *dir = tok->next;
+    if (equal(dir, "if") || equal(dir, "ifdef") || equal(dir, "ifndef")) {
+      tok = skip_cond_incl2(dir->next);
+      continue;
+    }
 
-    if (equal(tok, "if") || equal(tok, "ifdef") || equal(tok, "ifndef"))
-      tok = skip_cond_incl(tok->next);
-    else
-      tok = tok->next;
+    if (equal(dir, "endif"))
+      return dir->next->kind == TK_EOF ? macro : NULL;
+
+    // An #else of the guard means the file has content when it's defined.
+    if (equal(dir, "else") || equal(dir, "elif") ||
+        equal(dir, "elifdef") || equal(dir, "elifndef"))
+      return NULL;
+
+    tok = dir;
   }
   return NULL;
 }
