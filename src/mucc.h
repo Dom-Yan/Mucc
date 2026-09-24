@@ -149,6 +149,7 @@ struct Obj {
   int offset;
   bool is_used; // named somewhere after its declaration (for warnings)
   int reg;      // kept in callee-saved register reg - 1, or 0 (cgen.c)
+  bool is_overaligned; // aligned above 16: its slot holds its address (cgen.c)
   int uses;     // how often it's used, weighted by loop depth (cgen.c)
   bool is_addr_taken;
 

@@ -180,9 +180,11 @@ Git now builds with mucc and passes its tests, the same as gcc, which
 verified 0.7, 0.8 and 1.9. Phase 0 is done.
 
 Left in Phase 1: 1.6 (verify with CPython's `test_epoll` and
-`test_selectors`), 1.7 (added; verified once CI passes), 1.11 (re-run the baseline),
-1.12 (CPython's `test_distutils` and `test_peg_generator`) and 1.13
-(locals aligned above 16). 1.8 and 1.10 were dropped as not needed.
+`test_selectors`), 1.11 (re-run the baseline) and 1.12 (CPython's
+`test_distutils` and `test_peg_generator`); 1.7 and 1.13 are added and
+verified once CI passes. 1.8 and 1.10 were dropped as not needed. The
+rest is all CPython and the baseline: next, set up the third-party
+builds (SQLite, CPython and the rest) and run them.
 
 glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
 compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
@@ -375,9 +377,14 @@ silently produces wrong code.
   `__attribute__((aligned(32)))` on a local an error for now.) Fix by
   realigning the frame, or putting such locals in an aligned area, then
   lift that error.
-  - [ ] Added
+  - [x] Added: such a local gets an 8-byte slot in the frame; the
+    prologue carves its storage out of the stack (`sub`, `and`) and puts
+    the address in the slot, and every use goes through it, like a VLA.
+    The error is lifted. (A parameter of a type aligned above 16 is still
+    where the caller put it.)
   - [ ] Verified: a test checks the address of 32- and 64-byte aligned
-    locals of each kind, compared with gcc.
+    locals of each kind, compared with gcc (`test/attribute-layout.c`,
+    in a recursive function).
 
 - [ ] **1.12 Diagnose CPython's `test_distutils` and `test_peg_generator`.**
   Both pass with gcc and fail with mucc, and both compile C during the

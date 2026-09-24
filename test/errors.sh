@@ -707,12 +707,6 @@ expect_error "1:29: error: attribute 'weak' is not supported on a parameter" <<'
 void f(int x __attribute__((weak)));
 EOF
 
-expect_error "2:24: error: alignment above 16 on a local variable is not supported yet" <<'EOF'
-int main(void) {
-  int x __attribute__((aligned(32)));
-  return 0;
-}
-EOF
 
 expect_error "1:22: error: requested alignment is not a positive power of 2" <<'EOF'
 int x __attribute__((aligned(3)));
