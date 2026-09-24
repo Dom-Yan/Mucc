@@ -71,12 +71,13 @@ Checked on 2026-09-23 against the source:
 
 ## Phase 0: groundwork
 
-- [ ] **0.1 Move third-party downloads out of `thirdparty/`.** The scripts
+- [x] **0.1 Move third-party downloads out of `thirdparty/`.** The scripts
   clone into `test/thirdparty/work/` (ignored by git) instead, so the root
   `thirdparty/` folder can hold vendored code that is committed.
-  - [ ] Added
-  - [ ] Verified: `test/thirdparty/sqlite.sh` clones into the new folder, and
-    `git status` stays clean afterwards.
+  - [x] Added
+  - [x] Verified: `test/thirdparty/common` cloned zlib into
+    `test/thirdparty/work/zlib`, no root `thirdparty/` was created, and
+    `git status` showed nothing but the edited files.
 
 - [ ] **0.2 Use `https://` URLs in the third-party scripts,** so they run
   anywhere, including CI.

@@ -5,7 +5,9 @@ dir=$(basename -s .git $repo)
 
 set -e -x
 
-mkdir -p thirdparty
-cd thirdparty
+# Downloads go in test/thirdparty/work/ (ignored by git). The top-level
+# thirdparty/ folder is for vendored code that is committed.
+mkdir -p test/thirdparty/work
+cd test/thirdparty/work
 [ -d $dir ] || git clone $repo
 cd $dir

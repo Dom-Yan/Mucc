@@ -5,7 +5,7 @@
 !/test/asm-forms.s
 **/a.out
 /tmp*
-/thirdparty
+/test/thirdparty/work
 /mucc
 /test/*.exe
 /stage2
