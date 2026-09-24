@@ -32,6 +32,7 @@ static bool opt_c;
 static bool opt_cc1;
 static bool opt_cc1_obj;               // cc1 writes an object, not assembly
 static bool opt_integrated_as = true;  // -fno-integrated-as: run `as`
+static bool opt_system_ld;             // -fuse-ld=...: always run `ld`
 static bool opt_hash_hash_hash;
 static bool opt_static;
 static bool opt_shared;
@@ -47,6 +48,7 @@ static char *output_file;
 
 static StringArray input_paths;
 static StringArray tmpfiles;
+static HashMap object_sources; // temporary object file -> its C file
 
 //---------- Argument parsing and include paths ------------------------------
 
@@ -324,6 +326,11 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-fno-integrated-as")) {
       opt_integrated_as = false;
+      continue;
+    }
+
+    if (!strncmp(argv[i], "-fuse-ld=", 9)) {
+      opt_system_ld = true;
       continue;
     }
 
@@ -748,7 +755,74 @@ static char *find_gcc_libpath(void) {
   error("gcc library path is not found");
 }
 
+// Where libraries (libc.a, libgcc.a, ...) are searched, after -L dirs.
+static void add_library_paths(StringArray *arr, char *gcc_libpath) {
+  strarray_push(arr, gcc_libpath);
+  strarray_push(arr, "/usr/lib/x86_64-linux-gnu");
+  strarray_push(arr, "/usr/lib64");
+  strarray_push(arr, "/lib64");
+  strarray_push(arr, "/usr/lib/x86_64-pc-linux-gnu");
+  strarray_push(arr, "/usr/lib/x86_64-redhat-linux");
+  strarray_push(arr, "/usr/lib");
+  strarray_push(arr, "/lib");
+}
+
+// Links with mucc's own linker (link.c), which makes static executables.
+// Returns false if it can't do this link, and `ld` must.
+static bool run_builtin_linker(StringArray *inputs, char *output) {
+  if (!opt_static || opt_shared || opt_system_ld)
+    return false;
+
+  // Only -L, -s and -static; with other linker flags, use `ld`.
+  StringArray lib_paths = {};
+  bool strip = false;
+  for (int i = 0; i < ld_extra_args.len; i++) {
+    char *arg = ld_extra_args.data[i];
+    if (!strcmp(arg, "-L"))
+      strarray_push(&lib_paths, ld_extra_args.data[++i]);
+    else if (!strcmp(arg, "-s"))
+      strip = true;
+    else if (strcmp(arg, "-static"))
+      return false;
+  }
+  for (int i = 0; i < inputs->len; i++)
+    if (inputs->data[i][0] == '-' && strncmp(inputs->data[i], "-l", 2))
+      return false;
+
+  char *libpath = find_libpath();
+  char *gcc_libpath = find_gcc_libpath();
+  add_library_paths(&lib_paths, gcc_libpath);
+
+  // Objects compiled from C files are named after them in messages.
+  StringArray files = {}, names = {};
+  strarray_push(&files, format("%s/crt1.o", libpath));
+  strarray_push(&files, format("%s/crti.o", libpath));
+  strarray_push(&files, format("%s/crtbegin.o", gcc_libpath));
+  for (int i = 0; i < 3; i++)
+    strarray_push(&names, NULL);
+  for (int i = 0; i < inputs->len; i++) {
+    strarray_push(&files, inputs->data[i]);
+    strarray_push(&names, hashmap_get(&object_sources, inputs->data[i]));
+  }
+  strarray_push(&files, "-lgcc");
+  strarray_push(&files, "-lgcc_eh");
+  strarray_push(&files, "-lc");
+  strarray_push(&files, format("%s/crtend.o", gcc_libpath));
+  strarray_push(&files, format("%s/crtn.o", libpath));
+  for (int i = 0; i < 5; i++)
+    strarray_push(&names, NULL);
+
+  char *why;
+  if (link_static(&files, &names, &lib_paths, output, strip, &why))
+    return true;
+  fprintf(stderr, "mucc: note: using the system linker (%s)\n", why);
+  return false;
+}
+
 static void run_linker(StringArray *inputs, char *output) {
+  if (run_builtin_linker(inputs, output))
+    return;
+
   StringArray arr = {};
 
   strarray_push(&arr, "ld");
@@ -769,15 +843,10 @@ static void run_linker(StringArray *inputs, char *output) {
     strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
   }
 
-  strarray_push(&arr, format("-L%s", gcc_libpath));
-  strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
-  strarray_push(&arr, "-L/usr/lib64");
-  strarray_push(&arr, "-L/lib64");
-  strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
-  strarray_push(&arr, "-L/usr/lib/x86_64-pc-linux-gnu");
-  strarray_push(&arr, "-L/usr/lib/x86_64-redhat-linux");
-  strarray_push(&arr, "-L/usr/lib");
-  strarray_push(&arr, "-L/lib");
+  StringArray lib_paths = {};
+  add_library_paths(&lib_paths, gcc_libpath);
+  for (int i = 0; i < lib_paths.len; i++)
+    strarray_push(&arr, format("-L%s", lib_paths.data[i]));
 
   if (!opt_static) {
     strarray_push(&arr, "-dynamic-linker");
@@ -925,8 +994,10 @@ int main(int argc, char **argv) {
     }
 
     // And link, unless -c.
-    if (!opt_c)
+    if (!opt_c) {
       strarray_push(&ld_args, obj);
+      hashmap_put(&object_sources, obj, input);
+    }
   }
 
   if (ld_args.len > 0)

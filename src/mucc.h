@@ -435,6 +435,11 @@ extern bool has_inline_asm;
 
 bool assemble_text(char *src, char *path, char **why);
 
+//---------- link.c: static linker (stage 6) ---------------------------------
+
+bool link_static(StringArray *inputs, StringArray *names, StringArray *lib_paths,
+                 char *path, bool strip, char **why);
+
 //---------- unicode.c: UTF-8 helpers ----------------------------------------
 
 int encode_utf8(char *buf, uint32_t c);
