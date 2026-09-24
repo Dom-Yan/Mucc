@@ -80,14 +80,16 @@ static char *exe_dir(char *argv0) {
   return dirname(strdup(buf));
 }
 
-// Is `dir` already an include path, under any spelling?
-static bool in_include_paths(char *dir) {
+// Are `a` and `b` the same directory, under any spelling?
+static bool same_dir(char *a, char *b) {
   struct stat st, st2;
-  if (stat(dir, &st))
-    return false;
+  return !stat(a, &st) && !stat(b, &st2) && st.st_dev == st2.st_dev &&
+         st.st_ino == st2.st_ino;
+}
+
+static bool in_include_paths(char *dir) {
   for (int i = 0; i < include_paths.len; i++)
-    if (!stat(include_paths.data[i], &st2) && st.st_dev == st2.st_dev &&
-        st.st_ino == st2.st_ino)
+    if (same_dir(include_paths.data[i], dir))
       return true;
   return false;
 }
@@ -100,19 +102,38 @@ static void add_default_include_paths(char *argv0) {
   if (!file_exists(inc))
     inc = format("%s/../lib/mucc/include", dir);
 
-  // These are the system headers: -MMD leaves them out, and warnings and
-  // some type checks don't apply to them. -I directories, added to
-  // include_paths before this runs, are not system headers.
-  char *std[] = {inc, "/usr/local/include", "/usr/include/x86_64-linux-gnu",
+  // mucc's headers and these are the system headers: -MMD leaves them
+  // out, and warnings and some type checks don't apply to them. -I
+  // directories, added to include_paths before this runs, are not.
+  char *sys[] = {"/usr/local/include", "/usr/include/x86_64-linux-gnu",
                  "/usr/include"};
+  int nsys = sizeof(sys) / sizeof(*sys);
 
-  // A directory already given with -I (like the Makefile's -Iinclude) is
-  // searched only once, where -I put it. Listed twice, a header that does
-  // #include_next of its own name (include/sys/cdefs.h) would be read twice.
-  for (int i = 0; i < sizeof(std) / sizeof(*std); i++) {
-    if (!in_include_paths(std[i]))
-      strarray_push(&include_paths, std[i]);
-    strarray_push(&std_include_paths, std[i]);
+  // As with gcc, -I of a system directory is ignored, and it's searched
+  // in its place, after mucc's headers. (CPython's build passes
+  // -I/usr/include/x86_64-linux-gnu, which put glibc's <sys/cdefs.h>
+  // before mucc's, and glibc's then dropped every __attribute__.)
+  StringArray user = include_paths;
+  include_paths = (StringArray){};
+  for (int i = 0; i < user.len; i++) {
+    bool is_sys = false;
+    for (int j = 0; j < nsys; j++)
+      is_sys |= same_dir(user.data[i], sys[j]);
+    if (!is_sys)
+      strarray_push(&include_paths, user.data[i]);
+  }
+
+  // mucc's own headers, given with -I too (as the Makefile's -Iinclude
+  // does), are searched once, where -I put them: listed twice,
+  // include/sys/cdefs.h, which does #include_next of its own name, would
+  // be read twice.
+  if (!in_include_paths(inc))
+    strarray_push(&include_paths, inc);
+  strarray_push(&std_include_paths, inc);
+
+  for (int i = 0; i < nsys; i++) {
+    strarray_push(&include_paths, sys[i]);
+    strarray_push(&std_include_paths, sys[i]);
   }
 }
 
