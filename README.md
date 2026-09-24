@@ -1,60 +1,55 @@
 # Mucc
 
-Mucc (`mucc`) is a small, self-hosting C23 compiler for x86-64
-Linux, written in C. It aims to be minimal, easy to read and fast to compile
-with. It is not trying to replace gcc or clang.
+[![CI](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml/badge.svg)](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml)
 
-mucc translates C to x86-64 machine code with its own assembler. It links
-static executables (`-static`) with its own linker too, and uses the
-system `ld` for dynamically linked ones.
+Mucc (`mucc`) is a small, self-hosting C23 compiler for x86-64 Linux, written
+in C. It has its own preprocessor, parser, code generator, assembler and
+static linker. It aims to be minimal, easy to read and fast to compile with.
+It is not trying to replace gcc or clang.
 
-x86-64 Linux is mucc's only target, on purpose: one target keeps the code
-small enough to read end to end. It runs anywhere that is x86-64 Linux,
-including WSL 2 on Windows. To build native Windows or macOS programs, use a
-compiler made for that platform.
+Website: <https://dom-yan.github.io/Mucc/>
 
-## At a glance
+## Statistics
 
-**What you need** (on Ubuntu/Debian, `build-essential` has all of it):
+| | |
+| --- | --- |
+| Compiler source | 14,794 lines of C in 12 files (11,253 without blank and comment lines) |
+| Largest file | `src/parser.c`, 4,081 lines |
+| Headers it ships | 8 (`stddef.h`, `stdarg.h`, `stdatomic.h`, ...), 276 lines |
+| Binary size | 945 KB (built by gcc with `-O2 -g`) |
+| Test programs | 43, with 1,517 assertions |
+| Other checks | 176 command-line, error-message, assembler and linker cases |
+| Largest program it builds | SQLite 3.45, about 285,000 lines, passing its own tests |
 
-| For | Needed |
-| --- | ------ |
-| Running mucc | x86-64 Linux with **glibc** (not musl, so not Alpine) |
-| Compiling | glibc's headers (`libc6-dev`) |
-| Linking | glibc's startup files and gcc's runtime files (`crtbegin.o`, `libgcc.a`), from the `gcc` package. gcc itself isn't run. |
-| Normal (dynamic) linking | `ld` (binutils). `-static` doesn't need it: mucc links those itself. |
-| `asm()` statements it can't assemble | `as` (binutils), used as a fallback |
-| Building mucc | a C11 compiler and `make`: gcc the first time, or mucc itself (`make CC=mucc`) |
-| The tests | Python 3 (difftest, assembler comparison); gdb for debugging |
+Speed, measured on WSL 2 (Ubuntu, gcc 15.2), one file at a time:
 
-**Self-hosting.** mucc compiles, assembles and links itself. `make CC=mucc`
-builds it with no gcc at all, and with `LDFLAGS=-static` without `ld` either.
-A mucc built by mucc builds a byte-identical mucc (`make test-all` checks).
+| Task | Time |
+| --- | --- |
+| mucc compiling its own 12 source files | 0.21 s |
+| gcc `-O0`, same files | 0.77 s (3.6x slower) |
+| gcc `-O2`, same files | 2.82 s (13x slower) |
+| `make test` | 12.4 s |
+| `make test-all` (tests plus the self-hosting check) | 18.5 s |
+| `make difftest N=100` | 43.7 s, 0 failures |
 
-**Real projects** it builds, which then pass their own tests: SQLite 3.45
-(285,000 lines), Lua 5.4.7 (its official test suite), zlib 1.3.1, and mucc.
-
-**What it compiles:** C11 and most of C23 (`auto`, `constexpr`, `#embed`,
-`nullptr`, `[[attributes]]`, ...), plus the GNU extensions statement
-expressions, `typeof`, computed `goto` and case ranges. The full list is in
-"What mucc can do" below.
-
-**What it doesn't:**
-- C++, or any target but x86-64 Linux with glibc.
-- `__attribute__` on functions and variables (only `packed` and
-  `aligned` on structs). Code that uses it only `#ifdef __GNUC__` is fine,
-  since mucc doesn't claim to be gcc.
-- GNU `asm` with operands (`asm("..." : "=r"(x))`), `_Complex`,
-  `__int128`, `_BitInt`, K&R-style definitions.
-- Optimization beyond register variables and constant folding: its code
-  runs about as fast as `gcc -O0`'s, 3 to 5 times slower than `-O2`'s.
-- Debug info for variables: gdb shows source lines and functions only.
+Code mucc generates runs about as fast as `gcc -O0` code, 3 to 5 times slower
+than `gcc -O2`. Its built-in static linker is about 2.5 times faster than `ld`.
 
 ## Setup
 
-mucc needs an x86-64 Linux environment, because it emits Linux code and uses
-Linux's `ld` (and `as`, only for `asm()` statements it can't assemble
-itself). Windows users get one with WSL 2.
+### Requirements
+
+mucc runs on x86-64 Linux with glibc (not musl, so not Alpine), and WSL 2 on
+Windows counts. On Ubuntu or Debian, `build-essential` has everything.
+
+| For | Needed |
+| --- | --- |
+| Compiling | glibc's headers (`libc6-dev`) |
+| Linking | glibc's startup files and gcc's runtime files (`crtbegin.o`, `libgcc.a`) from the `gcc` package. gcc itself isn't run. |
+| Dynamic linking | `ld` (binutils). `-static` doesn't need it, since mucc links those itself. |
+| `asm()` statements it can't assemble | `as` (binutils), used as a fallback |
+| Building mucc | a C11 compiler and `make`: gcc the first time, or mucc itself (`make CC=mucc`) |
+| Running the tests | Python 3; gdb for debugging |
 
 ### Linux
 
@@ -63,356 +58,160 @@ sudo apt update
 sudo apt install build-essential git gdb
 ```
 
-| Package           | Why                                                             |
-| ----------------- | --------------------------------------------------------------- |
-| `build-essential` | `gcc` (builds mucc the first time), `make`, `as`/`ld`/`objdump`/`readelf` (binutils), and the C library headers and startup files mucc links against |
-| `git`             | version control                                                 |
-| `gdb`             | debugging mucc when it crashes or miscompiles                    |
-
 Check it worked:
 
 ```sh
 gcc --version && make --version && as --version && ld --version
 ```
 
-This is tested on Ubuntu. Other distributions need the equivalent packages
-(gcc, make, binutils, and the C library development files).
+This is tested on Ubuntu. Other distributions need the same packages under
+their own names (gcc, make, binutils and the C library development files).
 
 ### Windows (WSL 2)
 
-1. In PowerShell as Administrator: `wsl --install -d Ubuntu`. Restart if asked,
-   then open "Ubuntu" from the Start menu and create a Linux username and password.
+1. In PowerShell as Administrator, run `wsl --install -d Ubuntu`. Restart if
+   asked, then open "Ubuntu" from the Start menu and create a Linux user.
 2. Inside Ubuntu, run the Linux commands above.
-3. Put the project in the Linux filesystem (`~/mucc`), not under `/mnt/c`. It is
-   much faster there, and file permissions and line endings behave.
+3. Keep the project in the Linux filesystem (`~/mucc`), not under `/mnt/c`.
+   It builds much faster there, and file permissions and line endings behave.
 
-## Build and install
+### Build and install
 
 ```sh
-git clone https://codeberg.org/HoraDomu/Mucc.git mucc
+git clone https://github.com/Dom-Yan/Mucc.git mucc
 cd mucc
 make
 sudo make install
 ```
 
-`make` produces `./mucc`. `make install` copies it to `/usr/local/bin` and
-mucc's own headers to `/usr/local/lib/mucc/include`, so `mucc` works from any
-directory. Use `make install PREFIX=$HOME/.local` to install without `sudo`
-(then make sure `~/.local/bin` is on your `PATH`), and `make uninstall` to
-remove it.
+`make` produces `./mucc`. `make install` copies it to `/usr/local/bin` and its
+headers to `/usr/local/lib/mucc/include`. To install without `sudo`, use
+`make install PREFIX=$HOME/.local` and make sure `~/.local/bin` is on your
+`PATH`. `make uninstall` removes it.
 
-mucc finds its headers relative to its own binary: `include/` next to it when
-run from the source tree, or `../lib/mucc/include` once installed.
-
-## Use
+### Use
 
 ```sh
 mucc -o hello hello.c
 ./hello
 ```
 
-Add `-static` to get a binary that does not depend on the system's C library
-at run time, so it runs on almost any x86-64 Linux machine. mucc links
-those itself, about 2.5 times faster than `ld`; `-fuse-ld=bfd` (any value)
-makes it use `ld` instead, and so do linker flags it doesn't know, such as
+Add `-static` for a binary that doesn't depend on the system's C library at
+run time. mucc links those itself; `-fuse-ld=bfd` (any value) makes it use
+`ld` instead, and so do linker flags it doesn't know, such as
 `-Wl,--gc-sections`.
 
-mucc accepts the usual flags: `-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-U`, `-static`,
-`-shared`, `-l`, `-L`, `-M*`, `-w`, `-fno-integrated-as`, `-fuse-ld=` and
-more (see `src/main.c`).
+It accepts the usual flags: `-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-U`,
+`-static`, `-shared`, `-fPIC`, `-l`, `-L`, `-M*`, `-w`,
+`-fno-integrated-as`, `-fuse-ld=` and more (see `src/main.c`). `-O`, `-g`,
+`-std=` and `-W*` (except `-w`) are accepted and ignored.
 
-The executables mucc produces are Linux ELF binaries. They run on Linux and
-inside WSL.
+## Features
 
-## Test
+**Self-hosting.** mucc compiles, assembles and links itself. `make CC=mucc`
+builds it with no gcc at all, and with `LDFLAGS=-static` without `ld` either.
+A mucc built by mucc builds a byte-identical mucc.
 
-```sh
-make test       # language-feature tests, command-line tests, error-message tests
-make test-all   # also rebuilds mucc with itself and checks the result
-make difftest   # compiles 300 random programs with mucc and gcc, compares output
-```
+**Its own toolchain.** The assembler (`src/asm.c`) produces object files
+byte-for-byte identical to GNU `as` from the same input. The linker
+(`src/link.c`) makes static executables, including thread-local data and
+glibc's IFUNC functions.
 
-`make difftest` (needs Python 3) is the best way to find wrong-code bugs.
-`test/gen_random.py` writes random C programs that have no undefined
-behavior, so if mucc and gcc print different things, one of them is wrong.
-Run more with `make difftest N=2000`. A program that fails is saved in
-`difftest-failures/`, and `test/reduce.py difftest-failures/SEED.c` shrinks
-it to the lines that matter. `test/difftest.sh --check-ub` checks the
-generator itself by running its programs under gcc's sanitizers.
+**C23 by default** (`__STDC_VERSION__` is `202311L`):
 
-`make test-all` proves self-hosting in three stages:
+- `bool`, `true`, `false`, `nullptr` and `nullptr_t`
+- `auto x = expr;` and `constexpr` variables
+- `#embed` with `limit`, `prefix`, `suffix` and `if_empty`, and `__has_embed`
+- `static_assert`, `alignas`, `alignof`, `thread_local`, `typeof_unqual`
+- `[[attributes]]`, `unreachable()`, digit separators (`1'000'000`)
+- `#elifdef`, `#elifndef`, `#warning`, `__has_include`, empty initializers `{}`
 
-1. `mucc` (stage 1) is built by `gcc`.
-2. `stage2/mucc` is built by `mucc`, then run against the whole test suite.
-3. `stage3/*.o` is compiled by `stage2/mucc` and must match `stage2/*.o`
-   byte for byte.
-
-When you change mucc:
-
-- Plain `make` only runs stage 1. Run `make test-all` to compile your change
-  with mucc itself, and do it before every commit.
-- mucc's own source can only use C features mucc supports (no `_Complex`, K&R
-  definitions or `asm` with operands), or stage 2 will not build.
-- Stage 1 always uses gcc, so a bad change can be fixed in the source and
-  rebuilt.
-- Add a test in `test/` for every feature or fix.
-
-## How mucc works
-
-`./mucc -o hello hello.c` sends the file through the stages below (the
-files are in `src/`). `[mucc]`
-marks this project's own code and `[system]` marks tools mucc borrows. The
-example input is `int main(void) { return 42; }`. The flags `-E`, `-S` and
-`-c` stop the pipeline early and keep that stage's output.
-
-```
- hello.c     int main(void) { return 42; }
-    |
-    v
-+----------------------------------------------------------------------+
-| DRIVER [mucc]  main.c                                                |
-|   Reads the flags, then runs itself again as `mucc -cc1` for each C  |
-|   file, which does stages 1 to 5. Then it links, stage 6.            |
-+----------------------------------------------------------------------+
-    |
-    v
-+----------------------------------------------------------------------+
-| 1. TOKENIZE [mucc]  token.c                                          |
-|   characters -> tokens                                               |
-|   int  main  (  void  )  {  return  42  ;  }                         |
-+----------------------------------------------------------------------+
-    |
-    v
-+----------------------------------------------------------------------+
-| 2. PREPROCESS [mucc]  preprocess.c                     -E stops here |
-|   expands #include, #define, #if (nothing to expand in this file)    |
-+----------------------------------------------------------------------+
-    |
-    v
-+----------------------------------------------------------------------+
-| 3. PARSE [mucc]  parser.c, type.c                                    |
-|   tokens -> typed syntax tree (AST); type errors are caught here     |
-|   function main -> return -> constant 42 (type int)                  |
-+----------------------------------------------------------------------+
-    |
-    v
-+----------------------------------------------------------------------+
-| 4. CODEGEN [mucc]  cgen.c                              -S stops here |
-|   AST -> x86-64 assembly text (AT&T syntax)                          |
-|   main:  push %rbp ... mov $42, %rax ... ret                         |
-+----------------------------------------------------------------------+
-    |
-    v
-+----------------------------------------------------------------------+
-| 5. ASSEMBLE [mucc]  asm.c                              -c stops here |
-|   assembly text -> machine code, stored in an object file (hello.o)  |
-|   "mov $42, %rax" becomes the bytes  48 c7 c0 2a 00 00 00            |
-+----------------------------------------------------------------------+
-    |
-    v
-+----------------------------------------------------------------------+
-| 6. LINK [mucc]  link.c with -static, else [system]  ld               |
-|   hello.o + C startup files (crt1.o, ...) + the C library (libc)     |
-|   -> one runnable file; the startup code calls main                  |
-+----------------------------------------------------------------------+
-    |
-    v
- hello     Linux ELF executable (a.out if you do not pass -o)
-    |
-    v
- $ ./hello ; echo $?      ->  42
-```
-
-Stages 1 to 4 are the compiler proper; stage 5 turns their assembly text
-into machine code in the same process. Optimizing (see the Roadmap) means
-changing stages 3 and 4.
-
-The linker (`src/link.c`) makes static executables: it pulls the members
-it needs out of `libc.a` and the other archives, lays out the code, data
-and thread-local sections, makes the GOT entries and the stubs for
-glibc's IFUNC functions (like `memcpy`, picked for the CPU at startup),
-applies the relocations and writes the ELF file with a symbol table for
-debuggers. `test/link.sh` links every test program this way, and mucc
-itself.
-
-## What mucc emits
-
-mucc is a compiler front end plus a code generator. Its output is x86-64
-assembly text in AT&T syntax (`./mucc -S file.c` prints it), which its
-assembler (`src/asm.c`) turns into an ELF object file. The assembler knows
-exactly the instructions and directives the code generator uses, and its
-objects are byte-for-byte the same as GNU `as` makes from the same text
-(`test/asm.sh` checks this on every test program). For an `asm()`
-statement or a `.s` file with anything else, mucc runs the system `as`
-instead; `-fno-integrated-as` always does.
-
-The code generator is a simple stack machine: each expression leaves its
-result in `%rax`, and intermediate values go through `push`/`pop`. Three
-things keep that from being slow:
-
-- **Register variables.** Each function's most used integer and pointer
-  locals (uses in loops count more) live in the callee-saved registers
-  `%rbx` and `%r12`-`%r15`, unless their address is taken. Others live in
-  the stack frame.
-- **Simple operands and folding.** Constants, variables and constant
-  expressions (`1000 * 1000`) are loaded straight into a register, without
-  the stack, and constant expressions are computed at compile time.
-- **Branches.** Conditions like `i < n && p` jump on the CPU flags
-  directly.
-
-For
-`long sum(int *a, int n) { long s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }`
-the loop is (comments added):
-
-```asm
-.L.begin.1:
-  movsxd %ebx, %rax          # i
-  movsxd %r14d, %rdi         # n
-  cmp %edi, %eax
-  jge .L..2                  # leave if i >= n
-  movsxd %ebx, %rax
-  mov $4, %rdi
-  imul %rdi, %rax            # i * sizeof(int)
-  mov %r13, %rdi             # a
-  add %rdi, %rax
-  movsxd (%rax), %rax        # a[i]
-  mov %r12, %rdi             # s
-  add %rdi, %rax
-  mov %rax, %r12             # s += a[i]
-  movsxd %ebx, %rax
-  mov $1, %rdi
-  add %edi, %eax
-  mov %eax, %ebx             # i++
-  jmp .L.begin.1
-```
-
-The result runs about as fast as `gcc -O0`'s code (roughly 3 to 5 times
-slower than `-O2`). There is no optimizer beyond this: `-O` is accepted
-and ignored, as are `-W*` (except `-w`), `-g` and `-std=`. It follows the System V AMD64
-ABI, so its objects link with gcc/clang-built code and glibc. It emits
-`.file`/`.loc` line directives, so debuggers see source lines, but no
-variable or type debug info.
-
-## What mucc can do
-
-Covered by the tests in `test/`:
+**C11 and the rest:**
 
 - Full preprocessor: macros, `#include`, `#include_next`, `#pragma once`, `-M`/`-MD`
 - Integers, `float`, `double`, `long double`, bit-fields, enums, unions
 - Structs passed and returned by value, varargs, function pointers
 - Variable-length arrays, `alloca`, compound literals, designated initializers
-- `_Generic`, `_Alignof`/`_Alignas`, `_Static_assert`, `typeof`, statement expressions
+- `_Generic`, `_Alignof`/`_Alignas`, `_Static_assert`
 - Thread-local and atomic variables, common symbols
 - `L`, `u`, `U`, `u8` string literals
+- GNU statement expressions, `typeof`, computed `goto` and case ranges
 - `__attribute__((packed))` and `__attribute__((aligned(N)))` on structs
-- `-c`, `-S`, `-E`, `-static`, `-shared`, `-fPIC`, linking `.a`/`.so` files
-- Compiling itself (see Test)
+- Plain `asm("...")` statements
 
-Errors and warnings (see `test/errors.sh`):
+**Code generation.** A simple stack machine with three things that keep it
+from being slow: each function's most used integer and pointer locals live in
+callee-saved registers, constant expressions are folded at compile time, and
+conditions jump on CPU flags directly. It follows the System V AMD64 ABI, so
+its objects link with gcc and clang code. It emits line information, so gdb
+shows source lines and functions.
 
-- Every error in a file is reported, each with its line and a caret, up to
-  20. After an error, mucc skips to the end of that statement or
-  declaration and carries on.
-- Warnings for unused local variables and for non-void functions that can
-  reach their end without a `return`. `-w` turns warnings off. They're
-  never given for system headers. Functions marked `_Noreturn` and C
-  library ones like `exit()` and `abort()` count as not returning.
+**Errors and warnings.** Every error in a file is reported (up to 20), each
+with its line and a caret. It warns about unused local variables and non-void
+functions that can reach their end without a `return`.
 
-C23 is the default: `__STDC_VERSION__` is `202311L`. From C23 (see
-`test/c23.c`):
+**Not supported:**
 
-- `bool`, `true`, `false` and `nullptr` (with `nullptr_t` in `<stddef.h>`)
-- `auto x = expr;` takes its type from the initializer
-- `constexpr` variables. Scalar ones are true constants: usable in array
-  sizes, `case` labels, `static_assert` and other `constexpr`s. mucc checks
-  that the value fits the type exactly and that nothing modifies them.
-  Arrays and structs are accepted as ordinary initialized objects.
-- `#embed "file"` with `limit`, `prefix`, `suffix` and `if_empty`, and
-  `__has_embed`
-- `static_assert` with or without a message, `alignas`, `alignof`,
-  `thread_local`, `typeof_unqual`
-- `[[attributes]]`, accepted and ignored, except `[[noreturn]]`, which the
-  missing-return warning uses; `__has_c_attribute`
-- `unreachable()` in `<stddef.h>` (it traps if reached)
-- Unnamed parameters in definitions, `f(...)` with one-argument `va_start`
-- `u8'a'` character literals and digit separators: `1'000'000`
-- Labels before declarations and at the end of a block
-- `#elifdef`, `#elifndef`, `#warning`, `__has_include`
-- Empty initializers: `int a[3] = {};`
+- C++, or any target but x86-64 Linux with glibc
+- `__attribute__` on functions and variables
+- GNU `asm` with operands, `_Complex`, `__int128`, `_BitInt`, `enum E : type`,
+  `<stdckdint.h>`, decimal floats, K&R-style definitions
+- Optimization beyond register variables and constant folding
+- Debug info for variables and types
+- `const` enforcement (except for `constexpr`)
 
-Inline assembly works only in its plain form, `asm("...")` (or `__asm__`)
-with a string and no operands.
+## Logistics
 
-Not supported yet: `_Complex`, K&R-style function definitions, `asm` with
-operands, the C23 features `_BitInt`, `enum E : type`, `<stdckdint.h>` and
-decimal floats, and any target other than x86-64 Linux with glibc. mucc
-doesn't enforce `const` (except for `constexpr`), and still treats
-`int f();` as a function with unspecified parameters, as C17 did, rather
-than as `int f(void)`.
+### Layout
 
-SQLite 3.45 (about 285,000 lines), Lua 5.4.7 and zlib 1.3.1 compile with
-mucc and pass their own tests. Git, libpng and the other builds scripted
-in `test/thirdparty/` have not been re-checked.
+| File | Role |
+| --- | --- |
+| `src/main.c` | Driver: command-line flags, runs each stage |
+| `src/token.c` | Source text to tokens, error messages |
+| `src/preprocess.c` | Macros, `#include`, `#if` |
+| `src/parser.c` | Recursive-descent parser, builds the typed syntax tree |
+| `src/type.c` | Type system and type checking |
+| `src/cgen.c` | Syntax tree to x86-64 assembly |
+| `src/asm.c` | Assembly to an ELF object file |
+| `src/link.c` | Static linker |
+| `src/mucc.h` | Declarations shared by every file |
+| `src/hashmap.c`, `src/strings.c`, `src/unicode.c` | Hash table, string helpers, UTF-8 |
+| `include/` | Headers mucc ships for the programs it compiles |
+| `test/` | Tests; `test/thirdparty/` has build scripts for real projects |
 
-## Roadmap
+Each source file is split into sections marked `//----------`. List them with
+`grep -n -- '^//----------' src/parser.c`.
 
-mucc's features are complete for what it's meant to be. From here the work
-is polishing, trimming and optimizing what's there, not adding features:
-each change should make mucc faster, smaller, clearer or more correct.
+### Testing
 
-**Correctness and polish**
-- Clearer errors for things mucc doesn't support, instead of confusing
-  ones: `__attribute__` on a function says "variable name omitted" now.
-- Clearer messages for a stray `}` or an unknown type inside a struct.
-- Re-check the third-party builds in `test/thirdparty/`, and fix what
-  they find.
-- Grow `test/gen_random.py` to cover more of C (unions, long double,
-  function pointers, goto), to find wrong-code bugs.
-
-**Faster code**
-- Keep expression temporaries in registers instead of push/pop, and use
-  addressing modes like `(%r13,%rbx,4)` for `a[i]`.
-- `double` variables in registers.
-
-**Smaller and faster compiles**
-- Smaller tokens and AST nodes: compiling SQLite uses about 490 MB.
-  This also makes big `#embed`s lighter (about 250 bytes per byte now).
-- Don't emit `__func__` strings for functions that never use them.
-
-Deliberately left out: dynamic linking in mucc's own linker (`ld` does it),
-`_Complex`, GNU `asm` operands, `_BitInt` and C++. Add one only if a real
-program you need can't do without it.
-
-## Layout
-
-All compiler code is in `src/`, listed here in pipeline order:
-
-| File                | Role                                        |
-| ------------------- | ------------------------------------------- |
-| `src/main.c`        | Driver: command-line flags, runs `as` / `ld` |
-| `src/token.c`       | Stage 1: source text to tokens, error messages |
-| `src/preprocess.c`  | Stage 2: macros, `#include`, `#if`          |
-| `src/parser.c`      | Stage 3: recursive-descent parser, builds typed AST |
-| `src/type.c`        | Stage 3: type system and type checking      |
-| `src/cgen.c`        | Stage 4: AST to x86-64 assembly             |
-| `src/asm.c`         | Stage 5: assembly to an ELF object file     |
-| `src/link.c`        | Stage 6: static linker                      |
-| `src/mucc.h`         | Declarations shared by every file           |
-| `src/hashmap.c`     | Hash table (keywords, macros, scopes)       |
-| `src/strings.c`     | Growable string arrays, `format()`          |
-| `src/unicode.c`     | UTF-8 encoding and identifier rules         |
-| `include/`          | Headers mucc ships for the programs it compiles (`stddef.h`, ...) |
-| `test/`             | Tests (`driver.sh` checks command-line flags, `errors.sh` diagnostics, `asm.sh` the assembler against GNU `as`, `link.sh` the static linker; `thirdparty/` builds real projects) |
-
-Each source file starts with a header saying which stage it is and is
-split into sections marked like this:
-
-```c
-//---------- Macro expansion (#, ## and substitution) ------------------------
+```sh
+make test       # language, command-line, error-message, assembler and linker tests
+make test-all   # also rebuilds mucc with itself and checks the result
+make difftest   # compiles 300 random programs with mucc and gcc, compares output
 ```
 
-To jump around, search for `//----------`, or list a file's sections
-with `grep -n -- '^//----------' src/parser.c`.
+`make test-all` proves self-hosting in three stages: gcc builds `mucc`, `mucc`
+builds `stage2/mucc` which runs the whole test suite, and `stage2/mucc`
+compiles `stage3/*.o`, which must match `stage2/*.o` byte for byte.
+
+`make difftest` is the best way to find wrong-code bugs. Its random programs
+have no undefined behavior, so if mucc and gcc print different things, one of
+them is wrong. Failures are saved in `difftest-failures/`, and
+`test/reduce.py difftest-failures/SEED.c` shrinks one to the lines that matter.
+
+### Continuous integration
+
+Every push and pull request runs `make test-all` and `make difftest N=100` on
+GitHub Actions (`.github/workflows/ci.yml`). The website in `docs/` is
+published to GitHub Pages by `.github/workflows/pages.yml`.
+
+### Contributing
+
+- Run `make test-all` before every commit.
+- mucc's own source may only use C that mucc supports, or stage 2 won't build.
+- Add a test in `test/` for every feature or fix.
+- The goal from here is polish, not new features: each change should make
+  mucc faster, smaller, clearer or more correct.
 
 ## License
 
