@@ -176,8 +176,8 @@ installed, as a normal user.
 `aligned`, `packed` and `weak` (part of 1.3) and 1.6 are committed
 together: 1.3's layout test needs 1.6 (without it, glibc strips the test's
 attributes), and 1.6 needs 1.3 (glibc's own headers use `aligned` on
-members). Then `used`, `constructor` and `destructor`. Next, the rest of
-1.3: `alias`, `section`, `visibility`, `cleanup` and `gnu_inline`.
+members). Then `used`, `constructor`, `destructor` and `cleanup`. Next,
+the rest of 1.3: `alias`, `section`, `visibility` and `gnu_inline`.
 
 glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
 compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
@@ -272,7 +272,11 @@ silently produces wrong code.
     `constructor`/`destructor` with priorities: mucc's linker sorts
     `.init_array.N` and `.fini_array.N` first, as `ld` does.
     `test/constructor.c` checks the order gcc runs them in, with `ld` and
-    with `-static`.
+    with `-static`. And `cleanup(fn)`, at the end of a block and through
+    `break`, `continue`, `return` and `goto` (`test/cleanup.c`, checked
+    against gcc). Jumping into a cleanup variable's scope (`goto`, `case`)
+    is an error, as are `goto *` in one and one at the end of a statement
+    expression.
   - [ ] Verified: a runtime test per attribute, checked against gcc's
     behavior, and each one works with the built-in linker (`-static`) and
     with `ld`.

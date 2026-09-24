@@ -1826,6 +1826,8 @@ static void gen_stmt(Node *node) {
       gen_stmt(n);
     return;
   case ND_GOTO:
+    if (node->lhs)
+      gen_stmt(node->lhs); // cleanups
     println("  jmp %s", node->unique_label);
     return;
   case ND_GOTO_EXPR:
