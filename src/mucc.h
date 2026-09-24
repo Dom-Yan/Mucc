@@ -147,6 +147,9 @@ struct Obj {
   // Local variable
   int offset;
   bool is_used; // named somewhere after its declaration (for warnings)
+  int reg;      // kept in callee-saved register reg - 1, or 0 (cgen.c)
+  int uses;     // how often it's used, weighted by loop depth (cgen.c)
+  bool is_addr_taken;
 
   // Global variable or function
   bool is_function;
@@ -173,6 +176,8 @@ struct Obj {
   Obj *va_area;
   Obj *alloca_bottom;
   int stack_size;
+  int nregs;        // callee-saved registers its variables use
+  int regs_offset;  // where it saves them in its frame
 
   // Static inline function
   bool is_live;

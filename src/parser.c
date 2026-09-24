@@ -1629,6 +1629,10 @@ static Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
   Initializer *init = initializer(rest, tok, var->ty, &var->ty);
   InitDesg desg = {NULL, 0, NULL, var};
 
+  // A scalar with a value, like `int x = 5`, is just assigned it.
+  if (init->expr && !init->children)
+    return create_lvar_init(init, var->ty, &desg, tok);
+
   // If a partial initializer list is given, the standard requires
   // that unspecified elements are set to 0. Here, we simply
   // zero-initialize the entire memory region of a variable before
@@ -2509,6 +2513,14 @@ static Node *to_assign(Node *binary) {
     return node;
   }
 
+  // `x op= B` for a plain variable x is just `x = x op B`: reading x
+  // has no side effects. (Taking &x, as below, would also keep x out
+  // of a register; see "Register variables" in cgen.c.)
+  if (binary->lhs->kind == ND_VAR) {
+    Node *lhs = new_var_node(binary->lhs->var, tok);
+    return new_binary(ND_ASSIGN, lhs, binary, tok);
+  }
+
   // Convert `A op= B` to ``tmp = &A, *tmp = *tmp op B`.
   Obj *var = new_lvar("", pointer_to(binary->lhs->ty));
 
@@ -2744,6 +2756,14 @@ static Node *shift(Token **rest, Token *tok) {
 // so that p+n points to the location n elements (not bytes) ahead of p.
 // In other words, we need to scale an integer value before adding to a
 // pointer value. This function takes care of the scaling.
+// Integer `n` times `size`, as a long: how many bytes `ptr + n` moves.
+// For 1-byte elements that's just n converted to long.
+static Node *scale(Node *n, int size, Token *tok) {
+  if (size == 1)
+    return new_cast(n, ty_long);
+  return new_binary(ND_MUL, n, new_long(size, tok), tok);
+}
+
 static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
@@ -2769,7 +2789,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   }
 
   // ptr + num
-  rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
+  rhs = scale(rhs, lhs->ty->base->size, tok);
   return new_binary(ND_ADD, lhs, rhs, tok);
 }
 
@@ -2793,7 +2813,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
 
   // ptr - num
   if (lhs->ty->base && is_integer(rhs->ty)) {
-    rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
+    rhs = scale(rhs, lhs->ty->base->size, tok);
     add_type(rhs);
     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
     node->ty = lhs->ty;

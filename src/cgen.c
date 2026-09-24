@@ -24,6 +24,14 @@ static int depth;
 // built-in assembler may not know (see cc1() in main.c).
 bool has_inline_asm;
 
+// Callee-saved registers, which calls leave alone: local variables can
+// live in them (see "Register variables"). Obj->reg is an index + 1.
+#define NREGS 5
+static char *regs64[] = {"%rbx", "%r12", "%r13", "%r14", "%r15"};
+static char *regs32[] = {"%ebx", "%r12d", "%r13d", "%r14d", "%r15d"};
+static char *regs16[] = {"%bx", "%r12w", "%r13w", "%r14w", "%r15w"};
+static char *regs8[] = {"%bl", "%r12b", "%r13b", "%r14b", "%r15b"};
+
 static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
 static char *argreg16[] = {"%di", "%si", "%dx", "%cx", "%r8w", "%r9w"};
 static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
@@ -74,8 +82,21 @@ static void out_long(long v) {
   }
 }
 
+// A `push %rax` not written yet. If the next instruction is a pop, the
+// pair becomes one mov (see pop()); anything else writes the push first.
+static bool pending_push;
+
+static void flush_push(void) {
+  if (pending_push) {
+    char *line = "  push %rax\n";
+    pending_push = false;
+    out_bytes(line, strlen(line));
+  }
+}
+
 __attribute__((format(printf, 1, 2)))
 static void println(char *fmt, ...) {
+  flush_push();
   va_list ap;
   va_start(ap, fmt);
 
@@ -133,12 +154,20 @@ static int count(void) {
 }
 
 static void push(void) {
-  println("  push %%rax");
+  flush_push();
+  pending_push = true;
   depth++;
 }
 
 static void pop(char *arg) {
-  println("  pop %s", arg);
+  if (pending_push) {
+    // `push %rax; pop %rdi` is `mov %rax, %rdi`.
+    pending_push = false;
+    if (strcmp(arg, "%rax"))
+      println("  mov %%rax, %s", arg);
+  } else {
+    println("  pop %s", arg);
+  }
   depth--;
 }
 
@@ -187,6 +216,11 @@ static char *reg_ax(int sz) {
 static void gen_addr(Node *node) {
   switch (node->kind) {
   case ND_VAR:
+    // A register variable has no address; one whose address is taken
+    // is never put in a register.
+    if (node->var->reg)
+      unreachable();
+
     // Variable-length array, which is always local.
     if (node->var->ty->kind == TY_VLA) {
       println("  mov %d(%%rbp), %%rax", node->var->offset);
@@ -308,6 +342,21 @@ static char *local_addr(Obj *var) {
   static char buf[32];
   snprintf(buf, sizeof(buf), "%d(%%rbp)", var->offset);
   return buf;
+}
+
+// Where local scalar `var` lives: its register, sized for its type (e.g.
+// "%r12d" for an int), or its stack slot. load_from() and store_to()
+// take either.
+static char *var_operand(Obj *var) {
+  if (!var->reg)
+    return local_addr(var);
+  int i = var->reg - 1;
+  switch (var->ty->size) {
+  case 1: return regs8[i];
+  case 2: return regs16[i];
+  case 4: return regs32[i];
+  }
+  return regs64[i];
 }
 
 // Load a value of type `ty` from memory operand `addr`, e.g. "(%rax)",
@@ -542,6 +591,90 @@ static void cast(Type *from, Type *to) {
     println("  %s", cast_table[t1][t2]);
 }
 
+//---------- Constant folding ------------------------------------------------
+
+// Integer expressions made only of constants are computed here, at
+// compile time, into a single `mov $value, %rax`: `1000 * 1000` in a loop
+// condition, sizes scaled for pointer arithmetic, and so on. The result
+// must be exactly what the CPU would compute, so each step wraps around
+// to the width of its type, and only operators that can't trap are
+// folded: no division (by zero traps), no shifts by the width or more.
+
+static bool is_foldable(Node *node) {
+  // Integers, and integers cast to a pointer, like NULL: (void *)0.
+  // (Some nodes, like ones that only zero memory, have no type.)
+  if (!node->ty)
+    return false;
+  bool is_ptr_cast = node->kind == ND_CAST && node->ty->kind == TY_PTR;
+  if (!is_integer(node->ty) && !is_ptr_cast)
+    return false;
+
+  switch (node->kind) {
+  case ND_NUM:
+    return true;
+  case ND_ADD: case ND_SUB: case ND_MUL: case ND_BITAND: case ND_BITOR:
+  case ND_BITXOR: case ND_EQ: case ND_NE: case ND_LT: case ND_LE:
+    return is_foldable(node->lhs) && is_foldable(node->rhs);
+  case ND_SHL:
+  case ND_SHR:
+    return is_foldable(node->lhs) && node->rhs->kind == ND_NUM &&
+           node->rhs->val >= 0 && node->rhs->val < node->lhs->ty->size * 8;
+  case ND_NEG: case ND_BITNOT: case ND_NOT: case ND_CAST:
+    return is_foldable(node->lhs);
+  }
+  return false;
+}
+
+// `val` as a value of type `ty`: its low bits, sign- or zero-extended.
+static int64_t wrap(uint64_t val, Type *ty) {
+  switch (ty->size) {
+  case 1: return ty->is_unsigned ? (int64_t)(uint8_t)val : (int8_t)val;
+  case 2: return ty->is_unsigned ? (int64_t)(uint16_t)val : (int16_t)val;
+  case 4: return ty->is_unsigned ? (int64_t)(uint32_t)val : (int32_t)val;
+  }
+  return val;
+}
+
+// The value of `node`, which is_foldable().
+static int64_t fold(Node *node) {
+  Type *ty = node->ty;
+
+  switch (node->kind) {
+  case ND_NUM:
+    return wrap(node->val, ty);
+  case ND_CAST:
+    if (ty->kind == TY_BOOL)
+      return fold(node->lhs) != 0;
+    return wrap(fold(node->lhs), ty);
+  case ND_NEG:
+    return wrap(-(uint64_t)fold(node->lhs), ty);
+  case ND_BITNOT:
+    return wrap(~(uint64_t)fold(node->lhs), ty);
+  case ND_NOT:
+    return !fold(node->lhs);
+  }
+
+  // Binary operators. Both operands have the same type here.
+  uint64_t l = fold(node->lhs), r = fold(node->rhs);
+  bool is_unsigned = node->lhs->ty->is_unsigned;
+
+  switch (node->kind) {
+  case ND_ADD: return wrap(l + r, ty);
+  case ND_SUB: return wrap(l - r, ty);
+  case ND_MUL: return wrap(l * r, ty);
+  case ND_BITAND: return wrap(l & r, ty);
+  case ND_BITOR: return wrap(l | r, ty);
+  case ND_BITXOR: return wrap(l ^ r, ty);
+  case ND_SHL: return wrap(l << r, ty);
+  case ND_SHR: return wrap(is_unsigned ? l >> r : (uint64_t)((int64_t)l >> r), ty);
+  case ND_EQ: return l == r;
+  case ND_NE: return l != r;
+  case ND_LT: return is_unsigned ? l < r : (int64_t)l < (int64_t)r;
+  case ND_LE: return is_unsigned ? l <= r : (int64_t)l <= (int64_t)r;
+  }
+  unreachable();
+}
+
 //---------- Simple operands -------------------------------------------------
 
 static bool is_int_or_ptr(Type *ty) {
@@ -554,6 +687,20 @@ static Obj *local_scalar(Node *node) {
   if (node->kind == ND_VAR && node->var->is_local && !is_aggregate(node->ty))
     return node->var;
   return NULL;
+}
+
+// Does gen_expr() compute `node` by loading a signed int (with movsxd,
+// see load_from()), so its value is already correct as 64 bits?
+static bool is_int_load(Node *node) {
+  if (node->ty->kind != TY_INT || node->ty->is_unsigned)
+    return false;
+  if (node->kind == ND_VAR)
+    return local_scalar(node) || !node->var->is_local;
+  if (node->kind == ND_DEREF)
+    return true;
+  if (node->kind == ND_MEMBER)
+    return !node->member->is_bitfield;
+  return false;
 }
 
 // Some operands can be loaded into %rdi with a single instruction: an
@@ -575,14 +722,19 @@ static char *simple_operand(Node *node) {
       !cast_table[getTypeId(node->lhs->ty)][getTypeId(node->ty)])
     node = node->lhs;
 
-  // Integer constant. A constant cast to a 4- or 8-byte type keeps its
-  // value when it fits in 32 bits (mov sign-extends it to 64 bits).
-  Node *num = node;
-  if (num->kind == ND_CAST && is_int_or_ptr(num->ty) && num->ty->size >= 4)
-    num = num->lhs;
-  if (num->kind == ND_NUM && is_int_or_ptr(num->ty) &&
-      num->val == (int32_t)num->val) {
-    snprintf(buf, sizeof(buf), "  mov $%ld, %%rdi", num->val);
+  // So do int locals converted to 64 bits: loading an int already
+  // sign-extends it (movsxd).
+  if (node->kind == ND_CAST && node->ty->size == 8 && is_int_or_ptr(node->ty) &&
+      is_int_load(node->lhs) && node->lhs->kind == ND_VAR)
+    node = node->lhs;
+
+  // Integer constant (see "Constant folding") that fits in 32 bits, which
+  // mov sign-extends to 64.
+  if (is_foldable(node)) {
+    int64_t val = fold(node);
+    if (val != (int32_t)val)
+      return NULL;
+    snprintf(buf, sizeof(buf), "  mov $%ld, %%rdi", val);
     return buf;
   }
 
@@ -592,14 +744,15 @@ static char *simple_operand(Node *node) {
     return NULL;
 
   char *insn = var->ty->is_unsigned ? "movz" : "movs";
+  char *src = var_operand(var);
   if (var->ty->size == 1)
-    snprintf(buf, sizeof(buf), "  %sbl %d(%%rbp), %%edi", insn, var->offset);
+    snprintf(buf, sizeof(buf), "  %sbl %s, %%edi", insn, src);
   else if (var->ty->size == 2)
-    snprintf(buf, sizeof(buf), "  %swl %d(%%rbp), %%edi", insn, var->offset);
+    snprintf(buf, sizeof(buf), "  %swl %s, %%edi", insn, src);
   else if (var->ty->size == 4)
-    snprintf(buf, sizeof(buf), "  movsxd %d(%%rbp), %%rdi", var->offset);
+    snprintf(buf, sizeof(buf), "  movsxd %s, %%rdi", src);
   else
-    snprintf(buf, sizeof(buf), "  mov %d(%%rbp), %%rdi", var->offset);
+    snprintf(buf, sizeof(buf), "  mov %s, %%rdi", src);
   return buf;
 }
 
@@ -875,9 +1028,9 @@ static void copy_struct_reg(void) {
 
 static void copy_struct_mem(void) {
   Type *ty = current_fn->ty->return_ty;
-  Obj *var = current_fn->params;
+  Obj *var = current_fn->params; // the hidden pointer to the return buffer
 
-  println("  mov %d(%%rbp), %%rdi", var->offset);
+  println("  mov %s, %%rdi", var_operand(var));
 
   for (int i = 0; i < ty->size; i++) {
     println("  mov %d(%%rax), %%dl", i);
@@ -913,6 +1066,125 @@ static void builtin_alloca(void) {
   println("  mov %%rax, %d(%%rbp)", current_fn->alloca_bottom->offset);
 }
 
+//---------- Operands, branches and unused values ----------------------------
+
+static bool is_commutative(Node *node) {
+  switch (node->kind) {
+  case ND_ADD: case ND_MUL: case ND_BITAND: case ND_BITOR: case ND_BITXOR:
+  case ND_EQ: case ND_NE:
+    return true;
+  }
+  return false;
+}
+
+// Computes a binary operator's lhs into %rax and rhs into %rdi (or, for
+// `a + b` where only a is simple, b into %rax and a into %rdi).
+static void gen_operands(Node *node) {
+  if (!simple_operand(node->rhs) && simple_operand(node->lhs) && is_commutative(node)) {
+    gen_expr(node->rhs);
+    println("%s", simple_operand(node->lhs));
+    return;
+  }
+
+  if (simple_operand(node->rhs)) {
+    gen_expr(node->lhs);
+    println("%s", simple_operand(node->rhs));
+  } else {
+    gen_expr(node->rhs);
+    push();
+    gen_expr(node->lhs);
+    pop("%rdi");
+  }
+}
+
+// Whether a binary operator on `ty` operands works on 64-bit registers.
+static bool is_64bit(Type *ty) {
+  return ty->kind == TY_LONG || ty->base;
+}
+
+// The condition code (as in jCC) under which comparison `node` is true,
+// or false if `when` is false.
+static char *condition(Node *node, bool when) {
+  bool u = node->lhs->ty->is_unsigned;
+  switch (node->kind) {
+  case ND_EQ: return when ? "e" : "ne";
+  case ND_NE: return when ? "ne" : "e";
+  case ND_LT: return when ? (u ? "b" : "l") : (u ? "ae" : "ge");
+  case ND_LE: return when ? (u ? "be" : "le") : (u ? "a" : "g");
+  }
+  unreachable();
+}
+
+// Jumps to `label` if `cond` is true (or, if `when` is false, if it's
+// false). Comparisons, !, && and || jump on the CPU flags directly,
+// instead of making a 0 or 1 in %rax and testing that.
+static void gen_branch(Node *cond, bool when, char *label) {
+  switch (cond->kind) {
+  case ND_NOT:
+    gen_branch(cond->lhs, !when, label);
+    return;
+  case ND_LOGAND:
+  case ND_LOGOR:
+    // Jumping when `a && b` is true needs both; when it's false, either
+    // one will do (and the reverse for ||).
+    if ((cond->kind == ND_LOGAND) == when) {
+      char *skip = format(".L.skip.%d", count());
+      gen_branch(cond->lhs, !when, skip);
+      gen_branch(cond->rhs, when, label);
+      println("%s:", skip);
+    } else {
+      gen_branch(cond->lhs, when, label);
+      gen_branch(cond->rhs, when, label);
+    }
+    return;
+  case ND_EQ:
+  case ND_NE:
+  case ND_LT:
+  case ND_LE:
+    if (is_flonum(cond->lhs->ty))
+      break;
+    gen_operands(cond);
+    if (is_64bit(cond->lhs->ty))
+      println("  cmp %%rdi, %%rax");
+    else
+      println("  cmp %%edi, %%eax");
+    println("  j%s %s", condition(cond, when), label);
+    return;
+  }
+
+  gen_expr(cond);
+  cmp_zero(cond->ty);
+  println("  %s %s", when ? "jne" : "je", label);
+}
+
+// Computes `node` only for its side effects, as in an expression
+// statement. Casts, and adding a constant, change nothing else, so they
+// are skipped: `x++;` becomes just `x += 1`, without computing x's old
+// value. (Only for integers and pointers: a long double must still be
+// popped off the x87 stack.)
+static void gen_discard(Node *node) {
+  for (;;) {
+    if (node->kind == ND_CAST && is_int_or_ptr(node->lhs->ty)) {
+      node = node->lhs;
+      continue;
+    }
+    if ((node->kind == ND_ADD || node->kind == ND_SUB) &&
+        is_int_or_ptr(node->ty) && is_int_or_ptr(node->lhs->ty) &&
+        is_foldable(node->rhs)) {
+      node = node->lhs;
+      continue;
+    }
+    break;
+  }
+
+  if (node->kind == ND_COMMA) {
+    gen_discard(node->lhs);
+    gen_discard(node->rhs);
+    return;
+  }
+  gen_expr(node);
+}
+
 //---------- Expressions -----------------------------------------------------
 
 // Tells the assembler which source line the next instructions come
@@ -929,6 +1201,11 @@ static void emit_loc(Token *tok) {
 // Generate code for a given node.
 static void gen_expr(Node *node) {
   emit_loc(node->tok);
+
+  if (node->kind != ND_NUM && is_foldable(node)) {
+    println("  mov $%ld, %%rax", fold(node));
+    return;
+  }
 
   switch (node->kind) {
   case ND_NULL_EXPR:
@@ -988,7 +1265,7 @@ static void gen_expr(Node *node) {
     return;
   case ND_VAR:
     if (local_scalar(node)) {
-      load_from(node->ty, local_addr(node->var));
+      load_from(node->ty, var_operand(node->var));
       return;
     }
     gen_addr(node);
@@ -1034,7 +1311,7 @@ static void gen_expr(Node *node) {
     // Storing to a local scalar needs no address computation.
     if (local_scalar(node->lhs)) {
       gen_expr(node->rhs);
-      store_to(node->ty, local_addr(node->lhs->var));
+      store_to(node->ty, var_operand(node->lhs->var));
       return;
     }
 
@@ -1070,8 +1347,14 @@ static void gen_expr(Node *node) {
     store(node->ty);
     return;
   case ND_STMT_EXPR:
-    for (Node *n = node->body; n; n = n->next)
-      gen_stmt(n);
+    // The value of the last statement, if it's an expression, is the
+    // result, so it's computed with gen_expr, not discarded.
+    for (Node *n = node->body; n; n = n->next) {
+      if (!n->next && n->kind == ND_EXPR_STMT)
+        gen_expr(n->lhs);
+      else
+        gen_stmt(n);
+    }
     return;
   case ND_COMMA:
     gen_expr(node->lhs);
@@ -1079,9 +1362,17 @@ static void gen_expr(Node *node) {
     return;
   case ND_CAST:
     gen_expr(node->lhs);
+    // An int load is already sign-extended to 64 bits.
+    if (is_int_load(node->lhs) && node->ty->size == 8 && is_int_or_ptr(node->ty))
+      return;
     cast(node->lhs->ty, node->ty);
     return;
   case ND_MEMZERO:
+    if (node->var->reg) {
+      println("  mov $0, %s", regs64[node->var->reg - 1]);
+      return;
+    }
+
     // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
     println("  mov $%d, %%rcx", node->var->ty->size);
     println("  lea %d(%%rbp), %%rdi", node->var->offset);
@@ -1090,9 +1381,7 @@ static void gen_expr(Node *node) {
     return;
   case ND_COND: {
     int c = count();
-    gen_expr(node->cond);
-    cmp_zero(node->cond->ty);
-    println("  je .L.else.%d", c);
+    gen_branch(node->cond, false, format(".L.else.%d", c));
     gen_expr(node->then);
     println("  jmp .L.end.%d", c);
     println(".L.else.%d:", c);
@@ -1207,7 +1496,8 @@ static void gen_expr(Node *node) {
       println("  mov $%d, %%rax", fp);
       println("  call *%%r10");
     }
-    println("  add $%d, %%rsp", stack_args * 8);
+    if (stack_args)
+      println("  add $%d, %%rsp", stack_args * 8);
 
     depth -= stack_args;
 
@@ -1370,20 +1660,11 @@ static void gen_expr(Node *node) {
   }
   }
 
-  // Compute lhs into %rax and rhs into %rdi.
-  if (simple_operand(node->rhs)) {
-    gen_expr(node->lhs);
-    println("%s", simple_operand(node->rhs));
-  } else {
-    gen_expr(node->rhs);
-    push();
-    gen_expr(node->lhs);
-    pop("%rdi");
-  }
+  gen_operands(node);
 
   char *ax, *di, *dx;
 
-  if (node->lhs->ty->kind == TY_LONG || node->lhs->ty->base) {
+  if (is_64bit(node->lhs->ty)) {
     ax = "%rax";
     di = "%rdi";
     dx = "%rdx";
@@ -1476,9 +1757,7 @@ static void gen_stmt(Node *node) {
   switch (node->kind) {
   case ND_IF: {
     int c = count();
-    gen_expr(node->cond);
-    cmp_zero(node->cond->ty);
-    println("  je  .L.else.%d", c);
+    gen_branch(node->cond, false, format(".L.else.%d", c));
     gen_stmt(node->then);
     println("  jmp .L.end.%d", c);
     println(".L.else.%d:", c);
@@ -1492,15 +1771,12 @@ static void gen_stmt(Node *node) {
     if (node->init)
       gen_stmt(node->init);
     println(".L.begin.%d:", c);
-    if (node->cond) {
-      gen_expr(node->cond);
-      cmp_zero(node->cond->ty);
-      println("  je %s", node->brk_label);
-    }
+    if (node->cond)
+      gen_branch(node->cond, false, node->brk_label);
     gen_stmt(node->then);
     println("%s:", node->cont_label);
     if (node->inc)
-      gen_expr(node->inc);
+      gen_discard(node->inc);
     println("  jmp .L.begin.%d", c);
     println("%s:", node->brk_label);
     return;
@@ -1510,9 +1786,7 @@ static void gen_stmt(Node *node) {
     println(".L.begin.%d:", c);
     gen_stmt(node->then);
     println("%s:", node->cont_label);
-    gen_expr(node->cond);
-    cmp_zero(node->cond->ty);
-    println("  jne .L.begin.%d", c);
+    gen_branch(node->cond, true, format(".L.begin.%d", c));
     println("%s:", node->brk_label);
     return;
   }
@@ -1581,7 +1855,7 @@ static void gen_stmt(Node *node) {
     println("  jmp .L.return.%s", current_fn->name);
     return;
   case ND_EXPR_STMT:
-    gen_expr(node->lhs);
+    gen_discard(node->lhs);
     return;
   case ND_ASM:
     has_inline_asm = true;
@@ -1590,6 +1864,110 @@ static void gen_stmt(Node *node) {
   }
 
   error_tok(node->tok, "invalid statement");
+}
+
+//---------- Register variables ----------------------------------------------
+
+// A function's most used local variables live in the callee-saved
+// registers %rbx and %r12-%r15 instead of its stack frame: calls leave
+// those registers alone, and loads and stores become register moves.
+// Only integer and pointer locals whose address is never taken (no &x)
+// qualify, since a register has no address. The function saves the
+// registers it uses in its prologue and restores them before returning.
+//
+// A function that calls setjmp() keeps every variable in memory: a
+// register variable changed after setjmp() would come back from longjmp()
+// with its old value. So does one with an asm() statement, which might
+// use these registers.
+
+static bool no_register_vars; // set by scan_uses()
+
+static bool is_setjmp(Node *fn) {
+  static char *names[] = {
+    "setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "savectx", "vfork",
+    "getcontext",
+  };
+  if (fn->kind != ND_VAR)
+    return false;
+  for (int i = 0; i < sizeof(names) / sizeof(*names); i++)
+    if (!strcmp(fn->var->name, names[i]))
+      return true;
+  return false;
+}
+
+// Counts the uses of each variable in `node`, `weight` each (a use in a
+// loop counts 8 times more per level), and notes the variables whose
+// address is taken.
+static void scan_uses(Node *node, int weight) {
+  if (!node)
+    return;
+
+  switch (node->kind) {
+  case ND_VAR:
+    node->var->uses += weight;
+    return;
+  case ND_ADDR:
+    if (node->lhs->kind == ND_VAR)
+      node->lhs->var->is_addr_taken = true;
+    break;
+  case ND_ASM:
+    no_register_vars = true;
+    return;
+  case ND_FUNCALL:
+    if (is_setjmp(node->lhs))
+      no_register_vars = true;
+    break;
+  case ND_FOR:
+  case ND_DO:
+    scan_uses(node->init, weight);
+    weight = MIN(weight * 8, 512);
+    scan_uses(node->cond, weight);
+    scan_uses(node->inc, weight);
+    scan_uses(node->then, weight);
+    return;
+  }
+
+  scan_uses(node->lhs, weight);
+  scan_uses(node->rhs, weight);
+  scan_uses(node->cond, weight);
+  scan_uses(node->then, weight);
+  scan_uses(node->els, weight);
+  scan_uses(node->init, weight);
+  scan_uses(node->inc, weight);
+  scan_uses(node->cas_addr, weight);
+  scan_uses(node->cas_old, weight);
+  scan_uses(node->cas_new, weight);
+  for (Node *n = node->body; n; n = n->next)
+    scan_uses(n, weight);
+  for (Node *n = node->args; n; n = n->next)
+    scan_uses(n, weight);
+}
+
+static bool can_be_in_register(Obj *fn, Obj *var) {
+  Type *ty = var->ty;
+  return !var->is_addr_taken && var != fn->alloca_bottom && !ty->is_atomic &&
+         (is_integer(ty) || ty->kind == TY_PTR);
+}
+
+// Gives the most used eligible variables of `fn` a register each.
+static void assign_registers(Obj *fn) {
+  no_register_vars = false;
+  scan_uses(fn->body, 1);
+  if (no_register_vars)
+    return;
+
+  while (fn->nregs < NREGS) {
+    // A variable used only once or twice isn't worth saving and
+    // restoring a register for.
+    Obj *best = NULL;
+    for (Obj *var = fn->locals; var; var = var->next)
+      if (!var->reg && var->uses >= 3 && can_be_in_register(fn, var) &&
+          (!best || var->uses > best->uses))
+        best = var;
+    if (!best)
+      return;
+    best->reg = ++fn->nregs;
+  }
 }
 
 //---------- Stack frames and the data section -------------------------------
@@ -1641,8 +2019,9 @@ static void assign_lvar_offsets(Obj *prog) {
     }
 
     // Assign offsets to pass-by-register parameters and local variables.
+    // Register variables need none.
     for (Obj *var = fn->locals; var; var = var->next) {
-      if (var->offset)
+      if (var->offset || var->reg)
         continue;
 
       // AMD64 System V ABI has a special alignment rule for an array of
@@ -1656,6 +2035,10 @@ static void assign_lvar_offsets(Obj *prog) {
       bottom = align_to(bottom, align);
       var->offset = -bottom;
     }
+
+    // Slots to save the callee-saved registers the function uses.
+    bottom = align_to(bottom, 8) + fn->nregs * 8;
+    fn->regs_offset = -bottom;
 
     fn->stack_size = align_to(bottom, 16);
   }
@@ -1781,6 +2164,8 @@ static void emit_text(Obj *prog) {
     println("  mov %%rsp, %%rbp");
     println("  sub $%d, %%rsp", fn->stack_size);
     println("  mov %%rsp, %d(%%rbp)", fn->alloca_bottom->offset);
+    for (int i = 0; i < fn->nregs; i++)
+      println("  mov %s, %d(%%rbp)", regs64[i], fn->regs_offset + i * 8);
 
     // Save arg registers if function is variadic
     if (fn->va_area) {
@@ -1819,11 +2204,21 @@ static void emit_text(Obj *prog) {
       println("  movsd %%xmm7, %d(%%rbp)", off + 128);
     }
 
-    // Save passed-by-register arguments to the stack
+    // Save passed-by-register arguments to the stack, or move them to
+    // their registers.
     int gp = 0, fp = 0;
     for (Obj *var = fn->params; var; var = var->next) {
-      if (var->offset > 0)
+      // Passed on the stack (only a register variable moves)
+      if (var->offset > 0) {
+        if (var->reg)
+          println("  mov %d(%%rbp), %s", var->offset, regs64[var->reg - 1]);
         continue;
+      }
+
+      if (var->reg) {
+        println("  mov %s, %s", argreg64[gp++], regs64[var->reg - 1]);
+        continue;
+      }
 
       Type *ty = var->ty;
 
@@ -1865,6 +2260,8 @@ static void emit_text(Obj *prog) {
 
     // Epilogue
     println(".L.return.%s:", fn->name);
+    for (int i = 0; i < fn->nregs; i++)
+      println("  mov %d(%%rbp), %s", fn->regs_offset + i * 8, regs64[i]);
     println("  mov %%rbp, %%rsp");
     println("  pop %%rbp");
     println("  ret");
@@ -1882,6 +2279,9 @@ void codegen(Obj *prog, FILE *out) {
   for (int i = 0; files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 
+  for (Obj *fn = prog; fn; fn = fn->next)
+    if (fn->is_function && fn->is_definition)
+      assign_registers(fn);
   assign_lvar_offsets(prog);
   emit_data(prog);
   emit_text(prog);
