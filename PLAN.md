@@ -155,7 +155,20 @@ installed, as a normal user.
   - [x] Added
   - [ ] Verified: new `test/errors.sh` and `test/driver.sh` cases each fail
     with the 0.5 commit (`542e4c0`) and pass now; `make test-all` and `make
-    difftest N=300` pass; git builds and passes its tests.
+    difftest N=300` pass; git builds and passes its tests. (Everything but
+    git is done. Git now gets past these errors and stops at 0.8.)
+
+- [ ] **0.8 glibc's large-file renames in arguments.** For compilers other
+  than gcc, glibc renames functions with macros (`#define getrlimit
+  getrlimit64`), so `getrlimit(RLIMIT_NOFILE, &r)` passes a `struct rlimit *`
+  where `struct rlimit64 *` is declared. The two have the same layout. A
+  `struct X` and a `struct X64` of the same size now count as compatible
+  pointees. Found by git (`packfile.c`).
+  - [x] Added
+  - [ ] Verified: a `test/errors.sh` case with `getrlimit` fails on the
+    previous commit (`b0809b7`) and passes now, and a different-sized `struct s` and
+    `struct s64` are still an error; `make test-all` and `make difftest
+    N=300` pass; git builds and passes its tests.
 
 ## Phase 1: GNU attributes and the small C23 features
 
