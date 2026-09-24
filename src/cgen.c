@@ -2077,6 +2077,31 @@ static void emit_weak_refs(Obj *prog) {
       println("  .weak %s", var->name);
 }
 
+// A pointer to a constructor in .init_array (or a destructor in
+// .fini_array), which the C library calls before (or after) main. With a
+// priority N, it goes in .init_array.N, which the linker sorts first.
+static void emit_init_entry(char *kind, int prio, char *name) {
+  char *sec = prio < 0 ? format(".%s_array", kind) :
+                         format(".%s_array.%05d", kind, prio);
+  println("  .section %s,\"aw\",@%s_array", sec, kind);
+  println("  .align 8");
+  println("  .quad %s", name);
+}
+
+// The list has the newest declaration first. Emitting the oldest first
+// runs those without a priority in the order they're declared, as gcc does.
+static void emit_init_arrays(Obj *fn) {
+  if (!fn)
+    return;
+  emit_init_arrays(fn->next);
+  if (!fn->is_function || !fn->is_definition || !fn->is_live)
+    return;
+  if (fn->is_ctor)
+    emit_init_entry("init", fn->ctor_prio, fn->name);
+  if (fn->is_dtor)
+    emit_init_entry("fini", fn->dtor_prio, fn->name);
+}
+
 static void emit_data(Obj *prog) {
   for (Obj *var = prog; var; var = var->next) {
     if (var->is_function || !var->is_definition)
@@ -2313,6 +2338,7 @@ void codegen(Obj *prog, FILE *out) {
     has_weak |= var->is_weak;
   emit_data(prog);
   emit_text(prog);
+  emit_init_arrays(prog);
   emit_weak_refs(prog);
 
   // Mark the stack as not executable, as gcc does. The built-in assembler

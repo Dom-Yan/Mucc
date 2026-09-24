@@ -80,7 +80,7 @@ typedef struct {
 
 struct Section {
   char *name;
-  int type;           // SHT_PROGBITS or SHT_NOBITS
+  int type;           // SHT_PROGBITS, SHT_NOBITS, SHT_INIT_ARRAY or SHT_FINI_ARRAY
   int flags;          // SHF_*
   int align;
   Bytes bytes;        // contents, without jumps (SHT_NOBITS: len only)
@@ -1281,8 +1281,13 @@ static void section_directive(void) {
     p++;
   char *name = strndup(start, p - start);
 
+  // As with GNU as, the name alone makes .init_array.N an init array.
   int flags = 0;
   int type = SHT_PROGBITS;
+  if (!strncmp(name, ".init_array", 11))
+    type = SHT_INIT_ARRAY;
+  else if (!strncmp(name, ".fini_array", 11))
+    type = SHT_FINI_ARRAY;
   skip_space();
   if (*p == ',') {
     p++;
@@ -1304,6 +1309,10 @@ static void section_directive(void) {
       skip_space();
       if (!strncmp(p, "@nobits", 7))
         type = SHT_NOBITS;
+      else if (!strncmp(p, "@init_array", 11))
+        type = SHT_INIT_ARRAY;
+      else if (!strncmp(p, "@fini_array", 11))
+        type = SHT_FINI_ARRAY;
       else if (strncmp(p, "@progbits", 9))
         fail("unsupported section type");
       while (*p)

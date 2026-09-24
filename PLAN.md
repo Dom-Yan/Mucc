@@ -176,11 +176,12 @@ installed, as a normal user.
 `aligned`, `packed` and `weak` (part of 1.3) and 1.6 are committed
 together: 1.3's layout test needs 1.6 (without it, glibc strips the test's
 attributes), and 1.6 needs 1.3 (glibc's own headers use `aligned` on
-members). `make test-all` and `make difftest N=300` pass. Not yet pushed,
-so CI hasn't run. Next:
+members). Then `used`, `constructor` and `destructor`. Next, the rest of
+1.3: `alias`, `section`, `visibility`, `cleanup` and `gnu_inline`.
 
-1. Push, and check that CI passes.
-2. Re-check the glibc headers (below), then the rest of 1.3.
+glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
+compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
+(`_Complex`, not planned) and `<link.h>` (`mode`, a clear error).
 
 The first test run found two bugs, both fixed:
 
@@ -203,10 +204,6 @@ Found while working on these, to keep in mind:
   `__attribute__` from the user's own code after any `#include <stdio.h>`,
   so every attribute in a real program was silently dropped. Before 1.6,
   only `[[gnu::...]]` attributes had any effect.
-- With 1.6, 152 glibc headers compile with gcc; before `weak` was
-  implemented, mucc failed 5 of them: `<pthread.h>` and `<thread_db.h>`
-  (`weak`, now implemented), `<link.h>` (`mode`, a clear error), and
-  `<complex.h>`, `<tgmath.h>` (`_Complex`, not planned). Re-check this.
 - See 1.13: locals aligned above 16 are misaligned (an older bug).
 
 ## Phase 1: GNU attributes and the small C23 features
@@ -271,7 +268,11 @@ silently produces wrong code.
     error on a local above 16, see 1.13), `packed` on members, and `weak`
     on functions and global variables. `test/attribute-layout.sh` checks
     22 lines of layouts and addresses against gcc; `test/driver.sh` and
-    `test/errors.sh` cover `weak` and misuse.
+    `test/errors.sh` cover `weak` and misuse. Also `used`, and
+    `constructor`/`destructor` with priorities: mucc's linker sorts
+    `.init_array.N` and `.fini_array.N` first, as `ld` does.
+    `test/constructor.c` checks the order gcc runs them in, with `ld` and
+    with `-static`.
   - [ ] Verified: a runtime test per attribute, checked against gcc's
     behavior, and each one works with the built-in linker (`-static`) and
     with `ld`.

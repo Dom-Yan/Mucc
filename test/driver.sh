@@ -359,6 +359,11 @@ for ld in '' -static; do
   check "weak symbols, overridden $ld"
 done
 
+# __attribute__((used)) keeps a static inline function nothing calls.
+printf 'static inline int dropped(void) { return 1; }\n__attribute__((used)) static inline int kept(void) { return 2; }\n' > $tmp/used.c
+$mucc -S -o $tmp/used.s $tmp/used.c && grep -q '^kept:' $tmp/used.s && ! grep -q '^dropped:' $tmp/used.s
+check 'attribute used'
+
 # -dumpmachine prints the target, as gcc does
 [ "$($mucc -dumpmachine)" = x86_64-linux-gnu ]
 check -dumpmachine

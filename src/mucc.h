@@ -179,6 +179,11 @@ struct Obj {
   int stack_size;
   int nregs;        // callee-saved registers its variables use
   int regs_offset;  // where it saves them in its frame
+  bool is_kept;     // __attribute__((used)): emitted even if never called
+  bool is_ctor;     // __attribute__((constructor)): run before main
+  bool is_dtor;     // __attribute__((destructor)): run after main
+  int ctor_prio;    // their priorities, or -1 for none
+  int dtor_prio;
 
   // Static inline function
   bool is_live;
