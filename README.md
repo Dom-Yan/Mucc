@@ -195,7 +195,9 @@ glibc's IFUNC functions.
 - Full preprocessor: macros, `#include`, `#include_next`, `#pragma once`, `-M`/`-MD`
 - Integers, `float`, `double`, `long double`, bit-fields, enums, unions
 - Structs passed and returned by value, varargs, function pointers
-- Variable-length arrays, `alloca`, compound literals, designated initializers
+- Variable-length arrays, including parameters like `int m[rows][cols]`
+  sized by earlier parameters, `alloca`, compound literals, designated
+  initializers
 - `_Generic`, `_Alignof`/`_Alignas`, `_Static_assert`
 - Thread-local and atomic variables, common symbols
 - `L`, `u`, `U`, `u8` string literals

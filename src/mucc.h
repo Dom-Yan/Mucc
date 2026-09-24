@@ -361,6 +361,7 @@ struct Type {
   // Declaration
   Token *name;
   Token *name_pos;
+  Obj *param_var; // parameter: its variable, which later parameters can use
 
   // Array
   int array_len;

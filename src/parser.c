@@ -705,6 +705,11 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
 
 // func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
+//
+// Parameters have their own scope, and each is in scope for the ones after
+// it, as in `void f(int n, int a[n][n])`. Each named parameter gets its
+// variable here; a function definition then uses those same variables, so
+// the sizes in later parameters refer to the real parameters.
 static Type *func_params(Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "void") && equal(tok->next, ")")) {
     *rest = tok->next->next;
@@ -714,6 +719,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   Type head = {};
   Type *cur = &head;
   bool is_variadic = false;
+  enter_scope();
 
   while (!equal(tok, ")")) {
     if (cur != &head) {
@@ -734,9 +740,10 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
     Token *name = ty2->name;
 
-    if (ty2->kind == TY_ARRAY) {
+    if (ty2->kind == TY_ARRAY || ty2->kind == TY_VLA) {
       // "array of T" is converted to "pointer to T" only in the parameter
-      // context. For example, *argv[] is converted to **argv by this.
+      // context. For example, *argv[] is converted to **argv by this, and
+      // `int a[n]` to `int *a`.
       ty2 = pointer_to(ty2->base);
       ty2->name = name;
     } else if (ty2->kind == TY_FUNC) {
@@ -747,7 +754,21 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     }
 
     cur = cur->next = copy_type(ty2);
+
+    // Not new_lvar(): this may be a prototype, with no function to own it.
+    if (name) {
+      Obj *var = arena_alloc(sizeof(Obj));
+      var->name = get_ident(name);
+      var->ty = cur;
+      var->align = cur->align;
+      var->is_local = true;
+      var->tok = name;
+      push_scope(var->name)->var = var;
+      cur->param_var = var;
+    }
   }
+
+  leave_scope();
 
   if (cur == &head)
     is_variadic = true;
@@ -759,9 +780,17 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   return ty;
 }
 
-// array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
+// array-dimensions = ("static" | type-qualifier)* ("*" | const-expr)? "]"
+//                    type-suffix
 static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
-  while (equal(tok, "static") || equal(tok, "restrict"))
+  while (equal(tok, "static") || equal(tok, "restrict") || equal(tok, "const") ||
+         equal(tok, "volatile") || equal(tok, "__restrict") ||
+         equal(tok, "__restrict__"))
+    tok = tok->next;
+
+  // `[*]`, a variable length of unspecified size, is only allowed in a
+  // prototype, where the size is never needed: treat it like `[]`.
+  if (equal(tok, "*") && equal(tok->next, "]"))
     tok = tok->next;
 
   if (equal(tok, "]")) {
@@ -1019,6 +1048,14 @@ static void peek_constexpr_value(Obj *var, Token *tok) {
 }
 
 //---------- Variable declarations and VLAs ----------------------------------
+
+// True if `ty` is or contains a VLA, as `int (*)[n]` does.
+static bool is_variably_modified(Type *ty) {
+  for (; ty; ty = ty->base)
+    if (ty->kind == TY_VLA)
+      return true;
+  return false;
+}
 
 // Generate code for computing a VLA size.
 static Node *compute_vla_size(Type *ty, Token *tok) {
@@ -3766,10 +3803,19 @@ static Token *parse_typedef(Token *tok, Type *basety) {
 // C23 allows unnamed parameters in a definition, as in `int f(int) {...}`;
 // they still get a stack slot, just no name.
 static void create_param_lvars(Type *param) {
-  if (param) {
-    create_param_lvars(param->next);
-    new_lvar(param->name ? get_ident(param->name) : "", param);
+  if (!param)
+    return;
+  create_param_lvars(param->next);
+
+  // A named parameter already has its variable, from func_params().
+  Obj *var = param->param_var;
+  if (!var) {
+    new_lvar("", param);
+    return;
   }
+  push_scope(var->name)->var = var;
+  var->next = locals;
+  locals = var;
 }
 
 // This function matches gotos or labels-as-values with labels.
@@ -3866,6 +3912,18 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
   fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
 
+  // A parameter like `int m[r][c]` is a pointer to a variable-length row,
+  // whose size is computed on entry. This must happen before the body is
+  // parsed, since pointer arithmetic on `m` uses that size.
+  Node vla_head = {};
+  Node *vla_cur = &vla_head;
+  for (Type *param = ty->params; param; param = param->next)
+    if (param->base && is_variably_modified(param->base)) {
+      vla_cur = vla_cur->next =
+        new_unary(ND_EXPR_STMT, compute_vla_size(param, tok), tok);
+      add_type(vla_cur);
+    }
+
   tok = skip(tok, "{");
 
   // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
@@ -3880,6 +3938,10 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
 
   Token *body = tok;
   fn->body = compound_stmt(&tok, tok);
+  if (vla_head.next) {
+    vla_cur->next = fn->body->body;
+    fn->body->body = vla_head.next;
+  }
   fn->locals = locals;
   leave_scope();
   resolve_goto_labels();
