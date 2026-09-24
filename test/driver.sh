@@ -301,6 +301,16 @@ echo '#include <sys/cdefs.h>' > $tmp/cdefs.c
 [ "$($mucc -Iinclude -M $tmp/cdefs.c | tr ' ' '\n' | grep 'sys/cdefs.h' | grep -vc '^/usr/')" = 1 ]
 check '-I of a default include directory'
 
+# As with gcc, -I of a system directory doesn't move it before mucc's own
+# headers. (CPython passes -I/usr/include/x86_64-linux-gnu; glibc's
+# <sys/cdefs.h> then came first and dropped the packed from epoll_event.)
+# Only for a mucc with its include/ next to it, as stage2/mucc has none.
+if [ -d "$(dirname $mucc)/include" ]; then
+  printf '#include <sys/epoll.h>\n_Static_assert(sizeof(struct epoll_event) == 12, "");\n' > $tmp/sysdir.c
+  $mucc -I/usr/include/x86_64-linux-gnu -I/usr/include -c -o $tmp/sysdir.o $tmp/sysdir.c
+  check '-I of a system directory'
+fi
+
 # -static
 echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c

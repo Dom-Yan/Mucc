@@ -108,6 +108,15 @@ installed, as a normal user.
 | CPython 3.10 dev (about 450,000 lines of C) | Yes, except the `_decimal` module | 387 of 396 suites. gcc passes 391 on the same machine; the 5 it also fails are environment problems (OpenSSL 3 against old code). | `_decimal`: `asm` with operands (2.3). `test_epoll`, `test_selectors`: glibc strips `packed` for mucc, so `struct epoll_event` has the wrong layout (1.6). `test_distutils`, `test_peg_generator`: not yet diagnosed (1.12). |
 | TinyCC | Yes | Yes | None |
 
+Re-run on 2026-09-24 (evening), the same way (item 1.11, in progress):
+zlib, Lua, libpng and TinyCC pass; SQLite: 249,453 tests and 45,957 fuzz
+cases, 0 errors; git: 21,115 pass, 0 fail. CPython, after the fix in 1.6:
+399 suites pass, 9 fail. The same CPython built with gcc in the same
+container fails 5 (`test_email`, `test_imaplib`, `test_ssl`,
+`test_urllib2`, `test_urllib2_localnet`: the environment). mucc's 4 more
+are `test_distutils` and `test_peg_generator` (1.12) and `test_lzma` and
+`test_zipfile` (1.14, new since the first baseline).
+
 - [x] **0.4 Driver fixes the baseline found.** Accept and ignore `-march=`
   and `-mtune=` (Lua's makefile passes `-march=native`; mucc only emits
   baseline x86-64, which every x86-64 CPU runs). Pass files with unknown
@@ -170,21 +179,22 @@ installed, as a normal user.
     `struct s64` are still an error; `make test-all` and `make difftest
     N=300` pass; git builds and passes its tests (see the baseline table).
 
-## Where we left off (2026-09-24, day)
+## Where we left off (2026-09-24, evening)
 
-`aligned`, `packed` and `weak` (part of 1.3) and 1.6 are committed
-together: 1.3's layout test needs 1.6 (without it, glibc strips the test's
-attributes), and 1.6 needs 1.3 (glibc's own headers use `aligned` on
-members). Then the rest of 1.3, 1.4, 1.5 and 1.9 (C17 by default).
-Git now builds with mucc and passes its tests, the same as gcc, which
-verified 0.7, 0.8 and 1.9. Phase 0 is done.
+Phase 0 is done. In Phase 1, everything is done and verified except
+1.11, 1.12 and 1.14, and 1.6, whose last fix waits for CI (1.8 and 1.10
+were dropped as not needed). Git builds
+with mucc and passes its tests, the same as gcc.
 
-Left in Phase 1: 1.6 (verify with CPython's `test_epoll` and
-`test_selectors`), 1.11 (re-run the baseline) and 1.12 (CPython's
-`test_distutils` and `test_peg_generator`); 1.7 and 1.13 are added and
-verified once CI passes. 1.8 and 1.10 were dropped as not needed. The
-rest is all CPython and the baseline: next, set up the third-party
-builds (SQLite, CPython and the rest) and run them.
+Start the next session with 1.14 (`test_lzma`, `test_zipfile`), then
+1.12, then finish 1.11 (update the README's lists) and move to Phase 2.
+
+How the baseline is run now: in the `ubuntu:24.04` Docker image (as the
+first baseline was), with the projects' build dependencies installed and
+as a normal user with the host user's uid. The tree is copied to
+`~/baseline` in WSL, and the project clones in
+`~/baseline/test/thirdparty/work` are kept between runs. `test/thirdparty/cpython.sh`
+with `CC=gcc` gives the comparison with gcc.
 
 glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
 compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
@@ -323,18 +333,23 @@ silently produces wrong code.
   includes glibc's and then `#undef __attribute__`).
   - [x] Added: `include/sys/cdefs.h`, installed by `make install`. A
     default include directory also given with `-I` is now searched once,
-    so the wrapper is read once.
+    so the wrapper is read once. And, as with gcc, `-I` of a system
+    directory is ignored (it stays after mucc's headers): CPython passes
+    `-I/usr/include/x86_64-linux-gnu`, which put glibc's `<sys/cdefs.h>`
+    first again, so its `select` module still had a 16-byte
+    `epoll_event`.
   - [ ] Verified: a new test compares `sizeof`, `_Alignof` and member
     offsets of glibc's structs between gcc and mucc (starting with
     `struct epoll_event`: 12 and 4), and CPython's `test_epoll` and
-    `test_selectors` pass.
+    `test_selectors` pass. (Both pass now; check the box once CI passes
+    on the commit with the `-I` fix.)
 
-- [ ] **1.7 C23 `enum E : type`.** A fixed underlying type, which sets the
+- [x] **1.7 C23 `enum E : type`.** A fixed underlying type, which sets the
   size, signedness and range checks of the enum.
   - [x] Added: also `enum E : type;` with no list, and the constants take
     the enum's type (so `sizeof` of one can be 1 or 8). `struct { enum E :
     3; }` is still a bit-field. Available in every mode, as with gcc.
-  - [ ] Verified: tests in `test/c23.c` for size, sign, out-of-range errors
+  - [x] Verified: tests in `test/c23.c` for size, sign, out-of-range errors
     (and `test/errors.sh`); the same results as gcc 15 for all of them.
 
 - **1.8 Dropped** (see "Not planned"): `<stdckdint.h>` and the
@@ -367,10 +382,12 @@ silently produces wrong code.
 
 - [ ] **1.11 Re-run the baseline.** Update the Phase 0 table and the README's
   lists of what mucc does and doesn't do.
-  - [ ] Added
+  - [ ] Added: re-run, results under the Phase 0 table. Left: finish 1.12
+    and 1.14, run it once more, and update the README (it doesn't list
+    git yet).
   - [ ] Verified: table and README match the results.
 
-- [ ] **1.13 Locals aligned above 16 bytes.** Locals are placed relative to
+- [x] **1.13 Locals aligned above 16 bytes.** Locals are placed relative to
   `%rbp`, which is only 16-byte aligned, so `_Alignas(32)` on a local, or
   a local whose struct type is `aligned(32)`, can be misaligned without
   any error. (Found while doing `aligned` in 1.3, which makes
@@ -382,7 +399,7 @@ silently produces wrong code.
     the address in the slot, and every use goes through it, like a VLA.
     The error is lifted. (A parameter of a type aligned above 16 is still
     where the caller put it.)
-  - [ ] Verified: a test checks the address of 32- and 64-byte aligned
+  - [x] Verified: a test checks the address of 32- and 64-byte aligned
     locals of each kind, compared with gcc (`test/attribute-layout.c`,
     in a recursive function).
 
@@ -391,6 +408,17 @@ silently produces wrong code.
   test. Find the cause, and fix it or add it to this plan.
   - [ ] Added
   - [ ] Verified: both pass, or the cause is written here with its own item.
+
+- [ ] **1.14 CPython's `test_lzma` and `test_zipfile`.** Found by the 1.11
+  re-run: both fail with mucc and pass with gcc in the same container
+  (they passed in the first baseline). `test_lzma` fails with "Invalid
+  filter ID: 4611686018427387905", which is `0x4000000000000001`, liblzma's
+  64-bit `LZMA_FILTER_LZMA1`; `test_zipfile` uses lzma too. Suspected
+  cause, not yet checked: `case` labels are read into an `int` in
+  `stmt()` (`src/parser.c`), so a 64-bit case value is cut to 32 bits.
+  - [ ] Added
+  - [ ] Verified: a test with 64-bit `case` values (or whatever the cause
+    is), compared with gcc; `test_lzma` and `test_zipfile` pass.
 
 ## Phase 2: prepare for a bundled C library
 
