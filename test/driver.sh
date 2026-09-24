@@ -364,6 +364,22 @@ printf 'static inline int dropped(void) { return 1; }\n__attribute__((used)) sta
 $mucc -S -o $tmp/used.s $tmp/used.c && grep -q '^kept:' $tmp/used.s && ! grep -q '^dropped:' $tmp/used.s
 check 'attribute used'
 
+# alias, visibility and gnu_inline in the symbol table
+cat > $tmp/sym.c <<'EOF'
+int target(void) { return 1; }
+int alias_fn(void) __attribute__((alias("target")));
+__attribute__((visibility("hidden"))) int hid(void) { return 2; }
+extern inline __attribute__((gnu_inline)) int gi_ext(void) { return 3; }
+inline __attribute__((gnu_inline)) int gi_plain(void) { return 4; }
+int use(void) { return gi_ext() + gi_plain(); }
+EOF
+$mucc -c -o $tmp/sym.o $tmp/sym.c && readelf -sW $tmp/sym.o > $tmp/sym.txt &&
+  grep -qE 'FUNC +GLOBAL +DEFAULT +[0-9]+ alias_fn$' $tmp/sym.txt &&
+  grep -qE 'FUNC +GLOBAL +HIDDEN +[0-9]+ hid$' $tmp/sym.txt &&
+  grep -qE 'FUNC +GLOBAL +DEFAULT +[0-9]+ gi_plain$' $tmp/sym.txt &&
+  grep -qE 'NOTYPE +GLOBAL +DEFAULT +UND gi_ext$' $tmp/sym.txt
+check 'attributes alias, visibility and gnu_inline'
+
 # -dumpmachine prints the target, as gcc does
 [ "$($mucc -dumpmachine)" = x86_64-linux-gnu ]
 check -dumpmachine

@@ -151,6 +151,18 @@ static struct { char *name; int seg; } out_order[] = {
 
 static bool strip_all; // -s: no symbol table or debug sections
 
+// A section named like a C identifier, as with section("name") in C,
+// keeps its name in the output, and the linker defines __start_name and
+// __stop_name around it, as ld does.
+static bool is_c_ident(char *s) {
+  if (!*s || isdigit(*s))
+    return false;
+  for (; *s; s++)
+    if (!isalnum(*s) && *s != '_')
+      return false;
+  return true;
+}
+
 // The output section for an input section, or NULL to leave it out.
 static char *out_name(char *name, Elf64_Shdr *sh) {
   if (!(sh->sh_flags & SHF_ALLOC))
@@ -168,6 +180,8 @@ static char *out_name(char *name, Elf64_Shdr *sh) {
     return ".init_array";
   if (sh->sh_type == SHT_FINI_ARRAY)
     return ".fini_array";
+  if (is_c_ident(name))
+    return name;
 
   if (sh->sh_flags & SHF_EXECINSTR) {
     if (!strcmp(name, ".init") || !strcmp(name, ".fini"))
@@ -212,6 +226,11 @@ static OutSec *get_out(char *name, int type, uint64_t flags) {
   for (int i = 0; i < sizeof(out_order) / sizeof(*out_order); i++)
     if (!strcmp(out_order[i].name, name))
       out->seg = out_order[i].seg;
+
+  // A section of its own (see is_c_ident()) goes where its flags say.
+  if (out->seg == SEG_NONE && (flags & SHF_ALLOC))
+    out->seg = (flags & SHF_EXECINSTR) ? SEG_RX :
+               (flags & SHF_WRITE) ? SEG_RW : SEG_RODATA;
   outs = grow(outs, nouts, &capouts, sizeof(OutSec *));
   outs[nouts++] = out;
   return out;
@@ -586,10 +605,34 @@ static char *special_names[] = {
   "_edata", "edata", "__bss_start", "_end", "end",
 };
 
+// Is there an allocated input section called `name`?
+static bool has_input_section(char *name) {
+  for (int i = 0; i < nfiles; i++)
+    for (int k = 0; k < files[i]->nsh; k++) {
+      InSec *sec = files[i]->secs[k];
+      if (sec && (sec->sh->sh_flags & SHF_ALLOC) && !strcmp(sec->name, name))
+        return true;
+    }
+  return false;
+}
+
 static void define_specials(void) {
   for (int i = 0; i < sizeof(special_names) / sizeof(*special_names); i++) {
     GSym *g = hashmap_get(&gsyms, special_names[i]);
     if (g && !g->is_defined) {
+      g->is_defined = true;
+      g->file = NULL;
+    }
+  }
+
+  // __start_name and __stop_name, for a section of its own
+  for (int i = 0; i < ngsyms; i++) {
+    GSym *g = gsymlist[i];
+    if (g->is_defined)
+      continue;
+    char *sec = startswith(g->name, "__start_") ? g->name + 8 :
+                startswith(g->name, "__stop_") ? g->name + 7 : NULL;
+    if (sec && is_c_ident(sec) && has_input_section(sec)) {
       g->is_defined = true;
       g->file = NULL;
     }
@@ -779,10 +822,26 @@ static void assign_sections(void) {
   }
 }
 
-static int out_rank(OutSec *out) {
+static int known_rank(char *name) {
   for (int i = 0; i < sizeof(out_order) / sizeof(*out_order); i++)
-    if (!strcmp(out_order[i].name, out->name))
-      return i;
+    if (!strcmp(out_order[i].name, name))
+      return 2 * i;
+  return -1;
+}
+
+static int out_rank(OutSec *out) {
+  int rank = known_rank(out->name);
+  if (rank >= 0)
+    return rank;
+
+  // A section of its own (see is_c_ident()): right after the main
+  // section of its segment
+  if (out->seg == SEG_RX)
+    return known_rank(".text") + 1;
+  if (out->seg == SEG_RODATA)
+    return known_rank(".rodata") + 1;
+  if (out->seg == SEG_RW)
+    return known_rank(".data") + 1;
   return 1000; // non-alloc (debug) sections: after the rest
 }
 
@@ -936,6 +995,14 @@ static void set_symbol_addresses(void) {
   set_special("__bss_start", bss->addr);
   set_special("_end", bss->addr + bss->size);
   set_special("end", bss->addr + bss->size);
+
+  for (int i = 0; i < nouts; i++) {
+    OutSec *out = outs[i];
+    if (out->seg == SEG_NONE || !is_c_ident(out->name))
+      continue;
+    set_special(format("__start_%s", out->name), out->addr);
+    set_special(format("__stop_%s", out->name), out->addr + out->size);
+  }
 }
 
 // The address of symbol i of file f, as relocations see it: an IFUNC's

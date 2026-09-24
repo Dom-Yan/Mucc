@@ -32,7 +32,7 @@ typedef struct {
   int cap;
 } Bytes;
 
-typedef struct {
+typedef struct Sym {
   char *name;
   Section *sec;       // where it's defined, or NULL
   int pos;            // offset in sec->bytes where it's defined
@@ -47,6 +47,8 @@ typedef struct {
   int common_align;   // for .comm symbols; 0 otherwise
   bool keep;          // named by a relocation, so it must be in .symtab
   int index;          // its index in .symtab
+  int visibility;     // STV_DEFAULT, or STV_HIDDEN and so on (.hidden)
+  struct Sym *alias_of; // .set sym, target: the target
 } Sym;
 
 // A jump to a label. It's short (2 bytes) or long (5 or 6); layout()
@@ -1358,6 +1360,17 @@ static void directive(char *name, int len) {
   } else if (IS(".weak")) {
     Sym *sym = read_sym();
     sym->is_global = sym->is_weak = true;
+  } else if (IS(".hidden")) {
+    read_sym()->visibility = STV_HIDDEN;
+  } else if (IS(".protected")) {
+    read_sym()->visibility = STV_PROTECTED;
+  } else if (IS(".internal")) {
+    read_sym()->visibility = STV_INTERNAL;
+  } else if (IS(".set") || IS(".equ")) {
+    // Only another name for a symbol: `.set alias, target`
+    Sym *sym = read_sym();
+    expect_comma();
+    sym->alias_of = read_sym();
   } else if (IS(".align") || IS(".balign")) {
     align_to_n(read_int());
   } else if (IS(".size")) {
@@ -1660,6 +1673,8 @@ enum {
   DW_LNS_set_file = 4, DW_LNE_end_sequence = 1, DW_LNE_set_address = 2,
 };
 
+static void add_line_sequence(Section *line, Section *sec);
+
 static void add_line_table(Section *line) {
   Bytes *b = &line->bytes;
   put_n(b, 4, 0); // unit_length, patched below
@@ -1687,11 +1702,27 @@ static void add_line_table(Section *line) {
   put(b, 0);
   patch(b, 6, 4, b->len - header_start);
 
-  // The program: set the start address, then one row per .loc.
+  // The program: a sequence for .text, and for any other section with
+  // code, like section("name") gives, as with GNU as.
+  for (int i = 0; i < nsections; i++) {
+    Section *sec = sections[i];
+    bool has_locs = sec == text;
+    for (int k = 0; k < nlocs && !has_locs; k++)
+      has_locs = locs[k].sec == sec;
+    if (has_locs)
+      add_line_sequence(line, sec);
+  }
+  patch(b, 0, 4, b->len - 4);
+}
+
+// A line table sequence for `sec`: set the start address, then one row
+// per .loc in it.
+static void add_line_sequence(Section *line, Section *sec) {
+  Bytes *b = &line->bytes;
   put(b, 0);
   put_uleb(b, 9);
   put(b, DW_LNE_set_address);
-  add_reloc(line, b->len, R_X86_64_64, NULL, text, 0);
+  add_reloc(line, b->len, R_X86_64_64, NULL, sec, 0);
   put_n(b, 8, 0);
 
   uint64_t addr = 0;
@@ -1699,9 +1730,9 @@ static void add_line_table(Section *line) {
   int lineno = 1;
   for (int i = 0; i < nlocs; i++) {
     Loc *loc = &locs[i];
-    if (loc->sec != text)
+    if (loc->sec != sec)
       continue;
-    uint64_t a = loc->pos + text->jumps_before[loc->njumps];
+    uint64_t a = loc->pos + sec->jumps_before[loc->njumps];
 
     if (loc->file != file) {
       put(b, DW_LNS_set_file);
@@ -1730,11 +1761,10 @@ static void add_line_table(Section *line) {
   }
 
   put(b, DW_LNS_advance_pc);
-  put_uleb(b, text->size - addr);
+  put_uleb(b, sec->size - addr);
   put(b, 0);
   put_uleb(b, 1);
   put(b, DW_LNE_end_sequence);
-  patch(b, 0, 4, b->len - 4);
 }
 
 static void add_debug_info(void) {
@@ -1861,6 +1891,7 @@ static void write_elf(char *path) {
       int bind = !global ? STB_LOCAL : sym->is_weak ? STB_WEAK : STB_GLOBAL;
       add_elf_sym(&symtab, &strtab, sym->name, bind, type, shndx, value,
                   sym->size);
+      ((Elf64_Sym *)(symtab.data + symtab.len))[-1].st_other = sym->visibility;
     }
   }
 
@@ -2014,6 +2045,27 @@ bool assemble_text(char *src, char *path, char **why) {
   // already asks for this section; a hand-written .s file may not.
   if (!find_section(".note.GNU-stack"))
     new_section(".note.GNU-stack", SHT_PROGBITS, 0);
+
+  // An alias is defined where its target is.
+  for (int i = 0; i < nsyms; i++) {
+    Sym *sym = symlist[i];
+    if (!sym->alias_of)
+      continue;
+    Sym *t = sym->alias_of;
+    for (int n = 0; t->alias_of; n++) {
+      if (n > nsyms)
+        fail("'%s' is an alias of itself", sym->name);
+      t = t->alias_of;
+    }
+    if (!t->sec)
+      fail("'%s' is an alias of '%s', which is not defined", sym->name, t->name);
+    sym->sec = t->sec;
+    sym->pos = t->pos;
+    sym->njumps = t->njumps;
+    sym->is_tls = t->is_tls;
+    sym->type = sym->type ? sym->type : t->type;
+    sym->size = sym->size ? sym->size : t->size;
+  }
 
   for (int i = 0; i < nsections; i++)
     layout(sections[i]);

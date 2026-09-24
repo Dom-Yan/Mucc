@@ -156,7 +156,10 @@ struct Obj {
   bool is_function;
   bool is_definition;
   bool is_static;
-  bool is_weak; // __attribute__((weak))
+  bool is_weak;       // __attribute__((weak))
+  char *alias_target; // alias("target"): another name for target
+  char *section;      // section("name"), or NULL
+  char *visibility;   // visibility("hidden") and so on, or NULL
 
   // Global variable
   bool is_tentative;

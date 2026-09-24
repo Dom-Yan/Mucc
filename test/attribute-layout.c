@@ -26,6 +26,13 @@ struct __attribute__((packed)) s16 { char c; struct s1 in; };
 union u1 { char c; int x __attribute__((aligned(8))); };
 struct s18 { char c; [[gnu::aligned(8)]] int x; int y [[gnu::packed]]; };
 
+enum __attribute__((packed)) pe1 { PA1, PB1 = 200 };
+enum pe2 { PA2, PB2 = 300 } __attribute__((packed));
+enum __attribute__((packed)) pe3 { PA3 = -1, PB3 = 100 };
+enum __attribute__((packed)) pe4 { PA4 = 70000 };
+enum __attribute__((packed)) pe5 { PA5 = -200 };
+struct s19 { char c; enum pe1 e; enum pe2 f; };
+
 int g1 __attribute__((aligned(64)));
 __attribute__((aligned(32))) static char g2;
 char g3 [[gnu::aligned(128)]];
@@ -53,7 +60,12 @@ int main(void) {
   SHOW(struct s16, in);
   SHOW(union u1, x);
   SHOW(struct s18, y);
+  SHOW(struct s19, f);
   printf("ai16 align=%zu ai1 align=%zu\n", _Alignof(ai16), _Alignof(ai1));
+  printf("packed enums %zu %zu %zu %zu %zu, signed %d %d %d\n",
+         sizeof(enum pe1), sizeof(enum pe2), sizeof(enum pe3),
+         sizeof(enum pe4), sizeof(enum pe5), (enum pe1)-1 < 0,
+         (enum pe3)-1 < 0, (enum pe5)-1 < 0);
 
   static int sl __attribute__((aligned(64)));
   int l16 __attribute__((aligned(16)));

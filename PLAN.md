@@ -176,8 +176,9 @@ installed, as a normal user.
 `aligned`, `packed` and `weak` (part of 1.3) and 1.6 are committed
 together: 1.3's layout test needs 1.6 (without it, glibc strips the test's
 attributes), and 1.6 needs 1.3 (glibc's own headers use `aligned` on
-members). Then `used`, `constructor`, `destructor` and `cleanup`. Next,
-the rest of 1.3: `alias`, `section`, `visibility` and `gnu_inline`.
+members). Then the rest of 1.3, which is added; it's verified once CI
+passes. Next: 1.4 (clear errors for the rest; mostly there already),
+1.5 (`__has_attribute`), then 1.9, which unblocks git (0.7 and 0.8).
 
 glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
 compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
@@ -264,11 +265,12 @@ silently produces wrong code.
   - `cleanup(fn)`: call `fn(&var)` when the variable goes out of scope,
     including through `break`, `continue`, `return` and `goto`
   - `gnu_inline`, with gcc's `extern inline` meaning
-  - [ ] Added: so far `aligned(N)` (on variables, members and typedefs; an
-    error on a local above 16, see 1.13), `packed` on members, and `weak`
-    on functions and global variables. `test/attribute-layout.sh` checks
-    22 lines of layouts and addresses against gcc; `test/driver.sh` and
-    `test/errors.sh` cover `weak` and misuse. Also `used`, and
+  - [x] Added: `aligned(N)` (on variables, members and typedefs; an
+    error on a local above 16, see 1.13), `packed` on members and enums,
+    and `weak` on functions and global variables.
+    `test/attribute-layout.sh` checks 24 lines of layouts and addresses
+    against gcc; `test/driver.sh` and `test/errors.sh` cover `weak` and
+    misuse. Also `used`, and
     `constructor`/`destructor` with priorities: mucc's linker sorts
     `.init_array.N` and `.fini_array.N` first, as `ld` does.
     `test/constructor.c` checks the order gcc runs them in, with `ld` and
@@ -276,7 +278,13 @@ silently produces wrong code.
     `break`, `continue`, `return` and `goto` (`test/cleanup.c`, checked
     against gcc). Jumping into a cleanup variable's scope (`goto`, `case`)
     is an error, as are `goto *` in one and one at the end of a statement
-    expression.
+    expression. Then `alias`, `section`, `visibility` and `gnu_inline`
+    (`test/symbol-attrs.c`, and the symbol table in `test/driver.sh`).
+    mucc's assembler learned `.set`, `.hidden`, `.protected` and
+    `.internal`, and writes a line table sequence per code section, as
+    GNU as does. mucc's linker keeps a section named like a C identifier
+    as its own and defines `__start_name` and `__stop_name`, as `ld`
+    does; glibc's `__libc_atexit` and similar sections now get these too.
   - [ ] Verified: a runtime test per attribute, checked against gcc's
     behavior, and each one works with the built-in linker (`-static`) and
     with `ld`.

@@ -2061,7 +2061,7 @@ static bool is_weak(Obj *prog, Obj *var) {
   return false;
 }
 
-// `.local`, `.globl` or `.weak`
+// `.local`, `.globl` or `.weak`, and `.hidden` and so on
 static void emit_binding(Obj *prog, Obj *var) {
   if (var->is_static)
     println("  .local %s", var->name);
@@ -2069,14 +2069,28 @@ static void emit_binding(Obj *prog, Obj *var) {
     println("  .weak %s", var->name);
   else
     println("  .globl %s", var->name);
+
+  if (!var->is_static && var->visibility && strcmp(var->visibility, "default"))
+    println("  .%s %s", var->visibility, var->name);
 }
 
 // Weak declarations that are used: a missing definition is then 0, not a
 // link error.
 static void emit_weak_refs(Obj *prog) {
   for (Obj *var = prog; var; var = var->next)
-    if (var->is_weak && !var->is_definition && var->is_used)
+    if (var->is_weak && !var->is_definition && !var->alias_target && var->is_used)
       println("  .weak %s", var->name);
+}
+
+// alias("target") defines another name for target, which the parser
+// checked is defined in this file.
+static void emit_aliases(Obj *prog) {
+  for (Obj *var = prog; var; var = var->next) {
+    if (!var->alias_target)
+      continue;
+    emit_binding(prog, var);
+    println("  .set %s, %s", var->name, var->alias_target);
+  }
 }
 
 // A pointer to a constructor in .init_array (or a destructor in
@@ -2114,16 +2128,19 @@ static void emit_data(Obj *prog) {
     int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
       ? MAX(16, var->align) : var->align;
 
-    // Common symbol (never for a weak one, as with gcc)
-    if (opt_fcommon && var->is_tentative && !is_weak(prog, var)) {
+    // Common symbol (never for a weak one or one with a section, as with
+    // gcc)
+    if (opt_fcommon && var->is_tentative && !is_weak(prog, var) && !var->section) {
       println("  .comm %s, %d, %d", var->name, var->ty->size, align);
       continue;
     }
 
-    // .data or .tdata
+    // .data or .tdata, or its section("name")
     if (var->init_data) {
       if (var->is_tls)
         println("  .section .tdata,\"awT\",@progbits");
+      else if (var->section)
+        println("  .section %s,\"aw\",@progbits", var->section);
       else
         println("  .data");
 
@@ -2146,9 +2163,13 @@ static void emit_data(Obj *prog) {
       continue;
     }
 
-    // .bss or .tbss
+    // .bss or .tbss, or its section("name"), which holds zeros unless it
+    // is a .bss one
     if (var->is_tls)
       println("  .section .tbss,\"awT\",@nobits");
+    else if (var->section)
+      println("  .section %s,\"aw\",@%s", var->section,
+              strncmp(var->section, ".bss", 4) ? "progbits" : "nobits");
     else
       println("  .bss");
 
@@ -2206,7 +2227,10 @@ static void emit_text(Obj *prog) {
       continue;
 
     emit_binding(prog, fn);
-    println("  .text");
+    if (fn->section)
+      println("  .section %s,\"ax\",@progbits", fn->section);
+    else
+      println("  .text");
     println("  .type %s, @function", fn->name);
     println("%s:", fn->name);
     current_fn = fn;
@@ -2341,6 +2365,7 @@ void codegen(Obj *prog, FILE *out) {
   emit_data(prog);
   emit_text(prog);
   emit_init_arrays(prog);
+  emit_aliases(prog);
   emit_weak_refs(prog);
 
   // Mark the stack as not executable, as gcc does. The built-in assembler

@@ -584,8 +584,20 @@ expect_error "1:8: error: unknown attribute 'bogus'" <<'EOF'
 [[gnu::bogus]] int x;
 EOF
 
-expect_error "1:22: error: attribute 'section' is not supported" <<'EOF'
-int x __attribute__((section(".foo")));
+expect_error "1:28: error: attribute 'ifunc' is not supported" <<'EOF'
+int f(void) __attribute__((ifunc("g")));
+EOF
+
+expect_error "1:28: error: alias target 'nothere' is not defined in this file" <<'EOF'
+int f(void) __attribute__((alias("nothere")));
+EOF
+
+expect_error "1:33: error: visibility must be default, hidden, protected or internal" <<'EOF'
+int x __attribute__((visibility("secret")));
+EOF
+
+expect_error "1:39: error: attribute 'section' is not supported on a local variable" <<'EOF'
+int main(void) { int x __attribute__((section("s"))); return 0; }
 EOF
 
 # cleanup(fn): jumping into a cleanup variable's scope skips its

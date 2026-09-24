@@ -63,6 +63,13 @@ typedef struct {
   int dtor_prio;
   Token *cleanup_tok; // cleanup(fn), or NULL
   Obj *cleanup_fn;
+  Token *alias_tok;   // alias("target"), or NULL
+  char *alias_target;
+  Token *section_tok; // section("name"), or NULL
+  char *section;
+  Token *vis_tok;     // visibility("hidden") and so on, or NULL
+  char *visibility;
+  Token *gnu_inline_tok;
 } Attrs;
 
 // Variable attributes such as typedef or extern.
@@ -528,8 +535,7 @@ static char *ignored_attributes[] = {
 // Attributes gcc has that would change what a program does, which mucc
 // doesn't implement (yet): they are errors, never silently ignored.
 static char *unsupported_attributes[] = {
-  "retain", "weakref", "alias", "section", "visibility",
-  "gnu_inline", "vector_size", "mode", "ifunc", "naked", "target",
+  "retain", "weakref", "vector_size", "mode", "ifunc", "naked", "target",
   "target_clones", "transparent_union", "common", "nocommon", "copy",
   "symver", "scalar_storage_order", "noinit", "persistent", "hardbool",
 };
@@ -595,6 +601,37 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
       a->dtor_tok = tok;
       a->dtor_prio = prio;
     }
+    return;
+  }
+
+  if (!strcmp(name, "alias") || !strcmp(name, "section") ||
+      !strcmp(name, "visibility")) {
+    if (!allow_decl)
+      error_tok(tok, "attribute '%s' is not supported here", name);
+    if (!args || args->kind != TK_STR)
+      error_tok(tok, "attribute '%s' needs a string", name);
+    skip(args->next, ")");
+    char *s = args->str;
+
+    if (name[0] == 'a') {
+      a->alias_tok = tok;
+      a->alias_target = s;
+    } else if (name[0] == 's') {
+      a->section_tok = tok;
+      a->section = s;
+    } else {
+      if (strcmp(s, "default") && strcmp(s, "hidden") &&
+          strcmp(s, "protected") && strcmp(s, "internal"))
+        error_tok(args, "visibility must be default, hidden, protected or internal");
+      a->vis_tok = tok;
+      a->visibility = s;
+    }
+    return;
+  }
+
+  // With gcc's meaning of `extern inline`: see function().
+  if (!strcmp(name, "gnu_inline")) {
+    a->gnu_inline_tok = tok;
     return;
   }
 
@@ -673,21 +710,43 @@ static void merge_attrs(Attrs *dst, Attrs *src) {
     dst->cleanup_tok = src->cleanup_tok;
     dst->cleanup_fn = src->cleanup_fn;
   }
+  if (src->alias_tok) {
+    dst->alias_tok = src->alias_tok;
+    dst->alias_target = src->alias_target;
+  }
+  if (src->section_tok) {
+    dst->section_tok = src->section_tok;
+    dst->section = src->section;
+  }
+  if (src->vis_tok) {
+    dst->vis_tok = src->vis_tok;
+    dst->visibility = src->visibility;
+  }
+  if (src->gnu_inline_tok)
+    dst->gnu_inline_tok = src->gnu_inline_tok;
 }
 
-// For declarations that aren't functions: `constructor` and `destructor`
-// can't be applied.
+// Reports the first of `toks` that is set: an attribute that can't be
+// applied to `what`.
+static void not_on(Token **toks, int n, char *what) {
+  for (int i = 0; i < n; i++)
+    if (toks[i])
+      error_tok(toks[i], "attribute '%s' is not supported on %s",
+                attribute_name(toks[i]), what);
+}
+
+// For declarations that aren't functions: `constructor`, `destructor`
+// and `gnu_inline` can't be applied.
 static void no_fn_attrs(Attrs *a, char *what) {
-  Token *tok = a->ctor_tok ? a->ctor_tok : a->dtor_tok;
-  if (tok)
-    error_tok(tok, "attribute '%s' is not supported on %s",
-              attribute_name(tok), what);
+  Token *toks[] = {a->ctor_tok, a->dtor_tok, a->gnu_inline_tok};
+  not_on(toks, 3, what);
 }
 
-// For declarations that aren't a function or a global variable.
-static void no_weak(Attrs *a, char *what) {
-  if (a->weak_tok)
-    error_tok(a->weak_tok, "attribute 'weak' is not supported on %s", what);
+// For declarations that aren't a function or a global variable: those
+// that name a symbol can't be.
+static void no_global_attrs(Attrs *a, char *what) {
+  Token *toks[] = {a->weak_tok, a->alias_tok, a->section_tok, a->vis_tok};
+  not_on(toks, 4, what);
 }
 
 // For declarations that aren't a local variable.
@@ -699,7 +758,7 @@ static void no_cleanup(Attrs *a, char *what) {
 // For declarations that aren't variables or functions (a typedef, a
 // struct member, a type, a parameter): none of those can be applied.
 static void no_symbol_attrs(Attrs *a, char *what) {
-  no_weak(a, what);
+  no_global_attrs(a, what);
   no_fn_attrs(a, what);
   no_cleanup(a, what);
 }
@@ -1243,7 +1302,8 @@ static bool consume_end(Token **rest, Token *tok) {
 // enumerator     = ident attributes ("=" num)?
 static Type *enum_specifier(Token **rest, Token *tok) {
   Type *ty = enum_type();
-  tok = skip_attributes(tok);
+  Attrs a = {};
+  tok = attributes(tok, &a, true);
 
   // Read a struct tag.
   Token *tag = NULL;
@@ -1267,6 +1327,7 @@ static Type *enum_specifier(Token **rest, Token *tok) {
   // Read an enum-list.
   int i = 0;
   int val = 0;
+  int min = 0, max = 0;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
       tok = skip(tok, ",");
@@ -1277,12 +1338,28 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     if (equal(tok, "="))
       val = const_expr(&tok, tok->next);
 
+    min = (i == 1) ? val : MIN(min, val);
+    max = (i == 1) ? val : MAX(max, val);
     VarScope *sc = push_scope(name);
     sc->enum_ty = ty;
     sc->enum_val = val++;
   }
 
-  *rest = skip_attributes(*rest);
+  *rest = attributes(*rest, &a, true);
+  no_symbol_attrs(&a, "an enum");
+  if (a.align)
+    error_tok(a.layout_tok, "attribute 'aligned' is not supported on an enum");
+
+  // A packed enum is the smallest integer type that holds its values, as
+  // with gcc.
+  if (a.is_packed) {
+    ty->is_unsigned = min >= 0;
+    if (min >= 0 ? max <= 0xff : (min >= -128 && max <= 127))
+      ty->size = ty->align = 1;
+    else if (min >= 0 ? max <= 0xffff : (min >= -32768 && max <= 32767))
+      ty->size = ty->align = 2;
+  }
+
   if (tag)
     push_tag_scope(tag, ty);
   return ty;
@@ -1547,7 +1624,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     // 16-byte aligned, so more than that works only for a static.
     Attrs all = attr ? attr->gnu : (Attrs){};
     merge_attrs(&all, &da);
-    no_weak(&all, "a local variable");
+    no_global_attrs(&all, "a local variable");
     no_fn_attrs(&all, "a local variable");
     if (all.is_packed)
       error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
@@ -4429,7 +4506,10 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn = new_gvar(name_str, ty);
     fn->is_function = true;
     fn->is_definition = equal(tok, "{");
-    fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
+    // mucc treats a C99 `inline` function as static. With gnu_inline, it
+    // is an ordinary external definition, as with gcc.
+    fn->is_static = attr->is_static ||
+                    (attr->is_inline && !attr->is_extern && !da.gnu_inline_tok);
     fn->is_inline = attr->is_inline;
     fn->is_noreturn = is_noreturn || is_libc_noreturn(name_str);
   }
@@ -4445,12 +4525,29 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn->dtor_prio = da.dtor_prio;
   }
 
+  if (da.alias_tok) {
+    if (equal(tok, "{"))
+      error_tok(da.alias_tok, "a function with an alias can't have a body");
+    fn->alias_target = da.alias_target;
+    fn->tok = da.alias_tok;
+  }
+  if (da.section)
+    fn->section = da.section;
+  if (da.visibility)
+    fn->visibility = da.visibility;
+
   // Only a static inline function nothing calls is left out.
   fn->is_root = !(fn->is_static && fn->is_inline) || fn->is_kept ||
                 fn->is_ctor || fn->is_dtor;
 
   if (consume(&tok, tok, ";"))
     return tok;
+
+  // gcc's `extern inline` (gnu_inline): the body is only for inlining,
+  // which mucc doesn't do, so calls go to the definition elsewhere. It's
+  // still parsed and checked.
+  bool body_only_for_inlining =
+    da.gnu_inline_tok && attr->is_inline && attr->is_extern;
 
   current_fn = fn;
   locals = NULL;
@@ -4508,6 +4605,8 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   while (rbrace->next != tok)
     rbrace = rbrace->next;
   warn_function(fn, rbrace);
+  if (body_only_for_inlining)
+    fn->is_definition = false;
   return tok;
 }
 
@@ -4545,6 +4644,18 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     if (all.weak_tok && attr->is_static)
       error_tok(all.weak_tok, "a weak variable must not be static");
     var->is_weak = all.weak_tok != NULL;
+    var->section = all.section;
+    var->visibility = all.visibility;
+
+    // An alias defines no storage of its own.
+    if (all.alias_tok) {
+      if (equal(tok, "="))
+        error_tok(all.alias_tok, "a variable with an alias can't have an initializer");
+      var->alias_target = all.alias_target;
+      var->tok = all.alias_tok;
+      var->is_definition = false;
+      continue;
+    }
 
     // A file-scope constexpr is internal to this file, like a static, so
     // a header can define one without clashing at link time.
@@ -4759,6 +4870,21 @@ Obj *parse(Token *tok) {
 
   while (tok->kind != TK_EOF)
     tok = top_level_item_or_skip(tok);
+
+  // An alias's target must be defined here, as with gcc, and is kept.
+  for (Obj *var = globals; var; var = var->next) {
+    if (!var->alias_target)
+      continue;
+    Obj *t = globals;
+    while (t && !(t != var && (t->is_definition || t->alias_target) &&
+                  !strcmp(t->name, var->alias_target)))
+      t = t->next;
+    if (!t)
+      error_tok(var->tok, "alias target '%s' is not defined in this file",
+                var->alias_target);
+    else
+      t->is_root = true;
+  }
 
   for (Obj *var = globals; var; var = var->next)
     if (var->is_root)
