@@ -584,9 +584,15 @@ expect_error "1:8: error: unknown attribute 'bogus'" <<'EOF'
 [[gnu::bogus]] int x;
 EOF
 
-expect_error "1:28: error: attribute 'ifunc' is not supported" <<'EOF'
-int f(void) __attribute__((ifunc("g")));
+# Every attribute gcc has that would change what a program does, but mucc
+# doesn't implement, is an error (unsupported_attributes in src/parser.c).
+for a in retain weakref vector_size mode ifunc naked target target_clones \
+         transparent_union common nocommon copy symver scalar_storage_order \
+         noinit persistent hardbool; do
+  expect_error "1:22: error: attribute '$a' is not supported" <<EOF
+int x __attribute__((__${a}__(1)));
 EOF
+done
 
 expect_error "1:28: error: alias target 'nothere' is not defined in this file" <<'EOF'
 int f(void) __attribute__((alias("nothere")));

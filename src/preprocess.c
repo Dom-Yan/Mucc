@@ -246,6 +246,20 @@ static Token *new_num_token(int val, Token *tmpl) {
 
 //---------- #if expressions -------------------------------------------------
 
+// [GNU] "__has_attribute(x)" and "__has_builtin(x)" are 1 if mucc
+// supports GNU attribute x (see src/parser.c) or builtin x, else 0, so
+// code that checks first can choose its fallback.
+static bool has_feature(Token **rest, Token *tok) {
+  Token *start = tok;
+  tok = skip(tok->next, "(");
+  if (tok->kind != TK_IDENT && tok->kind != TK_KEYWORD)
+    error_tok(tok, "expected an identifier");
+  char *name = strndup(tok->loc, tok->len);
+  *rest = skip(tok->next, ")");
+  return equal(start, "__has_attribute") ? is_known_attribute(name)
+                                         : is_known_builtin(name);
+}
+
 static Token *read_const_expr(Token **rest, Token *tok) {
   tok = copy_line(rest, tok);
 
@@ -307,6 +321,12 @@ static Token *read_const_expr(Token **rest, Token *tok) {
       continue;
     }
 
+    if (equal(tok, "__has_attribute") || equal(tok, "__has_builtin")) {
+      Token *start = tok;
+      cur = cur->next = new_num_token(has_feature(&tok, tok), start);
+      continue;
+    }
+
     // C23: "__has_c_attribute(x)" is the version of standard attribute x
     // that mucc accepts. It accepts them all (and ignores most).
     if (equal(tok, "__has_c_attribute")) {
@@ -350,6 +370,17 @@ static long eval_pp_expr(Token *start, Token *expr) {
 
   if (expr->kind == TK_EOF)
     error_tok(start, "no expression");
+
+  // __has_attribute and __has_builtin from a macro, like glibc's
+  // `#define __glibc_has_attribute(attr) __has_attribute (attr)`
+  for (Token *t = expr; t->kind != TK_EOF; t = t->next) {
+    if (equal(t, "__has_attribute") || equal(t, "__has_builtin")) {
+      Token *next;
+      bool found = has_feature(&next, t);
+      *t = *new_num_token(found, t);
+      t->next = next;
+    }
+  }
 
   // [https://www.sigbus.info/n1570#6.10.1p4] The standard requires
   // we replace remaining non-macro identifiers with "0" before
@@ -1490,6 +1521,8 @@ void init_macros(void) {
   define_macro("__has_include", "__has_include");
   define_macro("__has_embed", "__has_embed");
   define_macro("__has_c_attribute", "__has_c_attribute");
+  define_macro("__has_attribute", "__has_attribute");
+  define_macro("__has_builtin", "__has_builtin");
 
   // What __has_embed returns (see "#embed").
   define_macro("__STDC_EMBED_NOT_FOUND__", "0");

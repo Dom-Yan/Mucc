@@ -176,9 +176,8 @@ installed, as a normal user.
 `aligned`, `packed` and `weak` (part of 1.3) and 1.6 are committed
 together: 1.3's layout test needs 1.6 (without it, glibc strips the test's
 attributes), and 1.6 needs 1.3 (glibc's own headers use `aligned` on
-members). Then the rest of 1.3, which is added; it's verified once CI
-passes. Next: 1.4 (clear errors for the rest; mostly there already),
-1.5 (`__has_attribute`), then 1.9, which unblocks git (0.7 and 0.8).
+members). Then the rest of 1.3 (verified), and 1.4 and 1.5 (verified
+once CI passes). Next: 1.9, which unblocks git (0.7 and 0.8).
 
 glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
 compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
@@ -252,7 +251,7 @@ silently produces wrong code.
   - [x] Verified: `attr_all()` in `test/attribute.c` carries all 66 and
     still returns the right value (a script checked that none is missing).
 
-- [ ] **1.3 Attributes that change behavior, implemented:**
+- [x] **1.3 Attributes that change behavior, implemented:**
   - `noreturn`, the same as `_Noreturn`
   - `aligned(N)` on variables, members and typedefs, not just structs
   - `packed` on members and enums
@@ -285,20 +284,27 @@ silently produces wrong code.
     GNU as does. mucc's linker keeps a section named like a C identifier
     as its own and defines `__start_name` and `__stop_name`, as `ld`
     does; glibc's `__libc_atexit` and similar sections now get these too.
-  - [ ] Verified: a runtime test per attribute, checked against gcc's
+  - [x] Verified: a runtime test per attribute, checked against gcc's
     behavior, and each one works with the built-in linker (`-static`) and
-    with `ld`.
+    with `ld`. CI passed (`a31b3a8`).
 
 - [ ] **1.4 Clear errors for the rest.** `vector_size`, `mode`, `ifunc`,
   `naked`, `target` and anything not in 1.2 or 1.3 stop with "attribute X is
   not supported".
-  - [ ] Added
-  - [ ] Verified: `test/errors.sh` cases.
+  - [x] Added: the gcc attributes mucc doesn't implement
+    (`unsupported_attributes` in `src/parser.c`) say "not supported";
+    names gcc doesn't have either say "unknown attribute".
+  - [ ] Verified: `test/errors.sh` cases: one per unsupported attribute,
+    in the `__x__` spelling.
 
 - [ ] **1.5 `__has_attribute(x)` and `__has_builtin(x)`.** 1 for what mucc
   supports, 0 otherwise, so code that checks first picks its fallback.
-  - [ ] Added
-  - [ ] Verified: a test for supported, ignored and unsupported names.
+  - [x] Added: in `#if`, also when a macro produces them, as glibc's
+    `__glibc_has_attribute` does. glibc's headers now take their
+    attribute paths too; the header check (below) and zlib and Lua still
+    pass.
+  - [ ] Verified: a test for supported, ignored and unsupported names
+    (`test/attribute.c`).
 
 - [ ] **1.6 Keep glibc's attributes.** glibc's `<sys/cdefs.h>` defines
   `__attribute__(x)` as nothing for any compiler that isn't gcc, clang or

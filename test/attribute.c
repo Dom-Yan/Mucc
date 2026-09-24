@@ -50,7 +50,28 @@ struct [[gnu::packed]] attr_c23_packed { char a; int b; };
 [[maybe_unused, deprecated]] static int attr_std;
 static int attr_std_after [[maybe_unused]];
 
+// __has_attribute: 1 for what mucc implements or safely ignores, 0 for
+// what it rejects or doesn't know. __has_builtin likewise.
+#if defined(__has_attribute) && __has_attribute(packed) && \
+    __has_attribute(__aligned__) && __has_attribute(cleanup) && \
+    __has_attribute(format) && !__has_attribute(vector_size) && \
+    !__has_attribute(bogus)
+static int has_attribute_ok = 1;
+#endif
+#if defined(__has_builtin) && __has_builtin(__builtin_unreachable) && \
+    !__has_builtin(__builtin_bogus) && !__has_builtin(printf)
+static int has_builtin_ok = 1;
+#endif
+// Through a macro, as glibc's <sys/cdefs.h> does
+#define my_has_attribute(x) __has_attribute(x)
+#if my_has_attribute(packed) && !my_has_attribute(bogus)
+static int has_attribute_macro_ok = 1;
+#endif
+
 int main() {
+  ASSERT(1, has_attribute_ok);
+  ASSERT(1, has_builtin_ok);
+  ASSERT(1, has_attribute_macro_ok);
   ASSERT(8, attr_all(7));
   ASSERT(5, attr_def());
   ASSERT(2, attr_fn(1, 2));
