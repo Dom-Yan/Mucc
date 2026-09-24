@@ -557,6 +557,53 @@ struct s x;
 struct s64 *p = &x;
 EOF
 
+# Attributes: hints are ignored, `unused` and `noreturn` are used, and
+# anything that would change the program but isn't implemented is an error.
+expect_clean 'attribute unused, in each syntax' <<'EOF'
+int main(void) {
+  int a __attribute__((unused));
+  __attribute__((unused)) int b;
+  [[maybe_unused]] int c;
+  [[gnu::unused]] int d;
+  return 0;
+}
+EOF
+
+expect_clean 'attribute noreturn' <<'EOF'
+void die(void) __attribute__((noreturn));
+[[gnu::noreturn]] void die2(void);
+int f(int x) { if (x) return 1; die(); }
+int g(int x) { if (x) return 1; die2(); }
+EOF
+
+expect_error "1:22: error: unknown attribute 'bogus'" <<'EOF'
+int x __attribute__((bogus));
+EOF
+
+expect_error "1:8: error: unknown attribute 'bogus'" <<'EOF'
+[[gnu::bogus]] int x;
+EOF
+
+expect_error "3:24: error: attribute 'cleanup' is not supported" <<'EOF'
+void f(int *p);
+int main(void) {
+  int x __attribute__((cleanup(f)));
+  return 0;
+}
+EOF
+
+expect_error "1:22: error: attribute 'aligned' is not supported here" <<'EOF'
+int x __attribute__((aligned(16)));
+EOF
+
+expect_warning "1:3: warning: unknown attribute 'bogus' ignored" <<'EOF'
+[[bogus]] int x;
+EOF
+
+expect_warning "1:10: warning: unknown attribute 'clang::optnone' ignored" <<'EOF'
+[[clang::optnone]] int f(void) { return 0; }
+EOF
+
 # Unused parameters get no warning (as with gcc without -Wextra)
 expect_clean 'unused parameter' <<'EOF'
 int f(int unused, int n, int a[n]) { return 0; }

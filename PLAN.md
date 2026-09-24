@@ -178,7 +178,7 @@ attribute: ignore it only when ignoring it can't change what the program
 does; otherwise implement it; otherwise stop with a clear error. mucc never
 silently produces wrong code.
 
-- [ ] **1.1 A general attribute parser.** Read `__attribute__((a, b(x, y)))`
+- [x] **1.1 A general attribute parser.** Read `__attribute__((a, b(x, y)))`
   wherever gcc accepts it: before and after declarations, on parameters,
   struct members, typedefs, labels and empty statements. Both spellings
   (`packed` and `__packed__`). C23 `[[gnu::name]]` goes through the same
@@ -187,20 +187,34 @@ silently produces wrong code.
   stay ignored. An unknown `__attribute__` or `[[gnu::...]]` is an error
   naming it; other unknown `[[...]]` attributes get a warning and are
   ignored, as C23 requires.
-  - [ ] Added
-  - [ ] Verified: tests in `test/attribute.c` for each position and both
-    syntaxes, and an unknown attribute gives a clear error in
-    `test/errors.sh`.
+  - [x] Added: `attributes()` in `src/parser.c`, called from declaration
+    specifiers, declarators (before and after pointers, after the name,
+    after the whole declarator), bit-fields, enums and enumerators, labels
+    and statements. `[[gnu::x(args)]]` is rewritten to
+    `__attribute__((x(args)))`, and `[[maybe_unused]]` to
+    `__attribute__((unused))`, before parsing.
+  - [x] Verified: tests in `test/attribute.c` for each position and both
+    syntaxes, and `test/errors.sh` cases for unknown and unsupported
+    attributes (errors) and unknown `[[...]]` ones (warnings); the previous
+    commit (`4b9a6a6`) fails them; `make test-all` and `make difftest
+    N=300` pass; zlib and Lua still pass their tests.
 
-- [ ] **1.2 Attributes that are safe to ignore.** `unused`, `maybe_unused`,
+- [x] **1.2 Attributes that are safe to ignore.** `unused`, `maybe_unused`,
   `format`, `format_arg`, `nonnull`, `returns_nonnull`, `sentinel`,
   `warn_unused_result`, `deprecated`, `unavailable`, `pure`, `const`,
   `malloc`, `alloc_size`, `alloc_align`, `nothrow`, `leaf`, `noinline`,
   `noclone`, `always_inline`, `hot`, `cold`, `artificial`, `flatten`,
   `may_alias`, `fallthrough`, `no_sanitize*`, `returns_twice`. Each is
   checked to be truly harmless for mucc before it goes on the list.
-  - [ ] Added
-  - [ ] Verified: a test uses every one and still behaves correctly.
+  - [x] Added: 66 attributes in `ignored_attributes` (`src/parser.c`),
+    the ones above plus hints like `noipa`, `optimize`, `access`,
+    `counted_by`, `tls_model`, `assume` and `musttail`. `unused` also turns
+    off the unused-variable warning, and `noreturn` works like
+    `_Noreturn`. `returns_twice` was checked against how mucc keeps
+    variables in registers: after `longjmp`, only variables changed since
+    `setjmp` can differ, which C already leaves unspecified.
+  - [x] Verified: `attr_all()` in `test/attribute.c` carries all 66 and
+    still returns the right value (a script checked that none is missing).
 
 - [ ] **1.3 Attributes that change behavior, implemented:**
   - `noreturn`, the same as `_Noreturn`

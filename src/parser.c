@@ -56,8 +56,18 @@ typedef struct {
   bool is_tls;
   bool is_noreturn;
   bool is_constexpr;
+  bool is_unused; // __attribute__((unused)): no unused-variable warning
   int align;
 } VarAttr;
+
+// The GNU attributes (`__attribute__((...))`) mucc acts on. The many that
+// are only hints are accepted and ignored; see apply_attribute().
+typedef struct {
+  bool is_noreturn;
+  bool is_unused;
+  bool is_packed;
+  int align; // aligned(N), or 0
+} Attrs;
 
 // This struct represents a variable initializer. Since initializers
 // can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this struct
@@ -128,7 +138,7 @@ static Type *typename(Token **rest, Token *tok);
 static Type *enum_specifier(Token **rest, Token *tok);
 static Type *typeof_specifier(Token **rest, Token *tok);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
-static Type *declarator(Token **rest, Token *tok, Type *ty);
+static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs);
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 static void array_initializer2(Token **rest, Token *tok, Initializer *init, int i);
 static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem);
@@ -459,6 +469,142 @@ static void push_tag_scope(Token *tok, Type *ty) {
   hashmap_put2(&scope->tags, tok->loc, tok->len, ty);
 }
 
+//---------- GNU attributes --------------------------------------------------
+
+// Attributes that are only hints: ignoring them can't change what a
+// program does. (`unused` also turns off the unused-variable warning.)
+static char *ignored_attributes[] = {
+  "unused", "maybe_unused", "format", "format_arg", "nonnull",
+  "returns_nonnull", "sentinel", "warn_unused_result", "nodiscard",
+  "deprecated", "unavailable", "pure", "const", "malloc", "alloc_size",
+  "alloc_align", "assume_aligned", "nothrow", "leaf", "noinline", "noclone",
+  "noipa", "always_inline", "hot", "cold", "artificial", "flatten",
+  "may_alias", "fallthrough", "no_sanitize", "no_sanitize_address",
+  "no_sanitize_thread", "no_sanitize_undefined", "no_address_safety_analysis",
+  "no_instrument_function", "no_profile_instrument_function",
+  "no_stack_protector", "no_split_stack", "stack_protect", "no_icf",
+  "no_reorder", "noplt", "optimize", "returns_twice", "access", "nonstring",
+  "designated_init", "externally_visible", "counted_by", "error", "warning",
+  "tls_model", "warn_if_not_aligned", "null_terminated_string_arg",
+  "nonnull_if_nonzero", "fd_arg", "fd_arg_read", "fd_arg_write",
+  "zero_call_used_regs", "patchable_function_entry", "strict_flex_array",
+  "expected_throw", "flag_enum", "uninitialized", "assume", "musttail",
+};
+
+// Attributes gcc has that would change what a program does, which mucc
+// doesn't implement (yet): they are errors, never silently ignored.
+static char *unsupported_attributes[] = {
+  "aligned", "packed", "used", "retain", "weak", "weakref", "alias",
+  "section", "visibility", "constructor", "destructor", "cleanup",
+  "gnu_inline", "vector_size", "mode", "ifunc", "naked", "target",
+  "target_clones", "transparent_union", "common", "nocommon", "copy",
+  "symver", "scalar_storage_order", "noinit", "persistent", "hardbool",
+};
+
+static bool in_list(char *name, char **list, int len) {
+  for (int i = 0; i < len; i++)
+    if (!strcmp(name, list[i]))
+      return true;
+  return false;
+}
+
+static bool is_attribute(Token *tok) {
+  return equal(tok, "__attribute__") || equal(tok, "__attribute");
+}
+
+// `__packed__` and `packed` are the same attribute.
+static char *attribute_name(Token *tok) {
+  if (tok->kind != TK_IDENT && tok->kind != TK_KEYWORD)
+    error_expected(tok, "an attribute name");
+  char *s = strndup(tok->loc, tok->len);
+  int n = tok->len;
+  if (n > 4 && !strncmp(s, "__", 2) && !strcmp(s + n - 2, "__")) {
+    s[n - 2] = '\0';
+    return s + 2;
+  }
+  return s;
+}
+
+// `on_type` is true for attributes on a struct or union type, the only
+// place `packed` and `aligned` are supported so far.
+static void apply_attribute(Token *tok, Token *args, Attrs *a, bool on_type) {
+  char *name = attribute_name(tok);
+
+  if (!strcmp(name, "noreturn")) {
+    a->is_noreturn = true;
+    return;
+  }
+  if (!strcmp(name, "unused") || !strcmp(name, "maybe_unused"))
+    a->is_unused = true;
+
+  if (on_type && !strcmp(name, "packed")) {
+    a->is_packed = true;
+    return;
+  }
+  if (on_type && !strcmp(name, "aligned")) {
+    // Without an argument, the largest alignment any type needs.
+    a->align = 16;
+    if (args) {
+      a->align = const_expr(&args, args);
+      skip(args, ")");
+    }
+    return;
+  }
+
+  if (in_list(name, ignored_attributes,
+              sizeof(ignored_attributes) / sizeof(*ignored_attributes)))
+    return;
+  if (in_list(name, unsupported_attributes,
+              sizeof(unsupported_attributes) / sizeof(*unsupported_attributes)))
+    error_tok(tok, "attribute '%s' is not supported%s", name,
+              !strcmp(name, "packed") || !strcmp(name, "aligned") ?
+              " here" : "");
+  error_tok(tok, "unknown attribute '%s'", name);
+}
+
+// attributes = (("__attribute__" | "__attribute") "(" "(" attr-list ")" ")")*
+// attr-list  = attribute? ("," attribute?)*
+// attribute  = name ("(" balanced-tokens ")")?
+static Token *attributes(Token *tok, Attrs *a, bool on_type) {
+  while (is_attribute(tok)) {
+    tok = skip(tok->next, "(");
+    tok = skip(tok, "(");
+
+    while (!equal(tok, ")")) {
+      if (consume(&tok, tok, ","))
+        continue;
+
+      Token *name = tok;
+      Token *args = NULL;
+      tok = tok->next;
+      if (equal(tok, "(")) {
+        args = tok->next;
+        for (int depth = 0; tok->kind != TK_EOF; tok = tok->next) {
+          if (equal(tok, "("))
+            depth++;
+          else if (equal(tok, ")") && --depth == 0)
+            break;
+        }
+        tok = skip(tok, ")");
+      }
+      apply_attribute(name, args, a, on_type);
+
+      if (!equal(tok, ",") && !equal(tok, ")"))
+        error_expected(tok, "',' or ')'");
+    }
+    tok = skip(tok, ")");
+    tok = skip(tok, ")");
+  }
+  return tok;
+}
+
+// Attributes that can't change anything where they are, like those on a
+// pointer or after a label, are still checked.
+static Token *skip_attributes(Token *tok) {
+  Attrs a = {};
+  return attributes(tok, &a, false);
+}
+
 //---------- Declarations: specifiers and declarators ------------------------
 
 // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
@@ -468,7 +614,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
 //             | struct-decl | union-decl | typedef-name
 //             | enum-specifier | typeof-specifier
 //             | "const" | "volatile" | "auto" | "register" | "restrict"
-//             | "__restrict" | "__restrict__" | "_Noreturn")+
+//             | "__restrict" | "__restrict__" | "_Noreturn" | attributes)+
 //
 // The order of typenames in a type-specifier doesn't matter. For
 // example, `int long static` means the same as `static long int`.
@@ -506,6 +652,16 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   bool is_auto = false;
 
   while (is_typename(tok)) {
+    if (is_attribute(tok)) {
+      Attrs a = {};
+      tok = attributes(tok, &a, false);
+      if (attr) {
+        attr->is_noreturn |= a.is_noreturn;
+        attr->is_unused |= a.is_unused;
+      }
+      continue;
+    }
+
     // Handle storage class specifiers.
     if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern") ||
         equal(tok, "inline") || equal(tok, "_Thread_local") ||
@@ -736,7 +892,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     }
 
     Type *ty2 = declspec(&tok, tok, NULL);
-    ty2 = declarator(&tok, tok, ty2);
+    ty2 = declarator(&tok, tok, ty2, NULL);
 
     Token *name = ty2->name;
 
@@ -820,29 +976,46 @@ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
   return ty;
 }
 
-// pointers = ("*" ("const" | "volatile" | "restrict")*)*
+// pointers = ("*" ("const" | "volatile" | "restrict" | attributes)*)*
 static Type *pointers(Token **rest, Token *tok, Type *ty) {
   while (consume(&tok, tok, "*")) {
     ty = pointer_to(ty);
-    while (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
-           equal(tok, "__restrict") || equal(tok, "__restrict__"))
-      tok = tok->next;
+    for (;;) {
+      if (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
+          equal(tok, "__restrict") || equal(tok, "__restrict__"))
+        tok = tok->next;
+      else if (is_attribute(tok))
+        tok = skip_attributes(tok);
+      else
+        break;
+    }
   }
   *rest = tok;
   return ty;
 }
 
-// declarator = pointers ("(" ident ")" | "(" declarator ")" | ident) type-suffix
-static Type *declarator(Token **rest, Token *tok, Type *ty) {
+// declarator = attributes pointers attributes
+//              ("(" declarator ")" | ident attributes)? type-suffix attributes
+//
+// The declarator's attributes, like `noreturn` in
+// `void f(void) __attribute__((noreturn));`, go to `attrs` (if not NULL).
+static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs) {
+  Attrs scratch = {};
+  if (!attrs)
+    attrs = &scratch;
+
+  tok = attributes(tok, attrs, false);
   ty = pointers(&tok, tok, ty);
+  tok = attributes(tok, attrs, false);
 
   if (equal(tok, "(")) {
     Token *start = tok;
     Type dummy = {};
-    declarator(&tok, start->next, &dummy);
+    declarator(&tok, start->next, &dummy, NULL);
     tok = skip(tok, ")");
-    ty = type_suffix(rest, tok, ty);
-    return declarator(&tok, start->next, ty);
+    ty = type_suffix(&tok, tok, ty);
+    *rest = attributes(tok, attrs, false);
+    return declarator(&tok, start->next, ty, attrs);
   }
 
   Token *name = NULL;
@@ -850,18 +1023,22 @@ static Type *declarator(Token **rest, Token *tok, Type *ty) {
 
   if (tok->kind == TK_IDENT) {
     name = tok;
-    tok = tok->next;
+    tok = attributes(tok->next, attrs, false);
   }
 
-  ty = type_suffix(rest, tok, ty);
+  ty = type_suffix(&tok, tok, ty);
+  *rest = attributes(tok, attrs, false);
   ty->name = name;
   ty->name_pos = name_pos;
   return ty;
 }
 
-// abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
+// abstract-declarator = attributes pointers attributes
+//                       ("(" abstract-declarator ")")? type-suffix
 static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
+  tok = skip_attributes(tok);
   ty = pointers(&tok, tok, ty);
+  tok = skip_attributes(tok);
 
   if (equal(tok, "(")) {
     Token *start = tok;
@@ -901,12 +1078,14 @@ static bool consume_end(Token **rest, Token *tok) {
   return false;
 }
 
-// enum-specifier = ident? "{" enum-list? "}"
-//                | ident ("{" enum-list? "}")?
+// enum-specifier = attributes ident? "{" enum-list? "}" attributes
+//                | attributes ident ("{" enum-list? "}" attributes)?
 //
-// enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
+// enum-list      = enumerator ("," enumerator)* ","?
+// enumerator     = ident attributes ("=" num)?
 static Type *enum_specifier(Token **rest, Token *tok) {
   Type *ty = enum_type();
+  tok = skip_attributes(tok);
 
   // Read a struct tag.
   Token *tag = NULL;
@@ -935,7 +1114,7 @@ static Type *enum_specifier(Token **rest, Token *tok) {
       tok = skip(tok, ",");
 
     char *name = get_ident(tok);
-    tok = tok->next;
+    tok = skip_attributes(tok->next);
 
     if (equal(tok, "="))
       val = const_expr(&tok, tok->next);
@@ -945,6 +1124,7 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     sc->enum_val = val++;
   }
 
+  *rest = skip_attributes(*rest);
   if (tag)
     push_tag_scope(tag, ty);
   return ty;
@@ -1105,12 +1285,15 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     if (i++ > 0)
       tok = skip_decl_comma(tok);
 
-    Type *ty = declarator(&tok, tok, basety);
+    Attrs da = {};
+    Type *ty = declarator(&tok, tok, basety, &da);
     if (ty->kind == TY_VOID)
       error_tok(tok, "variable declared void");
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
 
+    // __attribute__((unused)) turns off the unused-variable warning.
+    bool is_unused = da.is_unused || (attr && attr->is_unused);
     Token *name = ty->name;
     bool is_constexpr = attr && attr->is_constexpr;
     if (is_constexpr && !equal(tok, "="))
@@ -1136,6 +1319,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       Node *init = assign(&tok, tok->next);
       Obj *var = new_lvar(get_ident(name), auto_type_of(init));
       var->tok = name;
+      var->is_used = is_unused;
       if (is_constexpr)
         set_constexpr_value(var, init);
       Node *set = new_binary(ND_ASSIGN, new_var_node(var, name), init, name);
@@ -1157,6 +1341,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       // x = alloca(tmp)`.
       Obj *var = new_lvar(get_ident(ty->name), ty);
       var->tok = ty->name;
+      var->is_used = is_unused;
       Token *tok = ty->name;
       Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
                               new_alloca(new_var_node(ty->vla_size, tok)),
@@ -1168,6 +1353,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 
     Obj *var = new_lvar(get_ident(ty->name), ty);
     var->tok = ty->name;
+    var->is_used = is_unused;
     if (attr && attr->align)
       var->align = attr->align;
     if (is_constexpr)
@@ -1820,7 +2006,8 @@ static bool is_typename(Token *tok) {
       "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
       "const", "volatile", "auto", "register", "restrict", "__restrict",
       "__restrict__", "_Noreturn", "float", "double", "typeof", "inline",
-      "_Thread_local", "__thread", "_Atomic", "constexpr",
+      "_Thread_local", "__thread", "_Atomic", "constexpr", "__attribute__",
+      "__attribute",
     };
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -2106,7 +2293,8 @@ static Node *stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_LABEL, tok);
     node->label = strndup(tok->loc, tok->len);
     node->unique_label = new_unique_name();
-    node->lhs = label_body(rest, tok->next->next);
+    // Attributes right after a label, like `unused`, are the label's.
+    node->lhs = label_body(rest, skip_attributes(tok->next->next));
     node->goto_next = labels;
     labels = node;
     return node;
@@ -3043,7 +3231,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       first = false;
 
       Member *mem = arena_alloc(sizeof(Member));
-      mem->ty = declarator(&tok, tok, basety);
+      mem->ty = declarator(&tok, tok, basety, NULL);
       mem->name = mem->ty->name;
       mem->idx = idx++;
       mem->align = attr.align ? attr.align : mem->ty->align;
@@ -3051,6 +3239,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       if (consume(&tok, tok, ":")) {
         mem->is_bitfield = true;
         mem->bit_width = const_expr(&tok, tok);
+        tok = skip_attributes(tok);
       }
 
       cur = cur->next = mem;
@@ -3069,41 +3258,18 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
   ty->members = head.next;
 }
 
-// attribute = ("__attribute__" "(" "(" "packed" ")" ")")*
+// Attributes on a struct or union type: `packed` and `aligned(N)`.
 static Token *attribute_list(Token *tok, Type *ty) {
-  while (consume(&tok, tok, "__attribute__")) {
-    tok = skip(tok, "(");
-    tok = skip(tok, "(");
-
-    bool first = true;
-
-    while (!consume(&tok, tok, ")")) {
-      if (!first)
-        tok = skip(tok, ",");
-      first = false;
-
-      if (consume(&tok, tok, "packed")) {
-        ty->is_packed = true;
-        continue;
-      }
-
-      if (consume(&tok, tok, "aligned")) {
-        tok = skip(tok, "(");
-        ty->align = const_expr(&tok, tok);
-        tok = skip(tok, ")");
-        continue;
-      }
-
-      error_tok(tok, "unknown attribute");
-    }
-
-    tok = skip(tok, ")");
-  }
-
+  Attrs a = {};
+  tok = attributes(tok, &a, true);
+  if (a.is_packed)
+    ty->is_packed = true;
+  if (a.align)
+    ty->align = a.align;
   return tok;
 }
 
-// struct-union-decl = attribute? ident? ("{" struct-members)?
+// struct-union-decl = attributes ident? ("{" struct-members "}" attributes)?
 static Type *struct_union_decl(Token **rest, Token *tok) {
   Type *ty = struct_type();
   tok = attribute_list(tok, ty);
@@ -3797,7 +3963,7 @@ static Token *parse_typedef(Token *tok, Type *basety) {
       tok = skip_decl_comma(tok);
     first = false;
 
-    Type *ty = declarator(&tok, tok, basety);
+    Type *ty = declarator(&tok, tok, basety, NULL);
     if (!ty->name)
       error_tok(ty->name_pos, "typedef name omitted");
     push_scope(get_ident(ty->name))->type_def = ty;
@@ -3870,10 +4036,12 @@ static void mark_live(Obj *var) {
 }
 
 static Token *function(Token *tok, Type *basety, VarAttr *attr) {
-  Type *ty = declarator(&tok, tok, basety);
+  Attrs da = {};
+  Type *ty = declarator(&tok, tok, basety, &da);
   if (!ty->name)
     error_tok(ty->name_pos, "function name omitted");
   char *name_str = get_ident(ty->name);
+  bool is_noreturn = attr->is_noreturn || da.is_noreturn;
 
   Obj *fn = find_func(name_str);
   if (fn) {
@@ -3885,14 +4053,14 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     if (!fn->is_static && attr->is_static)
       error_tok(tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || equal(tok, "{");
-    fn->is_noreturn = fn->is_noreturn || attr->is_noreturn;
+    fn->is_noreturn = fn->is_noreturn || is_noreturn;
   } else {
     fn = new_gvar(name_str, ty);
     fn->is_function = true;
     fn->is_definition = equal(tok, "{");
     fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
     fn->is_inline = attr->is_inline;
-    fn->is_noreturn = attr->is_noreturn || is_libc_noreturn(name_str);
+    fn->is_noreturn = is_noreturn || is_libc_noreturn(name_str);
   }
 
   fn->is_root = !(fn->is_static && fn->is_inline);
@@ -3967,7 +4135,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
       tok = skip_decl_comma(tok);
     first = false;
 
-    Type *ty = declarator(&tok, tok, basety);
+    Type *ty = declarator(&tok, tok, basety, NULL);
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
 
@@ -4009,7 +4177,7 @@ static bool is_function(Token *tok) {
     return false;
 
   Type dummy = {};
-  Type *ty = declarator(&tok, tok, &dummy);
+  Type *ty = declarator(&tok, tok, &dummy, NULL);
   return ty->kind == TY_FUNC;
 }
 
@@ -4047,45 +4215,104 @@ static void declare_builtin_functions(void) {
   builtin_alloca->is_definition = false;
 }
 
-// C23 attributes like [[nodiscard]] and [[fallthrough]] are hints mucc
-// doesn't use, so drop every [[...]] before parsing. In C, `[[` can't
-// start anything else. The one exception is [[noreturn]], which becomes
-// the keyword _Noreturn so the missing-return warning knows about it.
+// A token the parser sees in place of `at`. Its text lives in a
+// "<built-in>" file; errors about it report `at`.
+static Token *new_builtin_token(Token *at, TokenKind kind, char *text) {
+  Token *t = arena_alloc(sizeof(Token));
+  *t = *at;
+  t->kind = kind;
+  t->file = new_file("<built-in>", at->file->file_no, text);
+  t->loc = t->file->contents;
+  t->len = strlen(text);
+  t->origin = at;
+  return t;
+}
+
+// Appends `__attribute__((` tokens from `first` to `last` `))` to `cur`.
+static Token *append_gnu_attribute(Token *cur, Token *first, Token *last) {
+  cur = cur->next = new_builtin_token(first, TK_KEYWORD, "__attribute__");
+  cur = cur->next = new_builtin_token(first, TK_PUNCT, "(");
+  cur = cur->next = new_builtin_token(first, TK_PUNCT, "(");
+  cur->next = first;
+  cur = last;
+  cur = cur->next = new_builtin_token(last, TK_PUNCT, ")");
+  cur = cur->next = new_builtin_token(last, TK_PUNCT, ")");
+  return cur;
+}
+
+// C23 attributes, [[...]], are rewritten before parsing. In C, `[[` can't
+// start anything else.
+//  - [[gnu::name(args)]] becomes __attribute__((name(args))), so it gets
+//    the same checks: a GNU attribute is never silently dropped.
+//  - [[noreturn]] becomes the keyword _Noreturn, for the missing-return
+//    warning, and [[maybe_unused]] becomes __attribute__((unused)).
+//  - The other standard attributes are hints and are dropped.
+//  - Anything else is dropped with a warning, as C23 asks.
 static Token *remove_attributes(Token *tok) {
   Token head = {};
   Token *cur = &head;
 
   while (tok->kind != TK_EOF) {
-    if (equal(tok, "[") && equal(tok->next, "[")) {
-      Token *start = tok;
-      bool has_noreturn = false;
-      int depth = 0;
-      do {
-        if (equal(tok, "["))
-          depth++;
-        else if (equal(tok, "]"))
-          depth--;
-        else if (equal(tok, "noreturn") || equal(tok, "_Noreturn") ||
-                 equal(tok, "__noreturn__"))
-          has_noreturn = true;
-        tok = tok->next;
-      } while (depth > 0 && tok->kind != TK_EOF);
-
-      // Its text lives in a "<built-in>" file; errors report `start`.
-      if (has_noreturn) {
-        Token *kw = arena_alloc(sizeof(Token));
-        *kw = *start;
-        kw->kind = TK_KEYWORD;
-        kw->file = new_file("<built-in>", start->file->file_no, "_Noreturn");
-        kw->loc = kw->file->contents;
-        kw->len = 9;
-        kw->origin = start;
-        cur = cur->next = kw;
-      }
+    if (!equal(tok, "[") || !equal(tok->next, "[")) {
+      cur = cur->next = tok;
+      tok = tok->next;
       continue;
     }
-    cur = cur->next = tok;
-    tok = tok->next;
+
+    Token *start = tok;
+    tok = tok->next->next;
+
+    while (!(equal(tok, "]") && equal(tok->next, "]"))) {
+      if (tok->kind == TK_EOF)
+        error_tok(start, "unterminated attribute");
+      if (consume(&tok, tok, ","))
+        continue;
+
+      // prefix::name, where `::` is two ':' tokens
+      Token *prefix = NULL;
+      Token *name = tok;
+      if (equal(tok->next, ":") && equal(tok->next->next, ":")) {
+        prefix = tok;
+        name = tok->next->next->next;
+      }
+
+      // The attribute's last token, and the token after it
+      Token *last = name;
+      if (equal(name->next, "(")) {
+        int depth = 0;
+        for (last = name->next; last->kind != TK_EOF; last = last->next) {
+          if (equal(last, "("))
+            depth++;
+          else if (equal(last, ")") && --depth == 0)
+            break;
+        }
+      }
+      tok = last->next;
+
+      if (prefix && (equal(prefix, "gnu") || equal(prefix, "__gnu__"))) {
+        cur = append_gnu_attribute(cur, name, last);
+        continue;
+      }
+
+      char *str = attribute_name(name);
+      if (!prefix && (!strcmp(str, "noreturn") || !strcmp(str, "_Noreturn"))) {
+        cur = cur->next = new_builtin_token(name, TK_KEYWORD, "_Noreturn");
+      } else if (!prefix && !strcmp(str, "maybe_unused")) {
+        Token *unused = new_builtin_token(name, TK_IDENT, "unused");
+        cur = append_gnu_attribute(cur, unused, unused);
+      } else if (!prefix && (!strcmp(str, "nodiscard") ||
+                             !strcmp(str, "deprecated") ||
+                             !strcmp(str, "fallthrough") ||
+                             !strcmp(str, "unsequenced") ||
+                             !strcmp(str, "reproducible"))) {
+        // A hint mucc doesn't use.
+      } else if (!in_system_header(name)) {
+        warn_tok(name, "unknown attribute '%s%s%s' ignored",
+                 prefix ? strndup(prefix->loc, prefix->len) : "",
+                 prefix ? "::" : "", str);
+      }
+    }
+    tok = tok->next->next;
   }
 
   cur->next = tok;

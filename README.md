@@ -203,7 +203,12 @@ glibc's IFUNC functions.
 - Thread-local and atomic variables, common symbols
 - `L`, `u`, `U`, `u8` string literals
 - GNU statement expressions, `typeof`, computed `goto` and case ranges
-- `__attribute__((packed))` and `__attribute__((aligned(N)))` on structs
+- GNU attributes, as `__attribute__((...))` or C23 `[[gnu::...]]`, in every
+  position gcc accepts. The 66 that are only hints (`format`, `nonnull`,
+  `deprecated`, `always_inline`, ...) are ignored; `noreturn` and `unused`
+  are honored, and `packed` and `aligned(N)` work on structs and unions.
+  Attributes that would change the program but aren't implemented yet are
+  errors, never silently ignored.
 - Plain `asm("...")` statements
 
 **Code generation.** A simple stack machine with three things that keep it
@@ -220,7 +225,9 @@ functions that can reach their end without a `return`.
 **Not supported:**
 
 - C++, or any target but x86-64 Linux with glibc
-- `__attribute__` on functions and variables
+- These GNU attributes (so far): `aligned` and `packed` outside structs,
+  `used`, `weak`, `alias`, `section`, `visibility`, `constructor`,
+  `destructor`, `cleanup`, `vector_size`, `mode` and a few more
 - GNU `asm` with operands, `_Complex`, `__int128`, `_BitInt`, `enum E : type`,
   `<stdckdint.h>`, decimal floats, K&R-style definitions
 - Optimization beyond register variables and constant folding
