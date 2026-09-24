@@ -209,31 +209,48 @@ objects are byte-for-byte the same as GNU `as` makes from the same text
 statement or a `.s` file with anything else, mucc runs the system `as`
 instead; `-fno-integrated-as` always does.
 
-The code generator is a simple stack machine. Every local variable lives in
-the stack frame, each expression leaves its result in `%rax`, and
-intermediate values go through `push`/`pop`. Operands that are constants
-or local variables skip the stack and are loaded straight into a register.
-For `int add(int a, int b) { return a + b * 2; }` it emits (trimmed
-slightly):
+The code generator is a simple stack machine: each expression leaves its
+result in `%rax`, and intermediate values go through `push`/`pop`. Three
+things keep that from being slow:
+
+- **Register variables.** Each function's most used integer and pointer
+  locals (uses in loops count more) live in the callee-saved registers
+  `%rbx` and `%r12`-`%r15`, unless their address is taken. Others live in
+  the stack frame.
+- **Simple operands and folding.** Constants, variables and constant
+  expressions (`1000 * 1000`) are loaded straight into a register, without
+  the stack, and constant expressions are computed at compile time.
+- **Branches.** Conditions like `i < n && p` jump on the CPU flags
+  directly.
+
+For
+`long sum(int *a, int n) { long s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }`
+the loop is (comments added):
 
 ```asm
-add:
-  push %rbp
-  mov %rsp, %rbp
-  sub $16, %rsp
-  mov %edi, -12(%rbp)        # a
-  mov %esi, -16(%rbp)        # b
-  movsxd -16(%rbp), %rax     # load b
-  mov $2, %rdi
-  imul %edi, %eax            # b * 2
-  push %rax                  # save b * 2
-  movsxd -12(%rbp), %rax     # load a
-  pop %rdi
-  add %edi, %eax             # a + (b * 2)
-  jmp .L.return.add
+.L.begin.1:
+  movsxd %ebx, %rax          # i
+  movsxd %r14d, %rdi         # n
+  cmp %edi, %eax
+  jge .L..2                  # leave if i >= n
+  movsxd %ebx, %rax
+  mov $4, %rdi
+  imul %rdi, %rax            # i * sizeof(int)
+  mov %r13, %rdi             # a
+  add %rdi, %rax
+  movsxd (%rax), %rax        # a[i]
+  mov %r12, %rdi             # s
+  add %rdi, %rax
+  mov %rax, %r12             # s += a[i]
+  movsxd %ebx, %rax
+  mov $1, %rdi
+  add %edi, %eax
+  mov %eax, %ebx             # i++
+  jmp .L.begin.1
 ```
 
-The code is correct but slow, and there is no optimizer: `-O` is accepted
+The result runs about as fast as `gcc -O0`'s code (roughly 3 to 5 times
+slower than `-O2`). There is no optimizer beyond this: `-O` is accepted
 and ignored, as are `-W*` (except `-w`), `-g` and `-std=`. It follows the System V AMD64
 ABI, so its objects link with gcc/clang-built code and glibc. It emits
 `.file`/`.loc` line directives, so debuggers see source lines, but no
@@ -315,10 +332,15 @@ re-checked.
   function pointers, goto).
 
 **Make the output better**
-- Add an intermediate representation between the AST and assembly, with
-  constant folding and dead-code elimination.
-- Replace the push/pop stack machine with register allocation.
-- Emit real DWARF debug info.
+- Keep expression temporaries in registers too, instead of push/pop, and
+  use addressing modes like `(%r13,%rbx,4)` for `a[i]`.
+- Floating-point variables in registers (all XMM registers are
+  caller-saved, so this needs saving around calls).
+- Beyond that, an intermediate representation between the AST and
+  assembly, for real optimizations like dead-code elimination.
+- Emit real DWARF debug info (register variables are invisible to gdb
+  now).
+- Don't emit `__func__` strings for functions that never use them.
 
 **Stand on its own**
 - Dynamic linking in `src/link.c` (PLT, GOT, `.dynamic`, symbol
