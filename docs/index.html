@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="Mucc is a small, self-hosting C23 compiler for x86-64 Linux.">
+<title>Mucc</title>
+<style>
+  body {
+    margin: 0 auto;
+    padding: 48px 16px;
+    max-width: 640px;
+    background: #fff;
+    color: #000;
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 28px; margin: 0 0 16px; }
+  h2 { font-size: 18px; margin: 32px 0 8px; }
+  a { color: #000; }
+  code, pre { font: 14px/1.5 ui-monospace, Consolas, monospace; }
+  pre { margin: 0; overflow-x: auto; }
+  ul { padding-left: 20px; }
+</style>
+</head>
+<body>
+<h1>Mucc</h1>
+
+<p>Mucc is a small, self-hosting C23 compiler for x86-64 Linux, written in C.
+It turns C source into a running program with its own preprocessor, parser,
+code generator, assembler and linker, in about 15,000 lines of code.</p>
+
+<p>It aims to be minimal, easy to read and fast to compile with. It is not
+trying to replace gcc or clang.</p>
+
+<h2>What it does</h2>
+<ul>
+  <li>Compiles C11 and most of C23</li>
+  <li>Compiles itself, and the result compiles itself byte for byte the same</li>
+  <li>Builds SQLite, Lua and zlib, which pass their own tests</li>
+  <li>Compiles about 3.6 times faster than gcc -O0</li>
+</ul>
+
+<h2>Try it</h2>
+<pre>git clone https://github.com/Dom-Yan/Mucc.git mucc
+cd mucc
+make
+./mucc -o hello hello.c</pre>
+
+<p>Runs on x86-64 Linux with glibc, including WSL 2 on Windows.</p>
+
+<h2>Links</h2>
+<p><a href="https://github.com/Dom-Yan/Mucc">Source code</a> and setup instructions on GitHub. MIT license.</p>
+</body>
+</html>

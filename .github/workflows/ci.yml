@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make -j"$(nproc)" mucc
+
+      - name: Test and self-host
+        run: make test-all
+
+      - name: Differential test
+        run: make difftest N=100
+
+      - name: Upload difftest failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: difftest-failures
+          path: difftest-failures/
+          if-no-files-found: ignore
