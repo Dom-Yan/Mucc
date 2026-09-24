@@ -623,6 +623,18 @@ expect_error "1:22: error: requested alignment is not a positive power of 2" <<'
 int x __attribute__((aligned(3)));
 EOF
 
+expect_error "1:22: error: attribute 'constructor' is not supported on a variable" <<'EOF'
+int x __attribute__((constructor));
+EOF
+
+expect_error "1:39: error: attribute 'destructor' is not supported on a local variable" <<'EOF'
+int main(void) { int x __attribute__((destructor)); return 0; }
+EOF
+
+expect_error "1:16: error: constructor priorities must be from 0 to 65535" <<'EOF'
+__attribute__((constructor(70000))) void f(void) {}
+EOF
+
 expect_warning "1:3: warning: unknown attribute 'bogus' ignored" <<'EOF'
 [[bogus]] int x;
 EOF

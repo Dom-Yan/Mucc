@@ -53,9 +53,14 @@ typedef struct {
   bool is_noreturn;
   bool is_unused;
   bool is_packed;
+  bool is_used;
   int align;         // aligned(N), or 0
   Token *layout_tok; // the first `packed` or `aligned`, for errors
   Token *weak_tok;   // `weak`, or NULL
+  Token *ctor_tok;   // `constructor`, or NULL
+  Token *dtor_tok;   // `destructor`, or NULL
+  int ctor_prio;     // their priorities, or -1 for none
+  int dtor_prio;
 } Attrs;
 
 // Variable attributes such as typedef or extern.
@@ -497,8 +502,7 @@ static char *ignored_attributes[] = {
 // Attributes gcc has that would change what a program does, which mucc
 // doesn't implement (yet): they are errors, never silently ignored.
 static char *unsupported_attributes[] = {
-  "used", "retain", "weakref", "alias",
-  "section", "visibility", "constructor", "destructor", "cleanup",
+  "retain", "weakref", "alias", "section", "visibility", "cleanup",
   "gnu_inline", "vector_size", "mode", "ifunc", "naked", "target",
   "target_clones", "transparent_union", "common", "nocommon", "copy",
   "symver", "scalar_storage_order", "noinit", "persistent", "hardbool",
@@ -528,9 +532,9 @@ static char *attribute_name(Token *tok) {
   return s;
 }
 
-// `packed`, `aligned` and `weak` change a layout or a symbol, so they are
-// only allowed where the caller applies them (`allow_decl`); anywhere else,
-// they're errors.
+// `packed`, `aligned`, `weak`, `constructor` and `destructor` change a
+// layout or a symbol, so they are only allowed where the caller applies
+// them (`allow_decl`); anywhere else, they're errors.
 static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) {
   char *name = attribute_name(tok);
 
@@ -540,6 +544,33 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
   }
   if (!strcmp(name, "unused") || !strcmp(name, "maybe_unused"))
     a->is_unused = true;
+
+  // Only a static inline function can be left out, and `used` keeps it.
+  // Anywhere else it changes nothing.
+  if (!strcmp(name, "used")) {
+    a->is_used = true;
+    return;
+  }
+
+  if (!strcmp(name, "constructor") || !strcmp(name, "destructor")) {
+    if (!allow_decl)
+      error_tok(tok, "attribute '%s' is not supported here", name);
+    int prio = -1;
+    if (args) {
+      prio = const_expr(&args, args);
+      skip(args, ")");
+      if (prio < 0 || prio > 65535)
+        error_tok(tok, "%s priorities must be from 0 to 65535", name);
+    }
+    if (name[0] == 'c') {
+      a->ctor_tok = tok;
+      a->ctor_prio = prio;
+    } else {
+      a->dtor_tok = tok;
+      a->dtor_prio = prio;
+    }
+    return;
+  }
 
   if (!strcmp(name, "weak")) {
     if (!allow_decl)
@@ -584,18 +615,37 @@ static void merge_attrs(Attrs *dst, Attrs *src) {
   dst->is_noreturn |= src->is_noreturn;
   dst->is_unused |= src->is_unused;
   dst->is_packed |= src->is_packed;
+  dst->is_used |= src->is_used;
   dst->align = MAX(dst->align, src->align);
   if (!dst->layout_tok)
     dst->layout_tok = src->layout_tok;
   if (!dst->weak_tok)
     dst->weak_tok = src->weak_tok;
+  if (src->ctor_tok) {
+    dst->ctor_tok = src->ctor_tok;
+    dst->ctor_prio = src->ctor_prio;
+  }
+  if (src->dtor_tok) {
+    dst->dtor_tok = src->dtor_tok;
+    dst->dtor_prio = src->dtor_prio;
+  }
 }
 
-// For declarations where `weak` can't be applied: not a function or a
-// global variable (a local, a typedef, a struct member).
+// For declarations that aren't functions: `constructor` and `destructor`
+// can't be applied.
+static void no_fn_attrs(Attrs *a, char *what) {
+  Token *tok = a->ctor_tok ? a->ctor_tok : a->dtor_tok;
+  if (tok)
+    error_tok(tok, "attribute '%s' is not supported on %s",
+              attribute_name(tok), what);
+}
+
+// For declarations that aren't a function or a global variable (a local,
+// a typedef, a struct member): `weak` can't be applied either.
 static void no_weak(Attrs *a, char *what) {
   if (a->weak_tok)
     error_tok(a->weak_tok, "attribute 'weak' is not supported on %s", what);
+  no_fn_attrs(a, what);
 }
 
 // For declarations where no `packed`, `aligned` or `weak` can be applied.
@@ -4171,8 +4221,20 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn->is_noreturn = is_noreturn || is_libc_noreturn(name_str);
   }
 
-  fn->is_root = !(fn->is_static && fn->is_inline);
   fn->is_weak |= da.weak_tok != NULL;
+  fn->is_kept |= da.is_used;
+  if (da.ctor_tok) {
+    fn->is_ctor = true;
+    fn->ctor_prio = da.ctor_prio;
+  }
+  if (da.dtor_tok) {
+    fn->is_dtor = true;
+    fn->dtor_prio = da.dtor_prio;
+  }
+
+  // Only a static inline function nothing calls is left out.
+  fn->is_root = !(fn->is_static && fn->is_inline) || fn->is_kept ||
+                fn->is_ctor || fn->is_dtor;
 
   if (consume(&tok, tok, ";"))
     return tok;
@@ -4250,6 +4312,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(ty->name_pos, "variable name omitted");
     if (all.is_packed)
       error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
+    no_fn_attrs(&all, "a variable");
 
     Token *name = ty->name;
     if (basety == &auto_type) {

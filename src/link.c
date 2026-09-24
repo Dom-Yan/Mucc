@@ -693,31 +693,61 @@ static uint64_t align_up(uint64_t n, uint64_t align) {
 static OutSec *bss, *got_sec, *gotplt_sec, *plt_sec, *relaplt_sec;
 static uint64_t common_start; // in .bss, after the input sections
 
-// Puts each input section in its output section, in input order.
+// A constructor's priority N puts it in .init_array.N (a destructor's, in
+// .fini_array.N). As with ld, those go first, in increasing N, and every
+// other section after them (65536).
+static int init_priority(InSec *sec) {
+  int type = sec->sh->sh_type;
+  if (type != SHT_INIT_ARRAY && type != SHT_FINI_ARRAY)
+    return 65536;
+  char *dot = strchr(sec->name + 1, '.');
+  return dot ? atoi(dot + 1) : 65536;
+}
+
+// Puts each input section in its output section, in input order, except
+// for init_priority().
 static void assign_sections(void) {
+  InSec **all = NULL;
+  int nall = 0, capall = 0;
   for (int i = 0; i < nfiles; i++) {
     ObjFile *f = files[i];
     for (int k = 0; k < f->nsh; k++) {
-      InSec *sec = f->secs[k];
-      if (!sec)
+      if (!f->secs[k])
         continue;
-      Elf64_Shdr *sh = sec->sh;
-      int type = sh->sh_type;
-      if (type == SHT_X86_64_UNWIND)
-        type = SHT_PROGBITS;
-      if (type == SHT_NOTE && !(sh->sh_flags & SHF_ALLOC))
-        continue;
-      uint64_t flags = sh->sh_flags & (SHF_ALLOC | SHF_WRITE | SHF_EXECINSTR | SHF_TLS);
-      OutSec *out = get_out(out_name(sec->name, sh), type, flags);
-      out->align = MAX(out->align, MAX(1, sh->sh_addralign));
-      out->flags |= flags;
-      sec->out = out;
-      sec->offset = align_up(out->size, MAX(1, sh->sh_addralign));
-      out->size = sec->offset + sh->sh_size;
-      out->in = grow(out->in, out->nin, &out->capin, sizeof(InSec *));
-      out->in[out->nin++] = sec;
+      all = grow(all, nall, &capall, sizeof(InSec *));
+      all[nall++] = f->secs[k];
     }
   }
+
+  // A stable insertion sort: nearly everything is 65536 and stays put.
+  for (int i = 1; i < nall; i++) {
+    InSec *sec = all[i];
+    int prio = init_priority(sec);
+    int j = i;
+    for (; j > 0 && init_priority(all[j - 1]) > prio; j--)
+      all[j] = all[j - 1];
+    all[j] = sec;
+  }
+
+  for (int i = 0; i < nall; i++) {
+    InSec *sec = all[i];
+    Elf64_Shdr *sh = sec->sh;
+    int type = sh->sh_type;
+    if (type == SHT_X86_64_UNWIND)
+      type = SHT_PROGBITS;
+    if (type == SHT_NOTE && !(sh->sh_flags & SHF_ALLOC))
+      continue;
+    uint64_t flags = sh->sh_flags & (SHF_ALLOC | SHF_WRITE | SHF_EXECINSTR | SHF_TLS);
+    OutSec *out = get_out(out_name(sec->name, sh), type, flags);
+    out->align = MAX(out->align, MAX(1, sh->sh_addralign));
+    out->flags |= flags;
+    sec->out = out;
+    sec->offset = align_up(out->size, MAX(1, sh->sh_addralign));
+    out->size = sec->offset + sh->sh_size;
+    out->in = grow(out->in, out->nin, &out->capin, sizeof(InSec *));
+    out->in[out->nin++] = sec;
+  }
+  free(all);
 
   // Common symbols: at the end of .bss.
   bss = get_out(".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE);
