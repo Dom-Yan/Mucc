@@ -86,16 +86,16 @@ static void add_default_include_paths(char *argv0) {
   char *inc = format("%s/include", dir);
   if (!file_exists(inc))
     inc = format("%s/../lib/mucc/include", dir);
-  strarray_push(&include_paths, inc);
 
-  // Add standard include paths.
-  strarray_push(&include_paths, "/usr/local/include");
-  strarray_push(&include_paths, "/usr/include/x86_64-linux-gnu");
-  strarray_push(&include_paths, "/usr/include");
-
-  // Keep a copy of the standard include paths for -MMD option.
-  for (int i = 0; i < include_paths.len; i++)
-    strarray_push(&std_include_paths, include_paths.data[i]);
+  // These are the system headers: -MMD leaves them out, and warnings and
+  // some type checks don't apply to them. -I directories, added to
+  // include_paths before this runs, are not system headers.
+  char *std[] = {inc, "/usr/local/include", "/usr/include/x86_64-linux-gnu",
+                 "/usr/include"};
+  for (int i = 0; i < sizeof(std) / sizeof(*std); i++) {
+    strarray_push(&include_paths, std[i]);
+    strarray_push(&std_include_paths, std[i]);
+  }
 }
 
 static void define(char *str) {
@@ -551,11 +551,18 @@ bool in_system_header(Token *tok) {
 // used to automate file dependency management.
 static void print_dependencies(void) {
   char *path;
-  if (opt_MF)
+  if (opt_MF) {
     path = opt_MF;
-  else if (opt_MD)
+  } else if (opt_MD && opt_o && opt_c) {
+    // As with gcc, `-c -o obj/x.o` writes obj/x.d, next to the object.
+    path = strdup(opt_o);
+    char *dot = strrchr(path, '.');
+    if (dot && !strchr(dot, '/'))
+      *dot = '\0';
+    path = format("%s.d", path);
+  } else if (opt_MD) {
     path = replace_extn(opt_o ? opt_o : base_file, ".d");
-  else if (opt_o)
+  } else if (opt_o)
     path = opt_o;
   else
     path = "-";

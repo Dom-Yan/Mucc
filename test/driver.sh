@@ -259,6 +259,13 @@ $mucc -c -MD -MF $tmp/md-mf.d -I. $tmp/md2.c
 grep -q -z '^md2.o:.*md2\.c .*/out2\.h' $tmp/md-mf.d
 check -MD
 
+# ... with -c -o, the .d goes next to the object, as with gcc
+mkdir -p $tmp/objdir
+echo 'int md4;' > $tmp/md4.c
+$mucc -c -MD -o $tmp/objdir/md4.o $tmp/md4.c
+grep -q 'md4\.c' $tmp/objdir/md4.d
+check '-MD with -o in another directory'
+
 echo 'extern int bar; int foo() { return bar; }' | $mucc -fPIC -xc -c -o $tmp/foo.o -
 cc -shared -o $tmp/foo.so $tmp/foo.o
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/main.c

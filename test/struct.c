@@ -1,6 +1,19 @@
 #include "test.h"
 
+// A member's function pointer taking the struct itself (as in git's
+// archive.h), with and without an earlier `struct S;`
+struct fp_self { int (*f)(struct fp_self *, int); int v; };
+static int fp_self_get(struct fp_self *s, int x) { return s->v + x; }
+
+struct fp_fwd;
+struct fp_fwd { int (*f)(const struct fp_fwd *); int v; };
+static int fp_fwd_get(const struct fp_fwd *s) { return s->v; }
+
 int main() {
+  ASSERT(7, ({ struct fp_self s = {fp_self_get, 5}; s.f(&s, 2); }));
+  ASSERT(9, ({ struct fp_fwd s = {fp_fwd_get, 9}; s.f(&s); }));
+  ASSERT(9, ({ struct fp_fwd s; s.f = fp_fwd_get; s.v = 9; s.f(&s); }));
+
   ASSERT(1, ({ struct {int a; int b;} x; x.a=1; x.b=2; x.a; }));
   ASSERT(2, ({ struct {int a; int b;} x; x.a=1; x.b=2; x.b; }));
   ASSERT(1, ({ struct {char a; int b; char c;} x; x.a=1; x.b=2; x.c=3; x.a; }));

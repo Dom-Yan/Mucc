@@ -541,4 +541,40 @@ int main(void) {
 }
 EOF
 
+# Unused parameters get no warning (as with gcc without -Wextra)
+expect_clean 'unused parameter' <<'EOF'
+int f(int unused, int n, int a[n]) { return 0; }
+EOF
+
+# A struct is in scope for its own members' function pointer parameters
+expect_clean 'struct in its own member function pointer' <<'EOF'
+struct ar { const char *name; int (*w)(const struct ar *, int); };
+static int wz(const struct ar *a, int x) { return a->name[0] + x; }
+static struct ar z = { "zip", wz };
+int g(const struct ar *p) { p = &z; return p->w(p, 1); }
+EOF
+
+# A header found through -I is the user's code, not a system header: its
+# type errors are reported, and -MMD lists it.
+mkdir -p $tmp/inc
+echo 'static inline int *conv(char *c) { return c; }' > $tmp/inc/conv.h
+echo '#include "conv.h"' > $tmp/useconv.c
+if $mucc -I$tmp/inc -c -o $tmp/useconv.o $tmp/useconv.c 2> $tmp/err ||
+   ! grep -q "cannot convert 'char \*' to 'int \*'" $tmp/err; then
+  echo "testing error in a header found through -I ... failed"
+  cat $tmp/err
+  exit 1
+fi
+echo "testing error in a header found through -I ... passed"
+
+echo 'static inline int one(void) { return 1; }' > $tmp/inc/one.h
+printf '#include "one.h"\nint main(void) { return one(); }\n' > $tmp/useone.c
+$mucc -I$tmp/inc -MMD -c -o $tmp/useone.o $tmp/useone.c
+if ! grep -q 'one\.h' $tmp/useone.d; then
+  echo "testing -MMD lists a header found through -I ... failed"
+  cat $tmp/useone.d
+  exit 1
+fi
+echo "testing -MMD lists a header found through -I ... passed"
+
 echo OK
