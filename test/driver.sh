@@ -281,6 +281,18 @@ echo 'foo' > $tmp/next3/file2.h
 $mucc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/file.c | grep -q foo
 check '#include_next'
 
+# #include_next continues after the directory the current file was found
+# in, even when the header was found earlier and another #include ran since.
+# (It once found the same wrapper again and recursed until out of memory.)
+mkdir -p $tmp/wrap0 $tmp/wrap1 $tmp/wrap2
+echo 'other' > $tmp/wrap0/other.h
+echo '#include_next <wrap.h>' > $tmp/wrap1/wrap.h
+echo 'wrapped' > $tmp/wrap2/wrap.h
+printf '#include <wrap.h>\n#include <other.h>\n#include <wrap.h>\n' > $tmp/wrap.c
+[ "$( (ulimit -v 1000000; timeout 10 $mucc -I$tmp/wrap0 -I$tmp/wrap1 -I$tmp/wrap2 \
+  -E $tmp/wrap.c) | grep -c wrapped)" = 2 ]
+check '#include_next of a header found before'
+
 # -static
 echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c
