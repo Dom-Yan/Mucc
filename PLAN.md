@@ -104,7 +104,7 @@ installed, as a normal user.
 | Lua 5.4.7 | No | Yes, after 0.4: the full suite ends "final OK" | `unknown argument: -march=native` (fixed in 0.4) |
 | zlib 1.3.1 | Static library only | Yes, after 0.4: static and shared tests pass | `unknown file extension: adler32.lo` (fixed in 0.4) |
 | libpng | Yes | Yes | None |
-| Git | No | Not reached | `<regex.h>`: `undeclared identifier '__nmatch'`, a parameter used in a later parameter's size (fixed in 0.5) |
+| Git | No; yes after 0.5 to 0.8 and 1.9 | Yes, after 1.9: 21,334 tests pass, 0 fail, 232 known breakages, the same as gcc (2026-09-24, in WSL without the optional OpenSSL, curl, expat, gettext and Tcl/Tk) | `<regex.h>`: `undeclared identifier '__nmatch'`, a parameter used in a later parameter's size (fixed in 0.5) |
 | CPython 3.10 dev (about 450,000 lines of C) | Yes, except the `_decimal` module | 387 of 396 suites. gcc passes 391 on the same machine; the 5 it also fails are environment problems (OpenSSL 3 against old code). | `_decimal`: `asm` with operands (2.3). `test_epoll`, `test_selectors`: glibc strips `packed` for mucc, so `struct epoll_event` has the wrong layout (1.6). `test_distutils`, `test_peg_generator`: not yet diagnosed (1.12). |
 | TinyCC | Yes | Yes | None |
 
@@ -138,7 +138,7 @@ installed, as a normal user.
   - [x] Verified: new `test/driver.sh` case; the old mucc rejected the flag;
     `make test-all` and `make difftest N=300` pass.
 
-- [ ] **0.7 Two regressions from 0.5, and two older bugs they uncovered.**
+- [x] **0.7 Two regressions from 0.5, and two older bugs they uncovered.**
   Re-running git after 0.5 showed "cannot convert `struct archiver *` to
   `struct archiver *`":
   - (Regression) A struct's tag was only registered after its members, so
@@ -153,32 +153,37 @@ installed, as a normal user.
   - (Older) `-MD`/`-MMD` with `-c -o obj/x.o` wrote `x.d` in the current
     directory instead of `obj/x.d` as gcc does.
   - [x] Added
-  - [ ] Verified: new `test/errors.sh` and `test/driver.sh` cases each fail
+  - [x] Verified: new `test/errors.sh` and `test/driver.sh` cases each fail
     with the 0.5 commit (`542e4c0`) and pass now; `make test-all` and `make
-    difftest N=300` pass; git builds and passes its tests. (Everything but
-    git is done. Git now gets past these errors; see 0.8.)
+    difftest N=300` pass; git builds and passes its tests (see the
+    baseline table).
 
-- [ ] **0.8 glibc's large-file renames in arguments.** For compilers other
+- [x] **0.8 glibc's large-file renames in arguments.** For compilers other
   than gcc, glibc renames functions with macros (`#define getrlimit
   getrlimit64`), so `getrlimit(RLIMIT_NOFILE, &r)` passes a `struct rlimit *`
   where `struct rlimit64 *` is declared. The two have the same layout. A
   `struct X` and a `struct X64` of the same size now count as compatible
   pointees. Found by git (`packfile.c`).
   - [x] Added
-  - [ ] Verified: a `test/errors.sh` case with `getrlimit` fails on the
+  - [x] Verified: a `test/errors.sh` case with `getrlimit` fails on the
     previous commit (`b0809b7`) and passes now, and a different-sized `struct s` and
     `struct s64` are still an error; `make test-all` and `make difftest
-    N=300` pass; git builds and passes its tests. (All done but git, which
-    now stops at `struct thread_local` in `builtin/index-pack.c`: see 1.9.)
+    N=300` pass; git builds and passes its tests (see the baseline table).
 
 ## Where we left off (2026-09-24, day)
 
 `aligned`, `packed` and `weak` (part of 1.3) and 1.6 are committed
 together: 1.3's layout test needs 1.6 (without it, glibc strips the test's
 attributes), and 1.6 needs 1.3 (glibc's own headers use `aligned` on
-members). Then the rest of 1.3 (verified), 1.4 and 1.5, and 1.9 (C17
-by default). Next: build git and run its tests, to verify 0.7, 0.8 and
-1.9.
+members). Then the rest of 1.3, 1.4, 1.5 and 1.9 (C17 by default).
+Git now builds with mucc and passes its tests, the same as gcc, which
+verified 0.7, 0.8 and 1.9. Phase 0 is done.
+
+Left in Phase 1: 1.6 (verify with CPython's `test_epoll` and
+`test_selectors`), 1.7 (`enum E : type`), 1.8 (`<stdckdint.h>`), 1.10
+(stretch: `const` errors), 1.11 (re-run the baseline), 1.12 (CPython's
+`test_distutils` and `test_peg_generator`) and 1.13 (locals aligned above
+16).
 
 glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
 compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
@@ -289,22 +294,22 @@ silently produces wrong code.
     behavior, and each one works with the built-in linker (`-static`) and
     with `ld`. CI passed (`a31b3a8`).
 
-- [ ] **1.4 Clear errors for the rest.** `vector_size`, `mode`, `ifunc`,
+- [x] **1.4 Clear errors for the rest.** `vector_size`, `mode`, `ifunc`,
   `naked`, `target` and anything not in 1.2 or 1.3 stop with "attribute X is
   not supported".
   - [x] Added: the gcc attributes mucc doesn't implement
     (`unsupported_attributes` in `src/parser.c`) say "not supported";
     names gcc doesn't have either say "unknown attribute".
-  - [ ] Verified: `test/errors.sh` cases: one per unsupported attribute,
+  - [x] Verified: `test/errors.sh` cases: one per unsupported attribute,
     in the `__x__` spelling.
 
-- [ ] **1.5 `__has_attribute(x)` and `__has_builtin(x)`.** 1 for what mucc
+- [x] **1.5 `__has_attribute(x)` and `__has_builtin(x)`.** 1 for what mucc
   supports, 0 otherwise, so code that checks first picks its fallback.
   - [x] Added: in `#if`, also when a macro produces them, as glibc's
     `__glibc_has_attribute` does. glibc's headers now take their
     attribute paths too; the header check (below) and zlib and Lua still
     pass.
-  - [ ] Verified: a test for supported, ignored and unsupported names
+  - [x] Verified: a test for supported, ignored and unsupported names
     (`test/attribute.c`).
 
 - [ ] **1.6 Keep glibc's attributes.** glibc's `<sys/cdefs.h>` defines
@@ -335,7 +340,7 @@ silently produces wrong code.
   - [ ] Verified: tests at the limits of every integer type, with results
     compared against gcc.
 
-- [ ] **1.9 C23 `int f()` means `int f(void)`.** Keep the old meaning under
+- [x] **1.9 C23 `int f()` means `int f(void)`.** Keep the old meaning under
   `-std=c89` through `-std=c17`, since old code depends on it. `-std=`,
   ignored today, starts to count for this rule. The same goes for C23's new
   keywords: git names a struct `thread_local`, which is a keyword in C23
@@ -352,9 +357,11 @@ silently produces wrong code.
     `[[...]]` attributes, `auto` type inference and the rest of C23 stay
     available in every mode, as GNU extensions. A test program can ask
     for options with a `// flags:` line (`test/c23.c` uses `-std=c23`).
-  - [ ] Verified: tests for both modes (`test/c17.c`, `test/c23.c`,
+  - [x] Verified: tests for both modes (`test/c17.c`, `test/c23.c`,
     `test/driver.sh`, `test/errors.sh`), and the third-party baseline is
-    no worse: the glibc headers, zlib and Lua pass as before.
+    no worse: the glibc headers, zlib and Lua pass as before, and git now
+    builds and passes its tests. (gcc 15, which defaults to C23, fails on
+    git the way mucc used to; it needs `-std=gnu17`.)
 
 - [ ] **1.10 (Stretch) Errors for writing to `const`.** Assigning to a `const`
   object or through a pointer to `const` is an error, as the standard
