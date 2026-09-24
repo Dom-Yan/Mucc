@@ -564,9 +564,27 @@ static char *attribute_name(Token *tok) {
   return s;
 }
 
-// `packed`, `aligned`, `weak`, `constructor` and `destructor` change a
-// layout or a symbol, so they are only allowed where the caller applies
-// them (`allow_decl`); anywhere else, they're errors.
+// The attributes apply_attribute() acts on, besides the ignored ones.
+static char *implemented_attributes[] = {
+  "noreturn", "used", "weak", "packed", "aligned", "constructor",
+  "destructor", "cleanup", "alias", "section", "visibility", "gnu_inline",
+};
+
+// __has_attribute(name) in the preprocessor: does mucc accept attribute
+// `name` (in either spelling), acting on it or ignoring it as harmless?
+bool is_known_attribute(char *name) {
+  int n = strlen(name);
+  if (n > 4 && !strncmp(name, "__", 2) && !strcmp(name + n - 2, "__"))
+    name = strndup(name + 2, n - 4);
+  return in_list(name, implemented_attributes,
+                 sizeof(implemented_attributes) / sizeof(*implemented_attributes)) ||
+         in_list(name, ignored_attributes,
+                 sizeof(ignored_attributes) / sizeof(*ignored_attributes));
+}
+
+// `packed`, `aligned`, `weak`, `constructor` and the like change a layout
+// or a symbol, so they are only allowed where the caller applies them
+// (`allow_decl`); anywhere else, they're errors.
 static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) {
   char *name = attribute_name(tok);
 
@@ -4052,6 +4070,18 @@ static Node *generic_selection(Token **rest, Token *tok) {
     error_tok(start, "controlling expression type not compatible with"
               " any generic association type");
   return ret;
+}
+
+// The builtins primary() handles.
+static char *builtin_names[] = {
+  "__builtin_types_compatible_p", "__builtin_reg_class",
+  "__builtin_unreachable", "__builtin_compare_and_swap",
+  "__builtin_atomic_exchange",
+};
+
+// __has_builtin(name) in the preprocessor
+bool is_known_builtin(char *name) {
+  return in_list(name, builtin_names, sizeof(builtin_names) / sizeof(*builtin_names));
 }
 
 // primary = "(" "{" stmt+ "}" ")"
