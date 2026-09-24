@@ -47,7 +47,14 @@ cd mucc
 make
 ./mucc -o hello hello.c</pre>
 
-<p>Runs on x86-64 Linux with glibc, including WSL 2 on Windows.</p>
+<h2>Where it runs</h2>
+<p>The compiler runs on Linux with glibc on 64-bit Intel and AMD (x86-64)
+machines, including WSL 2 on Windows. The programs it builds run on any
+x86-64 Linux machine, and with -static they don't even need glibc. It does
+not run on macOS or ARM.</p>
+
+<p>Mucc is feature complete. What remains is speed, performance, bug fixes,
+and new features only when the C language changes.</p>
 
 <h2>Links</h2>
 <p><a href="https://github.com/Dom-Yan/Mucc">Source code</a> and setup instructions on GitHub. MIT license.</p>

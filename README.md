@@ -9,6 +9,63 @@ It is not trying to replace gcc or clang.
 
 Website: <https://dom-yan.github.io/Mucc/>
 
+## Project status: feature complete
+
+mucc is feature complete. It compiles C11 and the parts of C23 that real code
+uses, it builds large real-world programs (SQLite, Lua, zlib) that then pass
+their own test suites, and it compiles, assembles and links itself with no
+help from gcc. Everything it needs to turn C into a running Linux program is
+in this repository and covered by tests. The C features it leaves out
+(`_Complex`, `_BitInt`, GNU `asm` operands, K&R definitions) are rare in
+practice, and adding them would make the code bigger without making mucc
+more useful for what it is for.
+
+All that is left is:
+
+- **Speed:** making mucc itself compile faster and use less memory.
+- **Performance:** making the code it generates run faster.
+- **Bug fixes and patches:** anything that miscompiles or crashes.
+- **New features, rarely:** only when the C language itself changes, or when
+  a real program truly needs something mucc can't do.
+
+**mucc is not trying to replace GCC or Clang.** Those are huge compilers that
+target dozens of machines and optimize heavily. mucc has its own niche: a
+simple, extremely lightweight and fast compiler for Linux on x86-64 machines.
+The whole thing is about 15,000 lines you can read end to end, it builds in a
+few seconds, and it compiles several times faster than gcc. Use it when you
+want quick builds, a compiler you can understand completely, or a small
+self-contained toolchain. Use GCC or Clang when you need maximum runtime
+speed or another platform.
+
+## Where it runs
+
+**The compiler runs on** Linux on a 64-bit Intel or AMD (x86-64) processor,
+with glibc:
+
+- Linux distributions: Ubuntu, Debian, Fedora, Arch, openSUSE and others
+  that use glibc (tested on Ubuntu 24.04 and 26.04)
+- Windows 10 and 11, inside WSL 2
+- Linux virtual machines, containers (Docker) and cloud servers, as long as
+  they are x86-64 with glibc
+
+**It does not run on:**
+
+- macOS or Windows directly (use a Linux VM or WSL 2)
+- ARM machines: Apple Silicon Macs, Raspberry Pi, ARM servers and phones
+- 32-bit x86
+- Linux distributions that use musl instead of glibc, such as Alpine
+
+**The programs it builds** are 64-bit Linux executables (ELF, x86-64). They
+use only baseline x86-64 instructions, so they run on any 64-bit Intel or
+AMD processor, old or new.
+
+- A normal (dynamically linked) program runs on x86-64 Linux machines with
+  glibc the same age or newer than the machine that built it.
+- A `-static` program carries its C library inside it, so it runs on almost
+  any x86-64 Linux machine, including ones without glibc.
+- On Windows, the programs run inside WSL 2, not as native `.exe` files.
+- They do not run on macOS or ARM machines.
+
 ## Statistics
 
 | | |
@@ -212,6 +269,9 @@ published to GitHub Pages by `.github/workflows/pages.yml`.
 - Add a test in `test/` for every feature or fix.
 - The goal from here is polish, not new features: each change should make
   mucc faster, smaller, clearer or more correct.
+- Using AI tools is fine, as long as you have read and understood every line
+  you submit. Pull requests whose author hasn't read them will be closed.
+  AI agents should read [AGENTS.md](AGENTS.md).
 
 ## License
 
