@@ -34,6 +34,7 @@ test: $(TESTS)
 	test/driver.sh ./mucc
 	test/errors.sh ./mucc
 	test/asm.sh ./mucc
+	test/link.sh ./mucc
 
 test-all: test test-stage2 selfhost
 
@@ -66,6 +67,7 @@ test-stage2: $(TESTS:test/%=stage2/test/%)
 	test/driver.sh ./stage2/mucc
 	test/errors.sh ./stage2/mucc
 	test/asm.sh ./stage2/mucc
+	test/link.sh ./stage2/mucc
 
 # Stage 3 (mucc compiled by the mucc that was compiled by mucc)
 #
