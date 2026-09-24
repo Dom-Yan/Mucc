@@ -171,6 +171,44 @@ installed, as a normal user.
     N=300` pass; git builds and passes its tests. (All done but git, which
     now stops at `struct thread_local` in `builtin/index-pack.c`: see 1.9.)
 
+## Where we left off (2026-09-24, day)
+
+`aligned`, `packed` and `weak` (part of 1.3) and 1.6 are committed
+together: 1.3's layout test needs 1.6 (without it, glibc strips the test's
+attributes), and 1.6 needs 1.3 (glibc's own headers use `aligned` on
+members). `make test-all` and `make difftest N=300` pass. Not yet pushed,
+so CI hasn't run. Next:
+
+1. Push, and check that CI passes.
+2. Re-check the glibc headers (below), then the rest of 1.3.
+
+The first test run found two bugs, both fixed:
+
+- `#include_next` continued from wherever the last uncached header search
+  had stopped, so `include/sys/cdefs.h` found itself again and recursed
+  until mucc ran out of memory. That is what crashed WSL
+  (`Wsl/Service/E_UNEXPECTED`) last night, not WSL itself. Fixed in its own
+  commit (`9f1585a`).
+- A default include directory also given with `-I` (the Makefile's
+  `-Iinclude`) was searched twice, so the wrapper was read twice, and the
+  extra path in the debug info depended on where the mucc binary was:
+  stage 2 and stage 3 differed. Such a directory is now searched once.
+
+Found while working on these, to keep in mind:
+
+- Run the tests from a copy on WSL's Linux filesystem, not `/mnt/c`: it
+  is much faster, and a runaway there can't stall on the Windows drive.
+  Use `ulimit -v` so a runaway fails instead of taking the WSL VM down.
+- The glibc stripping (1.6) was worse than the epoll bug: it also removed
+  `__attribute__` from the user's own code after any `#include <stdio.h>`,
+  so every attribute in a real program was silently dropped. Before 1.6,
+  only `[[gnu::...]]` attributes had any effect.
+- With 1.6, 152 glibc headers compile with gcc; before `weak` was
+  implemented, mucc failed 5 of them: `<pthread.h>` and `<thread_db.h>`
+  (`weak`, now implemented), `<link.h>` (`mode`, a clear error), and
+  `<complex.h>`, `<tgmath.h>` (`_Complex`, not planned). Re-check this.
+- See 1.13: locals aligned above 16 are misaligned (an older bug).
+
 ## Phase 1: GNU attributes and the small C23 features
 
 The biggest step toward compiling C found in the wild. The rule for every
@@ -229,7 +267,11 @@ silently produces wrong code.
   - `cleanup(fn)`: call `fn(&var)` when the variable goes out of scope,
     including through `break`, `continue`, `return` and `goto`
   - `gnu_inline`, with gcc's `extern inline` meaning
-  - [ ] Added
+  - [ ] Added: so far `aligned(N)` (on variables, members and typedefs; an
+    error on a local above 16, see 1.13), `packed` on members, and `weak`
+    on functions and global variables. `test/attribute-layout.sh` checks
+    22 lines of layouts and addresses against gcc; `test/driver.sh` and
+    `test/errors.sh` cover `weak` and misuse.
   - [ ] Verified: a runtime test per attribute, checked against gcc's
     behavior, and each one works with the built-in linker (`-static`) and
     with `ld`.
@@ -253,7 +295,9 @@ silently produces wrong code.
   built by mucc reads the wrong data. Once 1.1 to 1.4 are verified, undo
   that `#define` (for example, a `sys/cdefs.h` in mucc's `include/` that
   includes glibc's and then `#undef __attribute__`).
-  - [ ] Added
+  - [x] Added: `include/sys/cdefs.h`, installed by `make install`. A
+    default include directory also given with `-I` is now searched once,
+    so the wrapper is read once.
   - [ ] Verified: a new test compares `sizeof`, `_Alignof` and member
     offsets of glibc's structs between gcc and mucc (starting with
     `struct epoll_event`: 12 and 4), and CPython's `test_epoll` and
@@ -293,6 +337,17 @@ silently produces wrong code.
   lists of what mucc does and doesn't do.
   - [ ] Added
   - [ ] Verified: table and README match the results.
+
+- [ ] **1.13 Locals aligned above 16 bytes.** Locals are placed relative to
+  `%rbp`, which is only 16-byte aligned, so `_Alignas(32)` on a local, or
+  a local whose struct type is `aligned(32)`, can be misaligned without
+  any error. (Found while doing `aligned` in 1.3, which makes
+  `__attribute__((aligned(32)))` on a local an error for now.) Fix by
+  realigning the frame, or putting such locals in an aligned area, then
+  lift that error.
+  - [ ] Added
+  - [ ] Verified: a test checks the address of 32- and 64-byte aligned
+    locals of each kind, compared with gcc.
 
 - [ ] **1.12 Diagnose CPython's `test_distutils` and `test_peg_generator`.**
   Both pass with gcc and fail with mucc, and both compile C during the

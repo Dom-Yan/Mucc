@@ -39,6 +39,7 @@ typedef struct {
   int njumps;         // number of jumps in sec before it
   uint64_t value;     // its address in sec, after layout
   bool is_global;     // .globl, or undefined
+  bool is_weak;       // .weak (also global)
   bool is_local;      // .local
   bool is_tls;        // in a TLS section, or used as TLS
   int type;           // STT_NOTYPE, STT_FUNC or STT_OBJECT (.type)
@@ -1345,6 +1346,9 @@ static void directive(char *name, int len) {
     read_sym()->is_local = true;
   } else if (IS(".globl") || IS(".global")) {
     read_sym()->is_global = true;
+  } else if (IS(".weak")) {
+    Sym *sym = read_sym();
+    sym->is_global = sym->is_weak = true;
   } else if (IS(".align") || IS(".balign")) {
     align_to_n(read_int());
   } else if (IS(".size")) {
@@ -1845,8 +1849,9 @@ static void write_elf(char *path) {
       int shndx = sym->common_align ? SHN_COMMON : sym->sec ? sym->sec->index : SHN_UNDEF;
       uint64_t value = sym->common_align ? sym->common_align : sym->value;
       sym->index = symtab.len / sizeof(Elf64_Sym);
-      add_elf_sym(&symtab, &strtab, sym->name, global ? STB_GLOBAL : STB_LOCAL,
-                  type, shndx, value, sym->size);
+      int bind = !global ? STB_LOCAL : sym->is_weak ? STB_WEAK : STB_GLOBAL;
+      add_elf_sym(&symtab, &strtab, sym->name, bind, type, shndx, value,
+                  sym->size);
     }
   }
 

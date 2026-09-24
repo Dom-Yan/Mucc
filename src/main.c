@@ -79,6 +79,18 @@ static char *exe_dir(char *argv0) {
   return dirname(strdup(buf));
 }
 
+// Is `dir` already an include path, under any spelling?
+static bool in_include_paths(char *dir) {
+  struct stat st, st2;
+  if (stat(dir, &st))
+    return false;
+  for (int i = 0; i < include_paths.len; i++)
+    if (!stat(include_paths.data[i], &st2) && st.st_dev == st2.st_dev &&
+        st.st_ino == st2.st_ino)
+      return true;
+  return false;
+}
+
 static void add_default_include_paths(char *argv0) {
   // mucc's own headers are in ./include next to the binary when run from
   // the source tree, or in ../lib/mucc/include after `make install`.
@@ -92,8 +104,13 @@ static void add_default_include_paths(char *argv0) {
   // include_paths before this runs, are not system headers.
   char *std[] = {inc, "/usr/local/include", "/usr/include/x86_64-linux-gnu",
                  "/usr/include"};
+
+  // A directory already given with -I (like the Makefile's -Iinclude) is
+  // searched only once, where -I put it. Listed twice, a header that does
+  // #include_next of its own name (include/sys/cdefs.h) would be read twice.
   for (int i = 0; i < sizeof(std) / sizeof(*std); i++) {
-    strarray_push(&include_paths, std[i]);
+    if (!in_include_paths(std[i]))
+      strarray_push(&include_paths, std[i]);
     strarray_push(&std_include_paths, std[i]);
   }
 }
