@@ -156,7 +156,7 @@ installed, as a normal user.
   - [ ] Verified: new `test/errors.sh` and `test/driver.sh` cases each fail
     with the 0.5 commit (`542e4c0`) and pass now; `make test-all` and `make
     difftest N=300` pass; git builds and passes its tests. (Everything but
-    git is done. Git now gets past these errors and stops at 0.8.)
+    git is done. Git now gets past these errors; see 0.8.)
 
 - [ ] **0.8 glibc's large-file renames in arguments.** For compilers other
   than gcc, glibc renames functions with macros (`#define getrlimit
@@ -168,7 +168,8 @@ installed, as a normal user.
   - [ ] Verified: a `test/errors.sh` case with `getrlimit` fails on the
     previous commit (`b0809b7`) and passes now, and a different-sized `struct s` and
     `struct s64` are still an error; `make test-all` and `make difftest
-    N=300` pass; git builds and passes its tests.
+    N=300` pass; git builds and passes its tests. (All done but git, which
+    now stops at `struct thread_local` in `builtin/index-pack.c`: see 1.9.)
 
 ## Phase 1: GNU attributes and the small C23 features
 
@@ -258,7 +259,11 @@ silently produces wrong code.
 
 - [ ] **1.9 C23 `int f()` means `int f(void)`.** Keep the old meaning under
   `-std=c89` through `-std=c17`, since old code depends on it. `-std=`,
-  ignored today, starts to count for this rule.
+  ignored today, starts to count for this rule. The same goes for C23's new
+  keywords: git names a struct `thread_local`, which is a keyword in C23
+  (mucc's default) but not in C17 (the default of gcc 13, which git is
+  tested with). Decide whether mucc's default should stay C23, and make
+  `-std=c17` and earlier treat those words as ordinary names.
   - [ ] Added
   - [ ] Verified: tests for both modes, and the third-party baseline is no
     worse.
