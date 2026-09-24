@@ -1,3 +1,4 @@
+// flags: -std=c23
 // C23 features, and C11's _Static_assert.
 #include "test.h"
 #include <stdarg.h>

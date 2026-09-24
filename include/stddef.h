@@ -7,7 +7,9 @@ typedef unsigned long size_t;
 typedef long ptrdiff_t;
 typedef unsigned int wchar_t;
 typedef long max_align_t;
+#if __STDC_VERSION__ >= 202311L
 typedef typeof(nullptr) nullptr_t;
+#endif
 
 #define offsetof(type, member) ((size_t)&(((type *)0)->member))
 
@@ -20,7 +22,7 @@ typedef typeof(nullptr) nullptr_t;
 // Reaching unreachable() traps (mucc emits ud2).
 #if !defined(__need_size_t) && !defined(__need_NULL) && \
     !defined(__need_wchar_t) && !defined(__need_ptrdiff_t) && \
-    !defined(__need_wint_t)
+    !defined(__need_wint_t) && __STDC_VERSION__ >= 202311L
 # ifndef unreachable
 #  define unreachable() __builtin_unreachable()
 # endif

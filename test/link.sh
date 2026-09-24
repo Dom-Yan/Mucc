@@ -35,7 +35,7 @@ $mucc -c -o $tmp/common.o -xc test/common || exit 1
 n=0
 for f in test/*.c; do
     b=$(basename $f .c)
-    static_link -Itest -o $tmp/$b $f $tmp/common.o &&
+    static_link -Itest $(sed -n 's|^// flags: ||p' $f) -o $tmp/$b $f $tmp/common.o &&
         $tmp/$b > $tmp/out 2>&1 && tail -1 $tmp/out | grep -q '^OK$'
     check "$b (static)"
     n=$((n+1))

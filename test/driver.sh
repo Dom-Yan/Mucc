@@ -380,6 +380,16 @@ $mucc -c -o $tmp/sym.o $tmp/sym.c && readelf -sW $tmp/sym.o > $tmp/sym.txt &&
   grep -qE 'NOTYPE +GLOBAL +DEFAULT +UND gi_ext$' $tmp/sym.txt
 check 'attributes alias, visibility and gnu_inline'
 
+# -std= sets __STDC_VERSION__ (none in C89); the default is C17.
+std_version() {
+  echo __STDC_VERSION__ | $mucc "$@" -E -xc - | tail -1
+}
+[ "$(std_version)" = 201710L ] && [ "$(std_version -std=gnu99)" = 199901L ] &&
+  [ "$(std_version -std=c11)" = 201112L ] && [ "$(std_version -std=c2x)" = 202311L ] &&
+  [ "$(std_version -ansi)" = __STDC_VERSION__ ] &&
+  ! $mucc -std=c3000 -E -xc - < /dev/null 2> /dev/null
+check -std=
+
 # -dumpmachine prints the target, as gcc does
 [ "$($mucc -dumpmachine)" = x86_64-linux-gnu ]
 check -dumpmachine

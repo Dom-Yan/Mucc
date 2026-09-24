@@ -242,6 +242,9 @@ expect_error "1:1: error: static assertion failed: int must be 8 bytes" <<'EOF'
 _Static_assert(sizeof(int) == 8, "int must be 8 bytes");
 EOF
 
+# C23's static_assert with no message, and nullptr
+saved_mucc=$mucc
+mucc="$saved_mucc -std=c23"
 expect_error "2:3: error: static assertion failed" <<'EOF'
 int main(void) {
   static_assert(0);
@@ -255,6 +258,7 @@ int main(void) {
   return x;
 }
 EOF
+mucc=$saved_mucc
 
 #---------- Several errors in one run ----------------------------------------
 
@@ -366,6 +370,8 @@ EOF
 
 #---------- C23: constexpr, auto, u8'', #embed -------------------------------
 
+mucc="$saved_mucc -std=c23"
+
 expect_error "2:21: error: constexpr 'x' needs a constant initializer" <<'EOF'
 int f(int n) {
   constexpr int x = n;
@@ -438,6 +444,8 @@ expect_clean 'a program may define its own unreachable' <<'EOF'
 static void unreachable(void) { puts("x"); }
 int main(void) { unreachable(); return 0; }
 EOF
+
+mucc=$saved_mucc
 
 #---------- Warnings ---------------------------------------------------------
 
@@ -593,6 +601,17 @@ for a in retain weakref vector_size mode ifunc naked target target_clones \
 int x __attribute__((__${a}__(1)));
 EOF
 done
+
+# In C23, `int f()` means `int f(void)`; before, any arguments go.
+saved_mucc=$mucc
+mucc="$saved_mucc -std=c23"
+expect_error "1:36: error: too many arguments to 'f' (expected 0)" <<'EOF'
+int f(); int main(void) { return f(1); }
+EOF
+mucc=$saved_mucc
+expect_ok 'int f() with arguments before C23' <<'EOF'
+int f(); int main(void) { return f(1); }
+EOF
 
 expect_error "1:28: error: alias target 'nothere' is not defined in this file" <<'EOF'
 int f(void) __attribute__((alias("nothere")));
