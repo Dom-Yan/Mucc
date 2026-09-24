@@ -445,6 +445,19 @@ static void unreachable(void) { puts("x"); }
 int main(void) { unreachable(); return 0; }
 EOF
 
+# enum E : type: values must fit the type, and it must be an integer type.
+expect_error "1:30: error: enumerator value 256 is outside the range of 'unsigned char'" <<'EOF'
+enum E : unsigned char { A = 256 };
+EOF
+
+expect_error "1:35: error: enumerator value 256 is outside the range of 'unsigned char'" <<'EOF'
+enum E : unsigned char { A = 255, B };
+EOF
+
+expect_error "1:10: error: an enum's underlying type must be an integer type" <<'EOF'
+enum E : float { A };
+EOF
+
 mucc=$saved_mucc
 
 #---------- Warnings ---------------------------------------------------------

@@ -32,8 +32,8 @@
 typedef struct {
   Obj *var;
   Type *type_def;
-  Type *enum_ty;
-  int enum_val;
+  Type *enum_ty; // an enum constant's type: int, or `enum E : type`'s
+  int64_t enum_val;
 } VarScope;
 
 // Represents a block scope.
@@ -1315,8 +1315,22 @@ static bool consume_end(Token **rest, Token *tok) {
   return false;
 }
 
-// enum-specifier = attributes ident? "{" enum-list? "}" attributes
-//                | attributes ident ("{" enum-list? "}" attributes)?
+// Can integer type `ty` hold `val`? (For 8-byte types, any value
+// const_expr() returns.)
+static bool fits_in(int64_t val, Type *ty) {
+  if (ty->kind == TY_BOOL)
+    return val == 0 || val == 1;
+  if (ty->size == 8)
+    return true;
+  int bits = ty->size * 8;
+  if (ty->is_unsigned)
+    return val >= 0 && val < ((int64_t)1 << bits);
+  return val >= -((int64_t)1 << (bits - 1)) && val < ((int64_t)1 << (bits - 1));
+}
+
+// enum-specifier = attributes ident? (":" type)? "{" enum-list? "}" attributes
+//                | attributes ident ((":" type)? "{" enum-list? "}" attributes)?
+//                | attributes ident ":" type
 //
 // enum-list      = enumerator ("," enumerator)* ","?
 // enumerator     = ident attributes ("=" num)?
@@ -1332,36 +1346,64 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     tok = tok->next;
   }
 
+  // C23 `enum E : type` fixes the underlying type, which gives the enum
+  // its size and sign, and its constants their type. (In a struct,
+  // `enum E : 3` is a bit-field instead.)
+  Type *fixed = NULL;
+  if (equal(tok, ":") && is_typename(tok->next)) {
+    Token *start = tok->next;
+    fixed = declspec(&tok, tok->next, NULL);
+    if (!is_integer(fixed) || fixed->kind == TY_ENUM)
+      error_tok(start, "an enum's underlying type must be an integer type");
+    ty->size = ty->align = fixed->size;
+    ty->is_unsigned = fixed->is_unsigned || fixed->kind == TY_BOOL;
+  }
+
   if (tag && !equal(tok, "{")) {
-    Type *ty = find_tag(tag);
-    if (!ty)
+    Type *ty2 = find_tag(tag);
+    if (!ty2 && fixed) {
+      // `enum E : type;` declares a complete type.
+      push_tag_scope(tag, ty);
+      *rest = tok;
+      return ty;
+    }
+    if (!ty2)
       error_tok(tag, "unknown enum type");
-    if (ty->kind != TY_ENUM)
+    if (ty2->kind != TY_ENUM)
       error_tok(tag, "not an enum tag");
     *rest = tok;
-    return ty;
+    return ty2;
   }
 
   tok = skip(tok, "{");
 
   // Read an enum-list.
   int i = 0;
-  int val = 0;
-  int min = 0, max = 0;
+  int64_t val = 0;
+  int64_t min = 0, max = 0;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
       tok = skip(tok, ",");
 
     char *name = get_ident(tok);
+    Token *val_tok = tok;
     tok = skip_attributes(tok->next);
 
-    if (equal(tok, "="))
+    if (equal(tok, "=")) {
+      val_tok = tok->next;
       val = const_expr(&tok, tok->next);
+    }
+
+    if (fixed && !fits_in(val, fixed))
+      error_tok(val_tok, "enumerator value %ld is outside the range of '%s'",
+                (long)val, type_name(fixed));
+    if (!fixed)
+      val = (int)val; // an int, as before C23
 
     min = (i == 1) ? val : MIN(min, val);
     max = (i == 1) ? val : MAX(max, val);
     VarScope *sc = push_scope(name);
-    sc->enum_ty = ty;
+    sc->enum_ty = fixed ? ty : ty_int;
     sc->enum_val = val++;
   }
 
@@ -1372,6 +1414,9 @@ static Type *enum_specifier(Token **rest, Token *tok) {
 
   // A packed enum is the smallest integer type that holds its values, as
   // with gcc.
+  if (a.is_packed && fixed)
+    error_tok(a.layout_tok, "attribute 'packed' is not supported on an enum "
+              "with a fixed underlying type");
   if (a.is_packed) {
     ty->is_unsigned = min >= 0;
     if (min >= 0 ? max <= 0xff : (min >= -128 && max <= 127))
@@ -4242,8 +4287,11 @@ static Node *primary(Token **rest, Token *tok) {
         sc->var->is_used = true;
         return new_var_node(sc->var, tok);
       }
-      if (sc->enum_ty)
-        return new_num(sc->enum_val, tok);
+      if (sc->enum_ty) {
+        Node *node = new_num(sc->enum_val, tok);
+        node->ty = sc->enum_ty;
+        return node;
+      }
     }
 
     char *name = get_ident(tok);
