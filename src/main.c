@@ -465,9 +465,15 @@ static void run_subprocess(char **argv) {
     _exit(1);
   }
 
-  // Wait for the child process to finish.
+  // Wait for the child process to finish. If it crashed, say so: it
+  // printed nothing itself.
   int status;
   while (wait(&status) > 0);
+  if (WIFSIGNALED(status)) {
+    char *what = !strcmp(argv[0], "as") || !strcmp(argv[0], "ld") ? argv[0] : "mucc -cc1";
+    fprintf(stderr, "mucc: internal error: %s crashed (%s)\n", what,
+            strsignal(WTERMSIG(status)));
+  }
   if (status != 0)
     exit(1);
 }
