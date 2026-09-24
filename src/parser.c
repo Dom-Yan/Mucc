@@ -61,6 +61,8 @@ typedef struct {
   Token *dtor_tok;   // `destructor`, or NULL
   int ctor_prio;     // their priorities, or -1 for none
   int dtor_prio;
+  Token *cleanup_tok; // cleanup(fn), or NULL
+  Obj *cleanup_fn;
 } Attrs;
 
 // Variable attributes such as typedef or extern.
@@ -133,6 +135,20 @@ static char *cont_label;
 // a switch statement. Otherwise, NULL.
 static Node *current_switch;
 
+// Local variables with __attribute__((cleanup(fn))) in scope, innermost
+// first, and those in scope where break, continue and the current
+// switch's cases jump to. Leaving a variable's scope calls fn(&var).
+struct Cleanup {
+  Cleanup *next;
+  Obj *var;
+  Obj *fn;
+};
+
+static Cleanup *cleanups;
+static Cleanup *brk_cleanups;
+static Cleanup *cont_cleanups;
+static Cleanup *case_cleanups;
+
 static Obj *builtin_alloca;
 
 // declspec() returns this for `auto` with no other type, as in C23's
@@ -154,7 +170,7 @@ static void initializer2(Token **rest, Token *tok, Initializer *init);
 static Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
 static Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
 static void gvar_initializer(Token **rest, Token *tok, Obj *var);
-static Node *compound_stmt(Token **rest, Token *tok);
+static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr);
 static Node *block_item(Token **rest, Token *tok);
 static Node *label_body(Token **rest, Token *tok);
 static Token *static_assertion(Token *tok);
@@ -190,6 +206,7 @@ static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
 static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr);
 static bool is_function(Token *tok);
+static bool falls_through(Node *node);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
 
@@ -242,11 +259,16 @@ typedef struct {
   char *brk_label;
   char *cont_label;
   Node *current_switch;
+  Cleanup *cleanups;
+  Cleanup *brk_cleanups;
+  Cleanup *cont_cleanups;
+  Cleanup *case_cleanups;
 } ParserState;
 
 static ParserState save_state(void) {
   return (ParserState){scope, current_fn, gotos, labels,
-                       brk_label, cont_label, current_switch};
+                       brk_label, cont_label, current_switch,
+                       cleanups, brk_cleanups, cont_cleanups, case_cleanups};
 }
 
 static void restore_state(ParserState s) {
@@ -257,6 +279,10 @@ static void restore_state(ParserState s) {
   brk_label = s.brk_label;
   cont_label = s.cont_label;
   current_switch = s.current_switch;
+  cleanups = s.cleanups;
+  brk_cleanups = s.brk_cleanups;
+  cont_cleanups = s.cont_cleanups;
+  case_cleanups = s.case_cleanups;
 }
 
 // Returns the token after the statement or declaration that starts at
@@ -502,7 +528,7 @@ static char *ignored_attributes[] = {
 // Attributes gcc has that would change what a program does, which mucc
 // doesn't implement (yet): they are errors, never silently ignored.
 static char *unsupported_attributes[] = {
-  "retain", "weakref", "alias", "section", "visibility", "cleanup",
+  "retain", "weakref", "alias", "section", "visibility",
   "gnu_inline", "vector_size", "mode", "ifunc", "naked", "target",
   "target_clones", "transparent_union", "common", "nocommon", "copy",
   "symver", "scalar_storage_order", "noinit", "persistent", "hardbool",
@@ -572,6 +598,20 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
     return;
   }
 
+  if (!strcmp(name, "cleanup")) {
+    if (!allow_decl)
+      error_tok(tok, "attribute 'cleanup' is not supported here");
+    if (!args || args->kind != TK_IDENT)
+      error_tok(tok, "attribute 'cleanup' needs a function name");
+    VarScope *sc = find_var(args);
+    if (!sc || !sc->var || !sc->var->is_function)
+      error_tok(args, "'%.*s' is not a function", args->len, args->loc);
+    skip(args->next, ")");
+    a->cleanup_tok = tok;
+    a->cleanup_fn = sc->var;
+    return;
+  }
+
   if (!strcmp(name, "weak")) {
     if (!allow_decl)
       error_tok(tok, "attribute 'weak' is not supported here");
@@ -629,6 +669,10 @@ static void merge_attrs(Attrs *dst, Attrs *src) {
     dst->dtor_tok = src->dtor_tok;
     dst->dtor_prio = src->dtor_prio;
   }
+  if (src->cleanup_tok) {
+    dst->cleanup_tok = src->cleanup_tok;
+    dst->cleanup_fn = src->cleanup_fn;
+  }
 }
 
 // For declarations that aren't functions: `constructor` and `destructor`
@@ -640,20 +684,33 @@ static void no_fn_attrs(Attrs *a, char *what) {
               attribute_name(tok), what);
 }
 
-// For declarations that aren't a function or a global variable (a local,
-// a typedef, a struct member): `weak` can't be applied either.
+// For declarations that aren't a function or a global variable.
 static void no_weak(Attrs *a, char *what) {
   if (a->weak_tok)
     error_tok(a->weak_tok, "attribute 'weak' is not supported on %s", what);
-  no_fn_attrs(a, what);
 }
 
-// For declarations where no `packed`, `aligned` or `weak` can be applied.
+// For declarations that aren't a local variable.
+static void no_cleanup(Attrs *a, char *what) {
+  if (a->cleanup_tok)
+    error_tok(a->cleanup_tok, "attribute 'cleanup' is not supported on %s", what);
+}
+
+// For declarations that aren't variables or functions (a typedef, a
+// struct member, a type, a parameter): none of those can be applied.
+static void no_symbol_attrs(Attrs *a, char *what) {
+  no_weak(a, what);
+  no_fn_attrs(a, what);
+  no_cleanup(a, what);
+}
+
+// For declarations where no `packed`, `aligned`, `weak` and so on can be
+// applied.
 static void no_decl_attrs(Attrs *a) {
   if (a->layout_tok)
     error_tok(a->layout_tok, "attribute '%s' is not supported here",
               attribute_name(a->layout_tok));
-  no_weak(a, "a parameter");
+  no_symbol_attrs(a, "a parameter");
 }
 
 // attributes = (("__attribute__" | "__attribute") "(" "(" attr-list ")" ")")*
@@ -1327,6 +1384,96 @@ static void peek_constexpr_value(Obj *var, Token *tok) {
   set_constexpr_value(var, assign(&tok, tok));
 }
 
+//---------- Cleanup variables -----------------------------------------------
+
+// `fn(&var)`, for the cleanup of `var`.
+static Node *cleanup_call(Cleanup *c, Token *tok) {
+  Node *fn = new_var_node(c->fn, tok);
+  Node *arg = new_unary(ND_ADDR, new_var_node(c->var, tok), tok);
+  add_type(fn);
+  add_type(arg);
+  Node *node = new_unary(ND_FUNCALL, fn, tok);
+  node->func_ty = c->fn->ty;
+  node->ty = c->fn->ty->return_ty;
+  node->args = new_cast(arg, c->fn->ty->params);
+  return new_unary(ND_EXPR_STMT, node, tok);
+}
+
+// The cleanups of the variables in `from` but not in `to`, innermost
+// first: what leaving their scopes runs. `to` must be `from` or a scope
+// around it.
+static Node *cleanup_calls(Cleanup *from, Cleanup *to, Token *tok) {
+  Node head = {};
+  Node *cur = &head;
+  for (Cleanup *c = from; c != to; c = c->next)
+    cur = cur->next = cleanup_call(c, tok);
+  Node *node = new_node(ND_BLOCK, tok);
+  node->body = head.next;
+  add_type(node);
+  return node;
+}
+
+// `return` in the scope of cleanup variables: the value is computed
+// first, as it may use them, then the cleanups run, as with gcc.
+static Node *return_with_cleanups(Node *ret) {
+  if (!cleanups)
+    return ret;
+
+  Token *tok = ret->tok;
+  Node *node = new_node(ND_BLOCK, tok);
+  Node head = {};
+  Node *cur = &head;
+  Node *exp = ret->lhs;
+  if (exp) {
+    add_type(exp);
+    if (exp->ty->kind == TY_VOID) {
+      // `return f();` in a void function
+      cur = cur->next = new_unary(ND_EXPR_STMT, exp, tok);
+      ret->lhs = NULL;
+    } else {
+      Obj *tmp = new_lvar("", exp->ty);
+      Node *set = new_binary(ND_ASSIGN, new_var_node(tmp, tok), exp, tok);
+      cur = cur->next = new_unary(ND_EXPR_STMT, set, tok);
+      ret->lhs = new_var_node(tmp, tok);
+    }
+  }
+  cur = cur->next = cleanup_calls(cleanups, NULL, tok);
+  cur->next = ret;
+  node->body = head.next;
+  return node;
+}
+
+// Is `outer` `inner` or a scope around it?
+static bool is_scope_of(Cleanup *outer, Cleanup *inner) {
+  for (Cleanup *c = inner; c; c = c->next)
+    if (c == outer)
+      return true;
+  return !outer;
+}
+
+// `var` has __attribute__((cleanup(fn))): check that fn(&var) is a valid
+// call, and put it in scope.
+static void push_cleanup(Obj *var, Attrs *a) {
+  Obj *fn = a->cleanup_fn;
+  Type *param = fn->ty->params;
+  if (!param || param->next)
+    error_tok(a->cleanup_tok, "cleanup function '%s' must take one parameter",
+              fn->name);
+  Node *arg = new_unary(ND_ADDR, new_var_node(var, a->cleanup_tok), a->cleanup_tok);
+  add_type(arg);
+  check_assign(param, arg, format("the argument of cleanup function '%s'", fn->name));
+  if (fn->ty->return_ty->kind == TY_STRUCT || fn->ty->return_ty->kind == TY_UNION)
+    error_tok(a->cleanup_tok, "a cleanup function returning a struct is not supported");
+
+  Cleanup *c = arena_alloc(sizeof(Cleanup));
+  c->var = var;
+  c->fn = fn;
+  c->next = cleanups;
+  cleanups = c;
+  var->is_used = true;
+  strarray_push(&current_fn->refs, fn->name); // keeps a static inline fn
+}
+
 //---------- Variable declarations and VLAs ----------------------------------
 
 // True if `ty` is or contains a VLA, as `int (*)[n]` does.
@@ -1401,6 +1548,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     Attrs all = attr ? attr->gnu : (Attrs){};
     merge_attrs(&all, &da);
     no_weak(&all, "a local variable");
+    no_fn_attrs(&all, "a local variable");
     if (all.is_packed)
       error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
     if (all.align > 16 && !(attr && attr->is_static))
@@ -1415,6 +1563,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 
     if (attr && attr->is_static) {
       // static local variable
+      no_cleanup(&all, "a static variable");
       if (ty == &auto_type && equal(tok, "="))
         ty = peek_auto_type(tok->next);
       Obj *var = new_anon_gvar(ty);
@@ -1438,6 +1587,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
         set_constexpr_value(var, init);
       Node *set = new_binary(ND_ASSIGN, new_var_node(var, name), init, name);
       cur = cur->next = new_unary(ND_EXPR_STMT, set, name);
+      if (all.cleanup_tok)
+        push_cleanup(var, &all);
       continue;
     }
 
@@ -1449,6 +1600,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     if (ty->kind == TY_VLA) {
       if (equal(tok, "="))
         error_tok(tok, "variable-sized object may not be initialized");
+      no_cleanup(&all, "a variable-length array");
 
       // Variable length arrays (VLAs) are translated to alloca() calls.
       // For example, `int x[n+2]` is translated to `tmp = n + 2,
@@ -1483,6 +1635,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       error_tok(ty->name, "variable has incomplete type");
     if (var->ty->kind == TY_VOID)
       error_tok(ty->name, "variable declared void");
+    if (all.cleanup_tok)
+      push_cleanup(var, &all);
   }
 
   Node *node = new_node(ND_BLOCK, tok);
@@ -2200,7 +2354,7 @@ static Node *stmt(Token **rest, Token *tok) {
       if (ty->kind != TY_VOID)
         error_tok(tok, "'return' needs a value in function returning '%s'",
                   type_name(ty));
-      return node;
+      return return_with_cleanups(node);
     }
 
     Node *exp = expr(&tok, tok->next);
@@ -2220,7 +2374,7 @@ static Node *stmt(Token **rest, Token *tok) {
       exp = new_cast(exp, current_fn->ty->return_ty);
 
     node->lhs = exp;
-    return node;
+    return return_with_cleanups(node);
   }
 
   if (equal(tok, "if")) {
@@ -2246,17 +2400,23 @@ static Node *stmt(Token **rest, Token *tok) {
 
     char *brk = brk_label;
     brk_label = node->brk_label = new_unique_name();
+    Cleanup *brk_c = brk_cleanups, *case_c = case_cleanups;
+    brk_cleanups = case_cleanups = cleanups;
 
     node->then = stmt(rest, tok);
 
     current_switch = sw;
     brk_label = brk;
+    brk_cleanups = brk_c;
+    case_cleanups = case_c;
     return node;
   }
 
   if (equal(tok, "case")) {
     if (!current_switch)
       error_tok(tok, "stray case");
+    if (cleanups != case_cleanups)
+      error_tok(tok, "jump into the scope of a variable with a cleanup");
 
     Node *node = new_node(ND_CASE, tok);
     int begin = const_expr(&tok, tok->next);
@@ -2284,6 +2444,8 @@ static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "default")) {
     if (!current_switch)
       error_tok(tok, "stray default");
+    if (cleanups != case_cleanups)
+      error_tok(tok, "jump into the scope of a variable with a cleanup");
 
     Node *node = new_node(ND_CASE, tok);
     tok = skip(tok->next, ":");
@@ -2301,6 +2463,8 @@ static Node *stmt(Token **rest, Token *tok) {
 
     char *brk = brk_label;
     char *cont = cont_label;
+    Cleanup *brk_c = brk_cleanups, *cont_c = cont_cleanups;
+    Cleanup *outer = cleanups;
     brk_label = node->brk_label = new_unique_name();
     cont_label = node->cont_label = new_unique_name();
 
@@ -2310,6 +2474,7 @@ static Node *stmt(Token **rest, Token *tok) {
     } else {
       node->init = expr_stmt(&tok, tok);
     }
+    brk_cleanups = cont_cleanups = cleanups;
 
     if (!equal(tok, ";"))
       node->cond = expr(&tok, tok);
@@ -2324,6 +2489,18 @@ static Node *stmt(Token **rest, Token *tok) {
     leave_scope();
     brk_label = brk;
     cont_label = cont;
+    brk_cleanups = brk_c;
+    cont_cleanups = cont_c;
+
+    // The loop's own variables, as in `for (int i ...; ...)`
+    if (cleanups != outer) {
+      Node *block = new_node(ND_BLOCK, tok);
+      block->body = node;
+      if (falls_through(node))
+        node->next = cleanup_calls(cleanups, outer, tok);
+      cleanups = outer;
+      return block;
+    }
     return node;
   }
 
@@ -2335,13 +2512,17 @@ static Node *stmt(Token **rest, Token *tok) {
 
     char *brk = brk_label;
     char *cont = cont_label;
+    Cleanup *brk_c = brk_cleanups, *cont_c = cont_cleanups;
     brk_label = node->brk_label = new_unique_name();
     cont_label = node->cont_label = new_unique_name();
+    brk_cleanups = cont_cleanups = cleanups;
 
     node->then = stmt(rest, tok);
 
     brk_label = brk;
     cont_label = cont;
+    brk_cleanups = brk_c;
+    cont_cleanups = cont_c;
     return node;
   }
 
@@ -2350,13 +2531,17 @@ static Node *stmt(Token **rest, Token *tok) {
 
     char *brk = brk_label;
     char *cont = cont_label;
+    Cleanup *brk_c = brk_cleanups, *cont_c = cont_cleanups;
     brk_label = node->brk_label = new_unique_name();
     cont_label = node->cont_label = new_unique_name();
+    brk_cleanups = cont_cleanups = cleanups;
 
     node->then = stmt(&tok, tok->next);
 
     brk_label = brk;
     cont_label = cont;
+    brk_cleanups = brk_c;
+    cont_cleanups = cont_c;
 
     tok = skip(tok, "while");
     tok = skip(tok, "(");
@@ -2372,14 +2557,18 @@ static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "goto")) {
     if (equal(tok->next, "*")) {
       // [GNU] `goto *ptr` jumps to the address specified by `ptr`.
+      if (cleanups)
+        error_tok(tok, "'goto *' in the scope of a variable with a cleanup is not supported");
       Node *node = new_node(ND_GOTO_EXPR, tok);
       node->lhs = expr(&tok, tok->next->next);
       *rest = skip(tok, ";");
       return node;
     }
 
+    // Its cleanups are found with the label, in resolve_goto_labels().
     Node *node = new_node(ND_GOTO, tok);
     node->label = get_ident(tok->next);
+    node->cleanups = cleanups;
     node->goto_next = gotos;
     gotos = node;
     *rest = skip(tok->next->next, ";");
@@ -2391,6 +2580,8 @@ static Node *stmt(Token **rest, Token *tok) {
       error_tok(tok, "stray break");
     Node *node = new_node(ND_GOTO, tok);
     node->unique_label = brk_label;
+    if (cleanups != brk_cleanups)
+      node->lhs = cleanup_calls(cleanups, brk_cleanups, tok);
     *rest = skip(tok->next, ";");
     return node;
   }
@@ -2400,6 +2591,8 @@ static Node *stmt(Token **rest, Token *tok) {
       error_tok(tok, "stray continue");
     Node *node = new_node(ND_GOTO, tok);
     node->unique_label = cont_label;
+    if (cleanups != cont_cleanups)
+      node->lhs = cleanup_calls(cleanups, cont_cleanups, tok);
     *rest = skip(tok->next, ";");
     return node;
   }
@@ -2408,6 +2601,7 @@ static Node *stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_LABEL, tok);
     node->label = strndup(tok->loc, tok->len);
     node->unique_label = new_unique_name();
+    node->cleanups = cleanups;
     // Attributes right after a label, like `unused`, are the label's.
     node->lhs = label_body(rest, skip_attributes(tok->next->next));
     node->goto_next = labels;
@@ -2416,7 +2610,7 @@ static Node *stmt(Token **rest, Token *tok) {
   }
 
   if (equal(tok, "{"))
-    return compound_stmt(rest, tok->next);
+    return compound_stmt(rest, tok->next, false);
 
   return expr_stmt(rest, tok);
 }
@@ -2491,10 +2685,14 @@ static Node *block_item_or_skip(Token **rest, Token *tok) {
 }
 
 // compound-stmt = block-item* "}"
-static Node *compound_stmt(Token **rest, Token *tok) {
+//
+// The body of a statement expression (`is_stmt_expr`) has the value of
+// its last statement, so it can't end with cleanups.
+static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr) {
   Node *node = new_node(ND_BLOCK, tok);
   Node head = {};
   Node *cur = &head;
+  Cleanup *outer = cleanups;
 
   enter_scope();
 
@@ -2507,6 +2705,14 @@ static Node *compound_stmt(Token **rest, Token *tok) {
   leave_scope();
 
   node->body = head.next;
+  if (cleanups != outer) {
+    if (is_stmt_expr)
+      error_tok(tok, "a variable with a cleanup at the end of a statement "
+                "expression is not supported");
+    if (falls_through(node))
+      cur->next = cleanup_calls(cleanups, outer, tok);
+    cleanups = outer;
+  }
   *rest = skip(tok, "}");
   return node;
 }
@@ -3316,7 +3522,7 @@ static Node *unary(Token **rest, Token *tok) {
 // and aligned(N) raises it, as with gcc. attr_align keeps an explicit
 // alignment, which is the only one that counts in a packed struct.
 static void set_member_align(Member *mem, VarAttr *attr, Attrs *gnu) {
-  no_weak(gnu, "a struct member");
+  no_symbol_attrs(gnu, "a struct member");
   if (gnu->is_packed && mem->is_bitfield)
     error_tok(gnu->layout_tok, "attribute 'packed' on a bit-field is not supported");
 
@@ -3393,7 +3599,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
 static Token *attribute_list(Token *tok, Type *ty) {
   Attrs a = {};
   tok = attributes(tok, &a, true);
-  no_weak(&a, "a type");
+  no_symbol_attrs(&a, "a type");
   if (a.is_packed)
     ty->is_packed = true;
   if (a.align)
@@ -3790,7 +3996,7 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "(") && equal(tok->next, "{")) {
     // This is a GNU statement expresssion.
     Node *node = new_node(ND_STMT_EXPR, tok);
-    node->body = compound_stmt(&tok, tok->next->next)->body;
+    node->body = compound_stmt(&tok, tok->next->next, true)->body;
     *rest = skip(tok, ")");
     return node;
   }
@@ -4108,7 +4314,7 @@ static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(ty->name_pos, "typedef name omitted");
     if (all.is_packed)
       error_tok(all.layout_tok, "attribute 'packed' is not supported on a typedef");
-    no_weak(&all, "a typedef");
+    no_symbol_attrs(&all, "a typedef");
 
     // On a typedef, aligned(N) sets the new type's alignment, and can
     // lower it too, as with gcc. The type is still compatible with the
@@ -4150,6 +4356,12 @@ static void resolve_goto_labels(void) {
     for (Node *y = labels; y; y = y->goto_next) {
       if (!strcmp(x->label, y->label)) {
         x->unique_label = y->unique_label;
+        // Leaving the scope of cleanup variables runs their cleanups.
+        // Entering one would skip the variable's initialization.
+        if (!is_scope_of(y->cleanups, x->cleanups))
+          error_tok(x->tok, "jump into the scope of a variable with a cleanup");
+        if (x->cleanups != y->cleanups)
+          x->lhs = cleanup_calls(x->cleanups, y->cleanups, x->tok);
         break;
       }
     }
@@ -4200,6 +4412,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     error_tok(da.layout_tok, "attribute 'packed' is not supported on a function");
   if (da.weak_tok && attr->is_static)
     error_tok(da.weak_tok, "a weak function must not be static");
+  no_cleanup(&da, "a function");
 
   Obj *fn = find_func(name_str);
   if (fn) {
@@ -4281,7 +4494,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
 
   Token *body = tok;
-  fn->body = compound_stmt(&tok, tok);
+  fn->body = compound_stmt(&tok, tok, false);
   if (vla_head.next) {
     vla_cur->next = fn->body->body;
     fn->body->body = vla_head.next;
@@ -4313,6 +4526,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     if (all.is_packed)
       error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
     no_fn_attrs(&all, "a variable");
+    no_cleanup(&all, "a global variable");
 
     Token *name = ty->name;
     if (basety == &auto_type) {

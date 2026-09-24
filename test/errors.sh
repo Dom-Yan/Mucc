@@ -584,11 +584,56 @@ expect_error "1:8: error: unknown attribute 'bogus'" <<'EOF'
 [[gnu::bogus]] int x;
 EOF
 
-expect_error "3:24: error: attribute 'cleanup' is not supported" <<'EOF'
+expect_error "1:22: error: attribute 'section' is not supported" <<'EOF'
+int x __attribute__((section(".foo")));
+EOF
+
+# cleanup(fn): jumping into a cleanup variable's scope skips its
+# initialization, so that is an error, as is misuse.
+expect_error "3:3: error: jump into the scope of a variable with a cleanup" <<'EOF'
 void f(int *p);
 int main(void) {
-  int x __attribute__((cleanup(f)));
+  goto l;
+  int x __attribute__((cleanup(f))) = 0;
+l:
   return 0;
+}
+EOF
+
+expect_error "5:3: error: jump into the scope of a variable with a cleanup" <<'EOF'
+void f(int *p);
+int main(int argc, char **argv) {
+  switch (argc) {
+    int x __attribute__((cleanup(f)));
+  case 1:
+    return 1;
+  }
+  return 0;
+}
+EOF
+
+expect_error "1:47: error: 'nothere' is not a function" <<'EOF'
+int main(void) { int x __attribute__((cleanup(nothere))); return 0; }
+EOF
+
+expect_error "1:38: error: attribute 'cleanup' is not supported on a global variable" <<'EOF'
+void f(int *p); int x __attribute__((cleanup(f)));
+EOF
+
+expect_error "1:53: error: cleanup function 'f' must take one parameter" <<'EOF'
+void f(void); int main(void) { int x __attribute__((cleanup(f))); return 0; }
+EOF
+
+expect_clean 'cleanup and return: no false warnings' <<'EOF'
+void f(int *p);
+int g(void) {
+  int x __attribute__((cleanup(f))) = 1;
+  if (x)
+    return x;
+  {
+    int y __attribute__((cleanup(f))) = 2;
+    return y;
+  }
 }
 EOF
 

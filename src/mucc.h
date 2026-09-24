@@ -41,6 +41,7 @@ typedef struct Node Node;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
+typedef struct Cleanup Cleanup;
 
 //---------- strings.c: string arrays, format() ------------------------------
 
@@ -288,10 +289,13 @@ struct Node {
   bool pass_by_stack;
   Obj *ret_buffer;
 
-  // Goto or labeled statement, or labels-as-values
+  // Goto or labeled statement, or labels-as-values. A goto, break or
+  // continue that leaves the scope of variables with a cleanup calls the
+  // cleanups (lhs) first.
   char *label;
   char *unique_label;
   Node *goto_next;
+  Cleanup *cleanups; // in scope at a goto or label (parser.c)
 
   // Switch
   Node *case_next;
