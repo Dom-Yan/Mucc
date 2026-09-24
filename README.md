@@ -28,6 +28,11 @@ All that is left is:
 - **New features, rarely:** only when the C language itself changes, or when
   a real program truly needs something mucc can't do.
 
+**Next direction: self-sufficiency.** The goal is one `mucc` binary that
+compiles and links C programs on any x86-64 Linux machine with nothing else
+installed: no gcc, no binutils, no glibc. The steps, and how each one is
+tested before it is checked off, are in [PLAN.md](PLAN.md).
+
 **mucc is not trying to replace GCC or Clang.** Those are huge compilers that
 target dozens of machines and optimize heavily. mucc has its own niche: a
 simple, extremely lightweight and fast compiler for Linux on x86-64 machines.
