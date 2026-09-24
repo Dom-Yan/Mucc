@@ -761,8 +761,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
       var->name = get_ident(name);
       var->ty = cur;
       var->align = cur->align;
-      var->is_local = true;
-      var->tok = name;
+      var->is_local = true; // no `tok`: unused parameters get no warning
       push_scope(var->name)->var = var;
       cur->param_var = var;
     }
@@ -3131,22 +3130,28 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
 
   tok = skip(tok, "{");
 
-  // Construct a struct object.
-  struct_members(&tok, tok, ty);
-  *rest = attribute_list(tok, ty);
-
+  // The tag is in scope from the `{` on, so a member can refer to its own
+  // struct, even in a function pointer's parameters, as in
+  // `struct S { int (*f)(struct S *); };`. It is incomplete until the `}`.
+  // A struct already declared in this scope (`struct S;`) is the same type,
+  // completed here.
+  Type *prev = NULL;
   if (tag) {
-    // If this is a redefinition, overwrite a previous type.
-    // Otherwise, register the struct type.
-    Type *ty2 = hashmap_get2(&scope->tags, tag->loc, tag->len);
-    if (ty2) {
-      *ty2 = *ty;
-      return ty2;
-    }
-
-    push_tag_scope(tag, ty);
+    prev = hashmap_get2(&scope->tags, tag->loc, tag->len);
+    if (!prev)
+      push_tag_scope(tag, ty);
   }
 
+  // Construct a struct object.
+  ty->size = -1;
+  struct_members(&tok, tok, ty);
+  ty->size = 0;
+  *rest = attribute_list(tok, ty);
+
+  if (prev) {
+    *prev = *ty;
+    return prev;
+  }
   return ty;
 }
 
