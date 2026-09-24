@@ -79,10 +79,12 @@ Checked on 2026-09-23 against the source:
     `test/thirdparty/work/zlib`, no root `thirdparty/` was created, and
     `git status` showed nothing but the edited files.
 
-- [ ] **0.2 Use `https://` URLs in the third-party scripts,** so they run
+- [x] **0.2 Use `https://` URLs in the third-party scripts,** so they run
   anywhere, including CI.
-  - [ ] Added
-  - [ ] Verified: every script clones on a machine with no SSH key.
+  - [x] Added
+  - [x] Verified: on a machine with no SSH key and SSH disabled, every
+    script's repository answered `git ls-remote` over HTTPS. (The full
+    clones happen in 0.3.)
 
 - [ ] **0.3 Record a baseline.** Run every third-party script and write the
   result in the table below. This decides which GNU attributes and features
