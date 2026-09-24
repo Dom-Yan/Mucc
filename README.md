@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml/badge.svg)](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml)
 
-Mucc (`mucc`) is a small, self-hosting C23 compiler for x86-64 Linux, written
-in C. It has its own preprocessor, parser, code generator, assembler and
+Mucc (`mucc`) is a small, self-hosting C compiler (C17, and C23 with
+`-std=c23`) for x86-64 Linux, written in C. It has its own preprocessor, parser, code generator, assembler and
 static linker. It aims to be minimal, easy to read and fast to compile with.
 It is not trying to replace gcc or clang.
 
@@ -166,8 +166,10 @@ run time. mucc links those itself; `-fuse-ld=bfd` (any value) makes it use
 
 It accepts the usual flags: `-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-U`,
 `-static`, `-shared`, `-fPIC`, `-l`, `-L`, `-M*`, `-w`,
-`-fno-integrated-as`, `-fuse-ld=` and more (see `src/main.c`). `-O`, `-g`,
-`-std=`, `-march=`, `-mtune=` and `-W*` (except `-w`) are accepted and
+`-fno-integrated-as`, `-fuse-ld=` and more (see `src/main.c`). `-std=`
+picks the C standard: C17 by default, as with gcc 14 and clang, and
+`-std=c23` for C23 (`-std=gnu17` and the like work too; `-ansi` is C89).
+`-O`, `-g`, `-march=`, `-mtune=` and `-W*` (except `-w`) are accepted and
 ignored. As with gcc, a file with an extension mucc doesn't know (such as
 libtool's `.lo`) is passed to the linker as an object file.
 
@@ -182,7 +184,11 @@ byte-for-byte identical to GNU `as` from the same input. The linker
 (`src/link.c`) makes static executables, including thread-local data and
 glibc's IFUNC functions.
 
-**C23 by default** (`__STDC_VERSION__` is `202311L`):
+**C23** with `-std=c23` (`__STDC_VERSION__` is `202311L`). The default is
+C17, where these still work as GNU extensions, except that `bool`, `true`,
+`false`, `nullptr`, `constexpr`, `alignas`, `alignof`, `static_assert` and
+`thread_local` are ordinary names, as older code expects, and `int f()`
+takes any arguments instead of meaning `int f(void)`:
 
 - `bool`, `true`, `false`, `nullptr` and `nullptr_t`
 - `auto x = expr;` and `constexpr` variables
@@ -205,10 +211,13 @@ glibc's IFUNC functions.
 - GNU statement expressions, `typeof`, computed `goto` and case ranges
 - GNU attributes, as `__attribute__((...))` or C23 `[[gnu::...]]`, in every
   position gcc accepts. The 66 that are only hints (`format`, `nonnull`,
-  `deprecated`, `always_inline`, ...) are ignored; `noreturn` and `unused`
-  are honored, and `packed` and `aligned(N)` work on structs and unions.
-  Attributes that would change the program but aren't implemented yet are
-  errors, never silently ignored.
+  `deprecated`, `always_inline`, ...) are ignored. These work as with gcc:
+  `noreturn`, `unused`, `packed` and `aligned(N)` (with gcc's layouts),
+  `used`, `weak`, `alias`, `section` (with `__start_`/`__stop_` symbols),
+  `visibility`, `constructor` and `destructor` (with priorities),
+  `cleanup` and `gnu_inline`. Attributes that would change the program but
+  aren't implemented are errors, never silently ignored.
+  `__has_attribute` and `__has_builtin` tell which are there.
 - Plain `asm("...")` statements
 
 **Code generation.** A simple stack machine with three things that keep it
@@ -225,20 +234,13 @@ functions that can reach their end without a `return`.
 **Not supported:**
 
 - C++, or any target but x86-64 Linux with glibc
-- These GNU attributes (so far): `aligned` and `packed` outside structs,
-  `used`, `weak`, `alias`, `section`, `visibility`, `constructor`,
-  `destructor`, `cleanup`, `vector_size`, `mode` and a few more
+- These GNU attributes: `vector_size`, `mode`, `ifunc`, `naked`, `target`
+  and a few more; `aligned` above 16 on a local variable (so far)
 - GNU `asm` with operands, `_Complex`, `__int128`, `_BitInt`, `enum E : type`,
   `<stdckdint.h>`, decimal floats, K&R-style definitions
 - Optimization beyond register variables and constant folding
 - Debug info for variables and types
 - `const` enforcement (except for `constexpr`)
-
-**Known issue:** glibc's headers drop `__attribute__` for compilers other
-than gcc and clang, so structs that glibc marks `packed` get the wrong
-layout under mucc. The one found so far is `struct epoll_event` (16 bytes
-instead of 12), which breaks programs that use epoll. The fix is item 1.6 in
-[PLAN.md](PLAN.md).
 
 ## Logistics
 
