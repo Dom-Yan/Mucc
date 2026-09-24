@@ -309,6 +309,10 @@ echo 'int main() {}' | $mucc -c -o $tmp/baz.o -xc -
 cc -Xlinker -z -Xlinker muldefs -Xlinker --gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
 check -Xlinker
 
+# -dumpmachine prints the target, as gcc does
+[ "$($mucc -dumpmachine)" = x86_64-linux-gnu ]
+check -dumpmachine
+
 # -march= and -mtune= are accepted and ignored
 echo 'int main() { return 0; }' > $tmp/march.c
 $mucc -march=native -mtune=generic -o $tmp/march $tmp/march.c && $tmp/march

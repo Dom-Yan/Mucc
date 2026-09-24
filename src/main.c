@@ -160,6 +160,12 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    // Build tools ask which system the compiler targets.
+    if (!strcmp(argv[i], "-dumpmachine")) {
+      printf("x86_64-linux-gnu\n");
+      exit(0);
+    }
+
     if (!strcmp(argv[i], "-cc1")) {
       opt_cc1 = true;
       continue;
