@@ -13,6 +13,43 @@ small enough to read end to end. It runs anywhere that is x86-64 Linux,
 including WSL 2 on Windows. To build native Windows or macOS programs, use a
 compiler made for that platform.
 
+## At a glance
+
+**What you need** (on Ubuntu/Debian, `build-essential` has all of it):
+
+| For | Needed |
+| --- | ------ |
+| Running mucc | x86-64 Linux with **glibc** (not musl, so not Alpine) |
+| Compiling | glibc's headers (`libc6-dev`) |
+| Linking | glibc's startup files and gcc's runtime files (`crtbegin.o`, `libgcc.a`), from the `gcc` package. gcc itself isn't run. |
+| Normal (dynamic) linking | `ld` (binutils). `-static` doesn't need it: mucc links those itself. |
+| `asm()` statements it can't assemble | `as` (binutils), used as a fallback |
+| Building mucc | a C11 compiler and `make`: gcc the first time, or mucc itself (`make CC=mucc`) |
+| The tests | Python 3 (difftest, assembler comparison); gdb for debugging |
+
+**Self-hosting.** mucc compiles, assembles and links itself. `make CC=mucc`
+builds it with no gcc at all, and with `LDFLAGS=-static` without `ld` either.
+A mucc built by mucc builds a byte-identical mucc (`make test-all` checks).
+
+**Real projects** it builds, which then pass their own tests: SQLite 3.45
+(285,000 lines), Lua 5.4.7 (its official test suite), zlib 1.3.1, and mucc.
+
+**What it compiles:** C11 and most of C23 (`auto`, `constexpr`, `#embed`,
+`nullptr`, `[[attributes]]`, ...), plus the GNU extensions statement
+expressions, `typeof`, computed `goto` and case ranges. The full list is in
+"What mucc can do" below.
+
+**What it doesn't:**
+- C++, or any target but x86-64 Linux with glibc.
+- `__attribute__` on functions and variables (only `packed` and
+  `aligned` on structs). Code that uses it only `#ifdef __GNUC__` is fine,
+  since mucc doesn't claim to be gcc.
+- GNU `asm` with operands (`asm("..." : "=r"(x))`), `_Complex`,
+  `__int128`, `_BitInt`, K&R-style definitions.
+- Optimization beyond register variables and constant folding: its code
+  runs about as fast as `gcc -O0`'s, 3 to 5 times slower than `-O2`'s.
+- Debug info for variables: gdb shows source lines and functions only.
+
 ## Setup
 
 mucc needs an x86-64 Linux environment, because it emits Linux code and uses
@@ -313,41 +350,38 @@ doesn't enforce `const` (except for `constexpr`), and still treats
 `int f();` as a function with unspecified parameters, as C17 did, rather
 than as `int f(void)`.
 
-SQLite 3.45 (about 285,000 lines) compiles with mucc and runs correctly. Git,
-libpng and the other builds scripted in `test/thirdparty/` have not been
-re-checked.
+SQLite 3.45 (about 285,000 lines), Lua 5.4.7 and zlib 1.3.1 compile with
+mucc and pass their own tests. Git, libpng and the other builds scripted
+in `test/thirdparty/` have not been re-checked.
 
 ## Roadmap
 
+mucc's features are complete for what it's meant to be. From here the work
+is polishing, trimming and optimizing what's there, not adding features:
+each change should make mucc faster, smaller, clearer or more correct.
 
-**Fill the gaps**
-- More warnings (e.g. `if (x = 0)`, implicit narrowing), and clearer
-  messages for a stray `}` or an unknown type inside a struct.
-- K&R function definitions, `_Complex`, `asm` with operands.
-- The rest of C23: `_BitInt`, `enum E : type`, `<stdckdint.h>`.
-- Make `#embed` of large files lighter: each byte is a full token now,
-  about 250 bytes of memory per embedded byte.
-- Re-verify the third-party builds (Git, libpng, ...).
+**Correctness and polish**
+- Clearer errors for things mucc doesn't support, instead of confusing
+  ones: `__attribute__` on a function says "variable name omitted" now.
+- Clearer messages for a stray `}` or an unknown type inside a struct.
+- Re-check the third-party builds in `test/thirdparty/`, and fix what
+  they find.
 - Grow `test/gen_random.py` to cover more of C (unions, long double,
-  function pointers, goto).
+  function pointers, goto), to find wrong-code bugs.
 
-**Make the output better**
-- Keep expression temporaries in registers too, instead of push/pop, and
-  use addressing modes like `(%r13,%rbx,4)` for `a[i]`.
-- Floating-point variables in registers (all XMM registers are
-  caller-saved, so this needs saving around calls).
-- Beyond that, an intermediate representation between the AST and
-  assembly, for real optimizations like dead-code elimination.
-- Emit real DWARF debug info (register variables are invisible to gdb
-  now).
+**Faster code**
+- Keep expression temporaries in registers instead of push/pop, and use
+  addressing modes like `(%r13,%rbx,4)` for `a[i]`.
+- `double` variables in registers.
+
+**Smaller and faster compiles**
+- Smaller tokens and AST nodes: compiling SQLite uses about 490 MB.
+  This also makes big `#embed`s lighter (about 250 bytes per byte now).
 - Don't emit `__func__` strings for functions that never use them.
 
-**Stand on its own**
-- Dynamic linking in `src/link.c` (PLT, GOT, `.dynamic`, symbol
-  versions), so `ld` is no longer needed at all. The assembler
-  (`src/asm.c`) and static linking are done.
-- `.eh_frame_hdr` in static executables, which C++-style unwinding and
-  `backtrace()` use to find frames quickly.
+Deliberately left out: dynamic linking in mucc's own linker (`ld` does it),
+`_Complex`, GNU `asm` operands, `_BitInt` and C++. Add one only if a real
+program you need can't do without it.
 
 ## Layout
 
