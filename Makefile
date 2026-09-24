@@ -35,6 +35,7 @@ test: $(TESTS)
 	test/errors.sh ./mucc
 	test/asm.sh ./mucc
 	test/link.sh ./mucc
+	test/attribute-layout.sh ./mucc
 
 test-all: test test-stage2 selfhost
 
@@ -68,6 +69,7 @@ test-stage2: $(TESTS:test/%=stage2/test/%)
 	test/errors.sh ./stage2/mucc
 	test/asm.sh ./stage2/mucc
 	test/link.sh ./stage2/mucc
+	test/attribute-layout.sh ./stage2/mucc
 
 # Stage 3 (mucc compiled by the mucc that was compiled by mucc)
 #
@@ -88,6 +90,8 @@ install: mucc
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/lib/mucc/include
 	install -m 755 mucc $(DESTDIR)$(PREFIX)/bin/mucc
 	install -m 644 include/*.h $(DESTDIR)$(PREFIX)/lib/mucc/include
+	install -d $(DESTDIR)$(PREFIX)/lib/mucc/include/sys
+	install -m 644 include/sys/*.h $(DESTDIR)$(PREFIX)/lib/mucc/include/sys
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/mucc

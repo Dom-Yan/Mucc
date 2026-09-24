@@ -592,8 +592,35 @@ int main(void) {
 }
 EOF
 
-expect_error "1:22: error: attribute 'aligned' is not supported here" <<'EOF'
-int x __attribute__((aligned(16)));
+expect_error "1:35: error: attribute 'aligned' is not supported here" <<'EOF'
+int f(int (*p)(int __attribute__((aligned(16)))));
+EOF
+
+expect_error "1:27: error: a weak function must not be static" <<'EOF'
+static int __attribute__((weak)) f(void) { return 0; }
+EOF
+
+expect_error "1:39: error: attribute 'weak' is not supported on a local variable" <<'EOF'
+int main(void) { int x __attribute__((weak)); return 0; }
+EOF
+
+expect_error "1:30: error: attribute 'weak' is not supported on a typedef" <<'EOF'
+typedef int T __attribute__((weak));
+EOF
+
+expect_error "1:29: error: attribute 'weak' is not supported on a parameter" <<'EOF'
+void f(int x __attribute__((weak)));
+EOF
+
+expect_error "2:24: error: alignment above 16 on a local variable is not supported yet" <<'EOF'
+int main(void) {
+  int x __attribute__((aligned(32)));
+  return 0;
+}
+EOF
+
+expect_error "1:22: error: requested alignment is not a positive power of 2" <<'EOF'
+int x __attribute__((aligned(3)));
 EOF
 
 expect_warning "1:3: warning: unknown attribute 'bogus' ignored" <<'EOF'

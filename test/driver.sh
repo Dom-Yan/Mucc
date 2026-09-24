@@ -293,6 +293,14 @@ printf '#include <wrap.h>\n#include <other.h>\n#include <wrap.h>\n' > $tmp/wrap.
   -E $tmp/wrap.c) | grep -c wrapped)" = 2 ]
 check '#include_next of a header found before'
 
+# A default include directory also given with -I is searched once, so
+# mucc's own <sys/cdefs.h> wrapper, which does #include_next of itself, is
+# read once. (Read twice, it put a path that depends on where the mucc
+# binary is into the debug info, and self-hosting stopped being reproducible.)
+echo '#include <sys/cdefs.h>' > $tmp/cdefs.c
+[ "$($mucc -Iinclude -M $tmp/cdefs.c | tr ' ' '\n' | grep 'sys/cdefs.h' | grep -vc '^/usr/')" = 1 ]
+check '-I of a default include directory'
+
 # -static
 echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c
@@ -327,6 +335,29 @@ echo 'int foo() {}' | $mucc -c -o $tmp/bar.o -xc -
 echo 'int main() {}' | $mucc -c -o $tmp/baz.o -xc -
 cc -Xlinker -z -Xlinker muldefs -Xlinker --gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
 check -Xlinker
+
+# __attribute__((weak)), with ld and with mucc's own linker (-static):
+# a weak definition gives way to a strong one, a weak variable too, and a
+# used weak declaration with no definition anywhere is 0.
+cat > $tmp/weak1.c <<'EOF'
+int __attribute__((weak)) val(void) { return 1; }
+int wv __attribute__((weak)) = 5;
+extern int maybe(void) __attribute__((weak));
+int main(void) { return val() * 100 + wv * 10 + (maybe ? maybe() : 0); }
+EOF
+cat > $tmp/weak2.c <<'EOF'
+int val(void) { return 2; }
+int wv = 7;
+int maybe(void) { return 3; }
+EOF
+for ld in '' -static; do
+  $mucc $ld -o $tmp/weak $tmp/weak1.c && $tmp/weak
+  [ $? = 150 ]
+  check "weak symbols, alone $ld"
+  $mucc $ld -o $tmp/weak $tmp/weak1.c $tmp/weak2.c && $tmp/weak
+  [ $? = $(( (273) % 256 )) ]
+  check "weak symbols, overridden $ld"
+done
 
 # -dumpmachine prints the target, as gcc does
 [ "$($mucc -dumpmachine)" = x86_64-linux-gnu ]

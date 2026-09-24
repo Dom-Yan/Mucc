@@ -47,6 +47,17 @@ struct Scope {
   HashMap tags;
 };
 
+// The GNU attributes (`__attribute__((...))`) mucc acts on. The many that
+// are only hints are accepted and ignored; see apply_attribute().
+typedef struct {
+  bool is_noreturn;
+  bool is_unused;
+  bool is_packed;
+  int align;         // aligned(N), or 0
+  Token *layout_tok; // the first `packed` or `aligned`, for errors
+  Token *weak_tok;   // `weak`, or NULL
+} Attrs;
+
 // Variable attributes such as typedef or extern.
 typedef struct {
   bool is_typedef;
@@ -58,16 +69,8 @@ typedef struct {
   bool is_constexpr;
   bool is_unused; // __attribute__((unused)): no unused-variable warning
   int align;
+  Attrs gnu;      // all GNU attributes in the declaration specifiers
 } VarAttr;
-
-// The GNU attributes (`__attribute__((...))`) mucc acts on. The many that
-// are only hints are accepted and ignored; see apply_attribute().
-typedef struct {
-  bool is_noreturn;
-  bool is_unused;
-  bool is_packed;
-  int align; // aligned(N), or 0
-} Attrs;
 
 // This struct represents a variable initializer. Since initializers
 // can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this struct
@@ -180,7 +183,7 @@ static Node *postfix(Token **rest, Token *tok);
 static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
-static Token *parse_typedef(Token *tok, Type *basety);
+static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr);
 static bool is_function(Token *tok);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
@@ -494,7 +497,7 @@ static char *ignored_attributes[] = {
 // Attributes gcc has that would change what a program does, which mucc
 // doesn't implement (yet): they are errors, never silently ignored.
 static char *unsupported_attributes[] = {
-  "aligned", "packed", "used", "retain", "weak", "weakref", "alias",
+  "used", "retain", "weakref", "alias",
   "section", "visibility", "constructor", "destructor", "cleanup",
   "gnu_inline", "vector_size", "mode", "ifunc", "naked", "target",
   "target_clones", "transparent_union", "common", "nocommon", "copy",
@@ -525,9 +528,10 @@ static char *attribute_name(Token *tok) {
   return s;
 }
 
-// `on_type` is true for attributes on a struct or union type, the only
-// place `packed` and `aligned` are supported so far.
-static void apply_attribute(Token *tok, Token *args, Attrs *a, bool on_type) {
+// `packed`, `aligned` and `weak` change a layout or a symbol, so they are
+// only allowed where the caller applies them (`allow_decl`); anywhere else,
+// they're errors.
+static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) {
   char *name = attribute_name(tok);
 
   if (!strcmp(name, "noreturn")) {
@@ -537,17 +541,33 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool on_type) {
   if (!strcmp(name, "unused") || !strcmp(name, "maybe_unused"))
     a->is_unused = true;
 
-  if (on_type && !strcmp(name, "packed")) {
-    a->is_packed = true;
+  if (!strcmp(name, "weak")) {
+    if (!allow_decl)
+      error_tok(tok, "attribute 'weak' is not supported here");
+    if (!a->weak_tok)
+      a->weak_tok = tok;
     return;
   }
-  if (on_type && !strcmp(name, "aligned")) {
+
+  if (!strcmp(name, "packed") || !strcmp(name, "aligned")) {
+    if (!allow_decl)
+      error_tok(tok, "attribute '%s' is not supported here", name);
+    if (!a->layout_tok)
+      a->layout_tok = tok;
+    if (!strcmp(name, "packed")) {
+      a->is_packed = true;
+      return;
+    }
+
     // Without an argument, the largest alignment any type needs.
-    a->align = 16;
+    int align = 16;
     if (args) {
-      a->align = const_expr(&args, args);
+      align = const_expr(&args, args);
       skip(args, ")");
     }
+    if (align <= 0 || (align & (align - 1)))
+      error_tok(tok, "requested alignment is not a positive power of 2");
+    a->align = MAX(a->align, align);
     return;
   }
 
@@ -556,16 +576,40 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool on_type) {
     return;
   if (in_list(name, unsupported_attributes,
               sizeof(unsupported_attributes) / sizeof(*unsupported_attributes)))
-    error_tok(tok, "attribute '%s' is not supported%s", name,
-              !strcmp(name, "packed") || !strcmp(name, "aligned") ?
-              " here" : "");
+    error_tok(tok, "attribute '%s' is not supported", name);
   error_tok(tok, "unknown attribute '%s'", name);
+}
+
+static void merge_attrs(Attrs *dst, Attrs *src) {
+  dst->is_noreturn |= src->is_noreturn;
+  dst->is_unused |= src->is_unused;
+  dst->is_packed |= src->is_packed;
+  dst->align = MAX(dst->align, src->align);
+  if (!dst->layout_tok)
+    dst->layout_tok = src->layout_tok;
+  if (!dst->weak_tok)
+    dst->weak_tok = src->weak_tok;
+}
+
+// For declarations where `weak` can't be applied: not a function or a
+// global variable (a local, a typedef, a struct member).
+static void no_weak(Attrs *a, char *what) {
+  if (a->weak_tok)
+    error_tok(a->weak_tok, "attribute 'weak' is not supported on %s", what);
+}
+
+// For declarations where no `packed`, `aligned` or `weak` can be applied.
+static void no_decl_attrs(Attrs *a) {
+  if (a->layout_tok)
+    error_tok(a->layout_tok, "attribute '%s' is not supported here",
+              attribute_name(a->layout_tok));
+  no_weak(a, "a parameter");
 }
 
 // attributes = (("__attribute__" | "__attribute") "(" "(" attr-list ")" ")")*
 // attr-list  = attribute? ("," attribute?)*
 // attribute  = name ("(" balanced-tokens ")")?
-static Token *attributes(Token *tok, Attrs *a, bool on_type) {
+static Token *attributes(Token *tok, Attrs *a, bool allow_decl) {
   while (is_attribute(tok)) {
     tok = skip(tok->next, "(");
     tok = skip(tok, "(");
@@ -587,7 +631,7 @@ static Token *attributes(Token *tok, Attrs *a, bool on_type) {
         }
         tok = skip(tok, ")");
       }
-      apply_attribute(name, args, a, on_type);
+      apply_attribute(name, args, a, allow_decl);
 
       if (!equal(tok, ",") && !equal(tok, ")"))
         error_expected(tok, "',' or ')'");
@@ -652,12 +696,14 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   bool is_auto = false;
 
   while (is_typename(tok)) {
+    // Without `attr` (a cast, a parameter), nothing applies `aligned`.
     if (is_attribute(tok)) {
       Attrs a = {};
-      tok = attributes(tok, &a, false);
+      tok = attributes(tok, &a, attr != NULL);
       if (attr) {
         attr->is_noreturn |= a.is_noreturn;
         attr->is_unused |= a.is_unused;
+        merge_attrs(&attr->gnu, &a);
       }
       continue;
     }
@@ -998,38 +1044,43 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
 //              ("(" declarator ")" | ident attributes)? type-suffix attributes
 //
 // The declarator's attributes, like `noreturn` in
-// `void f(void) __attribute__((noreturn));`, go to `attrs` (if not NULL).
+// `void f(void) __attribute__((noreturn));`, go to `attrs`. With NULL
+// (a parameter), `packed` and `aligned` are errors: nothing applies them.
 static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs) {
   Attrs scratch = {};
   if (!attrs)
     attrs = &scratch;
 
-  tok = attributes(tok, attrs, false);
+  tok = attributes(tok, attrs, true);
   ty = pointers(&tok, tok, ty);
-  tok = attributes(tok, attrs, false);
+  tok = attributes(tok, attrs, true);
 
   if (equal(tok, "(")) {
     Token *start = tok;
     Type dummy = {};
-    declarator(&tok, start->next, &dummy, NULL);
+    Attrs ignored = {};
+    declarator(&tok, start->next, &dummy, &ignored);
     tok = skip(tok, ")");
     ty = type_suffix(&tok, tok, ty);
-    *rest = attributes(tok, attrs, false);
-    return declarator(&tok, start->next, ty, attrs);
+    *rest = attributes(tok, attrs, true);
+    ty = declarator(&tok, start->next, ty, attrs);
+  } else {
+    Token *name = NULL;
+    Token *name_pos = tok;
+
+    if (tok->kind == TK_IDENT) {
+      name = tok;
+      tok = attributes(tok->next, attrs, true);
+    }
+
+    ty = type_suffix(&tok, tok, ty);
+    *rest = attributes(tok, attrs, true);
+    ty->name = name;
+    ty->name_pos = name_pos;
   }
 
-  Token *name = NULL;
-  Token *name_pos = tok;
-
-  if (tok->kind == TK_IDENT) {
-    name = tok;
-    tok = attributes(tok->next, attrs, false);
-  }
-
-  ty = type_suffix(&tok, tok, ty);
-  *rest = attributes(tok, attrs, false);
-  ty->name = name;
-  ty->name_pos = name_pos;
+  if (attrs == &scratch)
+    no_decl_attrs(&scratch);
   return ty;
 }
 
@@ -1294,6 +1345,17 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 
     // __attribute__((unused)) turns off the unused-variable warning.
     bool is_unused = da.is_unused || (attr && attr->is_unused);
+
+    // aligned(N) raises the variable's alignment. The stack is only
+    // 16-byte aligned, so more than that works only for a static.
+    Attrs all = attr ? attr->gnu : (Attrs){};
+    merge_attrs(&all, &da);
+    no_weak(&all, "a local variable");
+    if (all.is_packed)
+      error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
+    if (all.align > 16 && !(attr && attr->is_static))
+      error_tok(all.layout_tok,
+                "alignment above 16 on a local variable is not supported yet");
     Token *name = ty->name;
     bool is_constexpr = attr && attr->is_constexpr;
     if (is_constexpr && !equal(tok, "="))
@@ -1306,6 +1368,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       if (ty == &auto_type && equal(tok, "="))
         ty = peek_auto_type(tok->next);
       Obj *var = new_anon_gvar(ty);
+      var->align = MAX(var->align, all.align);
       push_scope(get_ident(name))->var = var;
       if (is_constexpr)
         peek_constexpr_value(var, tok->next);
@@ -1320,6 +1383,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       Obj *var = new_lvar(get_ident(name), auto_type_of(init));
       var->tok = name;
       var->is_used = is_unused;
+      var->align = MAX(var->align, all.align);
       if (is_constexpr)
         set_constexpr_value(var, init);
       Node *set = new_binary(ND_ASSIGN, new_var_node(var, name), init, name);
@@ -1356,6 +1420,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     var->is_used = is_unused;
     if (attr && attr->align)
       var->align = attr->align;
+    var->align = MAX(var->align, all.align);
     if (is_constexpr)
       peek_constexpr_value(var, tok->next);
 
@@ -2322,7 +2387,7 @@ static Node *block_item(Token **rest, Token *tok) {
   Type *basety = declspec(&tok, tok, &attr);
 
   if (attr.is_typedef) {
-    *rest = parse_typedef(tok, basety);
+    *rest = parse_typedef(tok, basety, &attr);
     return NULL;
   }
 
@@ -3197,7 +3262,22 @@ static Node *unary(Token **rest, Token *tok) {
 
 //---------- Structs and unions ----------------------------------------------
 
-// struct-members = (declspec declarator (","  declarator)* ";")*
+// A member's alignment: its type's, or _Alignas's. `packed` lowers it to 1
+// and aligned(N) raises it, as with gcc. attr_align keeps an explicit
+// alignment, which is the only one that counts in a packed struct.
+static void set_member_align(Member *mem, VarAttr *attr, Attrs *gnu) {
+  no_weak(gnu, "a struct member");
+  if (gnu->is_packed && mem->is_bitfield)
+    error_tok(gnu->layout_tok, "attribute 'packed' on a bit-field is not supported");
+
+  mem->align = attr->align ? attr->align : mem->ty->align;
+  if (gnu->is_packed)
+    mem->align = 1;
+  mem->align = MAX(mem->align, gnu->align);
+  mem->attr_align = MAX(attr->align, gnu->align);
+}
+
+// struct-members = (declspec declarator attributes (","  declarator)* ";")*
 static void struct_members(Token **rest, Token *tok, Type *ty) {
   Member head = {};
   Member *cur = &head;
@@ -3219,7 +3299,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       Member *mem = arena_alloc(sizeof(Member));
       mem->ty = basety;
       mem->idx = idx++;
-      mem->align = attr.align ? attr.align : mem->ty->align;
+      set_member_align(mem, &attr, &attr.gnu);
       cur = cur->next = mem;
       continue;
     }
@@ -3231,17 +3311,18 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       first = false;
 
       Member *mem = arena_alloc(sizeof(Member));
-      mem->ty = declarator(&tok, tok, basety, NULL);
+      Attrs all = attr.gnu;
+      mem->ty = declarator(&tok, tok, basety, &all);
       mem->name = mem->ty->name;
       mem->idx = idx++;
-      mem->align = attr.align ? attr.align : mem->ty->align;
 
       if (consume(&tok, tok, ":")) {
         mem->is_bitfield = true;
         mem->bit_width = const_expr(&tok, tok);
-        tok = skip_attributes(tok);
+        tok = attributes(tok, &all, true);
       }
 
+      set_member_align(mem, &attr, &all);
       cur = cur->next = mem;
     }
   }
@@ -3262,6 +3343,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
 static Token *attribute_list(Token *tok, Type *ty) {
   Attrs a = {};
   tok = attributes(tok, &a, true);
+  no_weak(&a, "a type");
   if (a.is_packed)
     ty->is_packed = true;
   if (a.align)
@@ -3321,6 +3403,14 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
   return ty;
 }
 
+// In a packed struct, only an explicit aligned(N) or _Alignas on a member
+// counts; every other member is 1-byte aligned.
+static int member_align(Type *ty, Member *mem) {
+  if (ty->is_packed)
+    return MAX(1, mem->attr_align);
+  return mem->align;
+}
+
 // struct-decl = struct-union-decl
 static Type *struct_decl(Token **rest, Token *tok) {
   Type *ty = struct_union_decl(rest, tok);
@@ -3346,14 +3436,13 @@ static Type *struct_decl(Token **rest, Token *tok) {
       mem->bit_offset = bits % (sz * 8);
       bits += mem->bit_width;
     } else {
-      if (!ty->is_packed)
-        bits = align_to(bits, mem->align * 8);
+      bits = align_to(bits, member_align(ty, mem) * 8);
       mem->offset = bits / 8;
       bits += mem->ty->size * 8;
     }
 
-    if (!ty->is_packed && ty->align < mem->align)
-      ty->align = mem->align;
+    if (ty->align < member_align(ty, mem))
+      ty->align = member_align(ty, mem);
   }
 
   ty->size = align_to(bits, ty->align * 8) / 8;
@@ -3955,7 +4044,7 @@ static void warn_function(Obj *fn, Token *rbrace) {
 
 //---------- Top level: functions and global variables -----------------------
 
-static Token *parse_typedef(Token *tok, Type *basety) {
+static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr) {
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
@@ -3963,9 +4052,21 @@ static Token *parse_typedef(Token *tok, Type *basety) {
       tok = skip_decl_comma(tok);
     first = false;
 
-    Type *ty = declarator(&tok, tok, basety, NULL);
+    Attrs all = attr->gnu;
+    Type *ty = declarator(&tok, tok, basety, &all);
     if (!ty->name)
       error_tok(ty->name_pos, "typedef name omitted");
+    if (all.is_packed)
+      error_tok(all.layout_tok, "attribute 'packed' is not supported on a typedef");
+    no_weak(&all, "a typedef");
+
+    // On a typedef, aligned(N) sets the new type's alignment, and can
+    // lower it too, as with gcc. The type is still compatible with the
+    // original.
+    if (all.align) {
+      ty = copy_type(ty);
+      ty->align = all.align;
+    }
     push_scope(get_ident(ty->name))->type_def = ty;
   }
   return tok;
@@ -4036,12 +4137,19 @@ static void mark_live(Obj *var) {
 }
 
 static Token *function(Token *tok, Type *basety, VarAttr *attr) {
-  Attrs da = {};
+  Attrs da = attr->gnu;
   Type *ty = declarator(&tok, tok, basety, &da);
   if (!ty->name)
     error_tok(ty->name_pos, "function name omitted");
   char *name_str = get_ident(ty->name);
   bool is_noreturn = attr->is_noreturn || da.is_noreturn;
+
+  // aligned(N) on a function only aligns its code, which changes nothing
+  // a program can see, so it's ignored.
+  if (da.is_packed)
+    error_tok(da.layout_tok, "attribute 'packed' is not supported on a function");
+  if (da.weak_tok && attr->is_static)
+    error_tok(da.weak_tok, "a weak function must not be static");
 
   Obj *fn = find_func(name_str);
   if (fn) {
@@ -4064,6 +4172,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   }
 
   fn->is_root = !(fn->is_static && fn->is_inline);
+  fn->is_weak |= da.weak_tok != NULL;
 
   if (consume(&tok, tok, ";"))
     return tok;
@@ -4135,9 +4244,12 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
       tok = skip_decl_comma(tok);
     first = false;
 
-    Type *ty = declarator(&tok, tok, basety, NULL);
+    Attrs all = attr->gnu;
+    Type *ty = declarator(&tok, tok, basety, &all);
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
+    if (all.is_packed)
+      error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
 
     Token *name = ty->name;
     if (basety == &auto_type) {
@@ -4152,6 +4264,10 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     var->is_tls = attr->is_tls;
     if (attr->align)
       var->align = attr->align;
+    var->align = MAX(var->align, all.align);
+    if (all.weak_tok && attr->is_static)
+      error_tok(all.weak_tok, "a weak variable must not be static");
+    var->is_weak = all.weak_tok != NULL;
 
     // A file-scope constexpr is internal to this file, like a static, so
     // a header can define one without clashing at link time.
@@ -4176,8 +4292,10 @@ static bool is_function(Token *tok) {
   if (equal(tok, ";"))
     return false;
 
+  // A lookahead only: the attributes are checked when the real parse runs.
   Type dummy = {};
-  Type *ty = declarator(&tok, tok, &dummy, NULL);
+  Attrs ignored = {};
+  Type *ty = declarator(&tok, tok, &dummy, &ignored);
   return ty->kind == TY_FUNC;
 }
 
@@ -4329,7 +4447,7 @@ static Token *top_level_item(Token *tok) {
   Type *basety = declspec(&tok, tok, &attr);
 
   if (attr.is_typedef)
-    return parse_typedef(tok, basety);
+    return parse_typedef(tok, basety, &attr);
   if (is_function(tok))
     return function(tok, basety, &attr);
   return global_variable(tok, basety, &attr);

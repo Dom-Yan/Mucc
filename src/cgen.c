@@ -2044,21 +2044,51 @@ static void assign_lvar_offsets(Obj *prog) {
   }
 }
 
+static bool has_weak; // any weak declaration in this file
+
+// A definition is weak if any declaration of that name was, as in
+// `extern int x __attribute__((weak)); int x = 1;`.
+static bool is_weak(Obj *prog, Obj *var) {
+  if (var->is_weak)
+    return true;
+  if (!has_weak)
+    return false;
+  for (Obj *o = prog; o; o = o->next)
+    if (o->is_weak && !strcmp(o->name, var->name))
+      return true;
+  return false;
+}
+
+// `.local`, `.globl` or `.weak`
+static void emit_binding(Obj *prog, Obj *var) {
+  if (var->is_static)
+    println("  .local %s", var->name);
+  else if (is_weak(prog, var))
+    println("  .weak %s", var->name);
+  else
+    println("  .globl %s", var->name);
+}
+
+// Weak declarations that are used: a missing definition is then 0, not a
+// link error.
+static void emit_weak_refs(Obj *prog) {
+  for (Obj *var = prog; var; var = var->next)
+    if (var->is_weak && !var->is_definition && var->is_used)
+      println("  .weak %s", var->name);
+}
+
 static void emit_data(Obj *prog) {
   for (Obj *var = prog; var; var = var->next) {
     if (var->is_function || !var->is_definition)
       continue;
 
-    if (var->is_static)
-      println("  .local %s", var->name);
-    else
-      println("  .globl %s", var->name);
+    emit_binding(prog, var);
 
     int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
       ? MAX(16, var->align) : var->align;
 
-    // Common symbol
-    if (opt_fcommon && var->is_tentative) {
+    // Common symbol (never for a weak one, as with gcc)
+    if (opt_fcommon && var->is_tentative && !is_weak(prog, var)) {
       println("  .comm %s, %d, %d", var->name, var->ty->size, align);
       continue;
     }
@@ -2148,11 +2178,7 @@ static void emit_text(Obj *prog) {
     if (!fn->is_live)
       continue;
 
-    if (fn->is_static)
-      println("  .local %s", fn->name);
-    else
-      println("  .globl %s", fn->name);
-
+    emit_binding(prog, fn);
     println("  .text");
     println("  .type %s, @function", fn->name);
     println("%s:", fn->name);
@@ -2283,8 +2309,11 @@ void codegen(Obj *prog, FILE *out) {
     if (fn->is_function && fn->is_definition)
       assign_registers(fn);
   assign_lvar_offsets(prog);
+  for (Obj *var = prog; var; var = var->next)
+    has_weak |= var->is_weak;
   emit_data(prog);
   emit_text(prog);
+  emit_weak_refs(prog);
 
   // Mark the stack as not executable, as gcc does. The built-in assembler
   // would add this anyway, but GNU `as` (used for asm() it can't handle)

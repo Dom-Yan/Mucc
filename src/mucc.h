@@ -155,6 +155,7 @@ struct Obj {
   bool is_function;
   bool is_definition;
   bool is_static;
+  bool is_weak; // __attribute__((weak))
 
   // Global variable
   bool is_tentative;
@@ -391,6 +392,7 @@ struct Member {
   Token *name;
   int idx;
   int align;
+  int attr_align; // aligned(N) or _Alignas on the member, or 0
   int offset;
 
   // Bitfield
