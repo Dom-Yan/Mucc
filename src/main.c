@@ -387,6 +387,11 @@ static void parse_args(int argc, char **argv) {
         !strcmp(argv[i], "-mno-red-zone"))
       continue;
 
+    // mucc emits only baseline x86-64 instructions, which every x86-64
+    // CPU runs, so a CPU choice like -march=native changes nothing.
+    if (!strncmp(argv[i], "-march=", 7) || !strncmp(argv[i], "-mtune=", 7))
+      continue;
+
     if (argv[i][0] == '-' && argv[i][1] != '\0')
       error("unknown argument: %s", argv[i]);
 
@@ -907,7 +912,16 @@ static FileType get_file_type(char *filename) {
   if (endswith(filename, ".s"))
     return FILE_ASM;
 
-  error("<command line>: unknown file extension: %s", filename);
+  // Sources mucc can't compile get a clear error, not a confusing one
+  // from the linker.
+  static char *unsupported[] = {".S", ".sx", ".h", ".cc", ".cpp", ".cxx", ".C"};
+  for (int i = 0; i < sizeof(unsupported) / sizeof(*unsupported); i++)
+    if (endswith(filename, unsupported[i]))
+      error("<command line>: unsupported file type: %s", filename);
+
+  // Like gcc, anything else goes to the linker as an object file: libtool's
+  // .lo files, versioned libraries like libfoo.so.1, and so on.
+  return FILE_OBJ;
 }
 
 int main(int argc, char **argv) {
