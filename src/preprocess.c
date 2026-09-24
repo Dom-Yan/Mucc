@@ -53,7 +53,7 @@ struct Hideset {
 static HashMap macros;
 static CondIncl *cond_incl;
 static HashMap pragma_once;
-static int include_next_idx;
+static HashMap found_in; // header path -> 1 + index in include_paths
 
 static Token *preprocess2(Token *tok);
 static Macro *find_macro(Token *tok);
@@ -777,14 +777,14 @@ char *search_include_paths(char *filename) {
     if (!file_exists(path))
       continue;
     hashmap_put(&cache, filename, path);
-    include_next_idx = i + 1;
+    hashmap_put(&found_in, path, (void *)(intptr_t)(i + 1));
     return path;
   }
   return NULL;
 }
 
 // Would #include <filename> find a file? Unlike search_include_paths(),
-// this doesn't cache or change where #include_next continues from.
+// this doesn't cache or record where the file was found.
 // Used by __has_include.
 static bool find_include(char *filename) {
   if (filename[0] == '/')
@@ -795,11 +795,16 @@ static bool find_include(char *filename) {
   return false;
 }
 
-static char *search_include_next(char *filename) {
-  for (; include_next_idx < include_paths.len; include_next_idx++) {
-    char *path = format("%s/%s", include_paths.data[include_next_idx], filename);
-    if (file_exists(path))
-      return path;
+// #include_next in `cur` searches the include paths after the one `cur`
+// was found in, as gcc does. A file not found through them (the main
+// file, or a "quoted" include) searches them all.
+static char *search_include_next(char *filename, char *cur) {
+  for (int i = (intptr_t)hashmap_get(&found_in, cur); i < include_paths.len; i++) {
+    char *path = format("%s/%s", include_paths.data[i], filename);
+    if (!file_exists(path))
+      continue;
+    hashmap_put(&found_in, path, (void *)(intptr_t)(i + 1));
+    return path;
   }
   return NULL;
 }
@@ -1213,7 +1218,7 @@ static Token *preprocess2(Token *tok) {
     if (equal(tok, "include_next")) {
       bool ignore;
       char *filename = read_include_filename(&tok, tok->next, &ignore);
-      char *path = search_include_next(filename);
+      char *path = search_include_next(filename, start->file->name);
       tok = include_file(tok, path ? path : filename, start->next->next);
       continue;
     }
