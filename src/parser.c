@@ -1481,6 +1481,20 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
     return;
   }
 
+  // The string may also be in braces, as in `char s[] = {"abc"};`.
+  if (init->ty->kind == TY_ARRAY && is_integer(init->ty->base) &&
+      equal(tok, "{") && tok->next->kind == TK_STR) {
+    Token *end = tok->next->next;
+    if (equal(end, ","))
+      end = end->next;
+    if (equal(end, "}")) {
+      Token *ignore;
+      string_initializer(&ignore, tok->next, init);
+      *rest = end->next;
+      return;
+    }
+  }
+
   if (init->ty->kind == TY_ARRAY) {
     if (equal(tok, "{"))
       array_initializer1(rest, tok, init);

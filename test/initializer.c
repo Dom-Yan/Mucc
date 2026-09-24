@@ -262,6 +262,13 @@ int main() {
   ASSERT(16, ({ char x[]={[2 ... 10]='a', [7]='b', [15 ... 15]='c', [3 ... 5]='d'}; sizeof(x); }));
   ASSERT(0, ({ char x[]={[2 ... 10]='a', [7]='b', [15 ... 15]='c', [3 ... 5]='d'}; memcmp(x, "\0\0adddabaaa\0\0\0\0c", 16); }));
 
+  // A string initializer may be in braces.
+  ASSERT(0, ({ char s[] = {"abc"}; strcmp(s, "abc"); }));
+  ASSERT(4, ({ char s[] = {"abc",}; sizeof(s); }));
+  ASSERT(8, ({ char s[8] = {"ab" "cd"}; sizeof(s); }));
+  ASSERT('d', ({ char s[8] = {"ab" "cd"}; s[3]; }));
+  ASSERT(0, ({ static char s[] = {"xyz"}; strcmp(s, "xyz"); }));
+
   printf("OK\n");
   return 0;
 }
