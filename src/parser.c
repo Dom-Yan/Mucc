@@ -1155,7 +1155,9 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
   leave_scope();
 
-  if (cur == &head)
+  // Before C23, `int f()` says nothing about f's parameters, so any
+  // arguments are accepted. In C23 it means `int f(void)`.
+  if (cur == &head && opt_std < 2023)
     is_variadic = true;
 
   ty = func_type(ty);
@@ -2378,6 +2380,9 @@ static bool is_typename(Token *tok) {
       hashmap_put(&map, kw[i], (void *)1);
   }
 
+  // Before C23, `constexpr` is an ordinary name.
+  if (equal(tok, "constexpr") && tok->kind != TK_KEYWORD)
+    return find_typedef(tok);
   return hashmap_get2(&map, tok->loc, tok->len) || find_typedef(tok);
 }
 
@@ -4206,15 +4211,15 @@ static Node *primary(Token **rest, Token *tok) {
   }
 
   // C23 constants: true and false have type bool, and nullptr is a null
-  // pointer (mucc gives it type void *).
-  if (equal(tok, "true") || equal(tok, "false")) {
+  // pointer (mucc gives it type void *). Before C23 they're names.
+  if (tok->kind == TK_KEYWORD && (equal(tok, "true") || equal(tok, "false"))) {
     Node *node = new_num(equal(tok, "true"), tok);
     node->ty = ty_bool;
     *rest = tok->next;
     return node;
   }
 
-  if (equal(tok, "nullptr")) {
+  if (tok->kind == TK_KEYWORD && equal(tok, "nullptr")) {
     *rest = tok->next;
     return new_cast(new_num(0, tok), pointer_to(ty_void));
   }

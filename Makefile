@@ -10,6 +10,10 @@ OBJNAMES=$(notdir $(OBJS))
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.exe)
 
+# A test program can ask for options with a `// flags: ...` line, like
+# test/c23.c's `-std=c23`. test/link.sh and test/asm.sh read it too.
+test_flags=$(shell sed -n 's|^// flags: ||p' test/$(1).c)
+
 # `make install` puts mucc in $(PREFIX)/bin and its headers in
 # $(PREFIX)/lib/mucc/include, where mucc looks for them.
 PREFIX=/usr/local
@@ -26,7 +30,7 @@ mucc: $(OBJS)
 $(OBJS): src/mucc.h
 
 test/%.exe: mucc test/%.c
-	./mucc -Iinclude -Itest -c -o test/$*.o test/$*.c
+	./mucc -Iinclude -Itest $(call test_flags,$*) -c -o test/$*.o test/$*.c
 	$(CC) -pthread -o $@ test/$*.o -xc test/common
 
 test: $(TESTS)
@@ -60,7 +64,7 @@ stage2/%.o: mucc src/%.c src/mucc.h
 
 stage2/test/%.exe: stage2/mucc test/%.c
 	mkdir -p stage2/test
-	./stage2/mucc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
+	./stage2/mucc -Iinclude -Itest $(call test_flags,$*) -c -o stage2/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
 
 test-stage2: $(TESTS:test/%=stage2/test/%)

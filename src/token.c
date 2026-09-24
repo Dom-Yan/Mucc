@@ -290,12 +290,16 @@ static bool is_keyword(Token *tok) {
       "unsigned", "const", "volatile", "auto", "register", "restrict",
       "__restrict", "__restrict__", "_Noreturn", "float", "double",
       "typeof", "asm", "_Thread_local", "__thread", "_Atomic",
-      "__attribute__", "_Static_assert", "true", "false", "nullptr",
-      "constexpr",
+      "__attribute__", "_Static_assert",
     };
+
+    // Before C23, these are ordinary names.
+    static char *c23_kw[] = {"true", "false", "nullptr", "constexpr"};
 
     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
       hashmap_put(&map, kw[i], (void *)1);
+    for (int i = 0; opt_std >= 2023 && i < sizeof(c23_kw) / sizeof(*c23_kw); i++)
+      hashmap_put(&map, c23_kw[i], (void *)1);
   }
 
   return hashmap_get2(&map, tok->loc, tok->len);

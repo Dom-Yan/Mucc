@@ -501,4 +501,5 @@ extern StringArray include_paths;
 extern bool opt_w;
 extern bool opt_fpic;
 extern bool opt_fcommon;
+extern int opt_std;
 extern char *base_file;

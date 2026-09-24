@@ -176,8 +176,9 @@ installed, as a normal user.
 `aligned`, `packed` and `weak` (part of 1.3) and 1.6 are committed
 together: 1.3's layout test needs 1.6 (without it, glibc strips the test's
 attributes), and 1.6 needs 1.3 (glibc's own headers use `aligned` on
-members). Then the rest of 1.3 (verified), and 1.4 and 1.5 (verified
-once CI passes). Next: 1.9, which unblocks git (0.7 and 0.8).
+members). Then the rest of 1.3 (verified), 1.4 and 1.5, and 1.9 (C17
+by default). Next: build git and run its tests, to verify 0.7, 0.8 and
+1.9.
 
 glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
 compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
@@ -341,9 +342,19 @@ silently produces wrong code.
   (mucc's default) but not in C17 (the default of gcc 13, which git is
   tested with). Decide whether mucc's default should stay C23, and make
   `-std=c17` and earlier treat those words as ordinary names.
-  - [ ] Added
-  - [ ] Verified: tests for both modes, and the third-party baseline is no
-    worse.
+  - [x] Added: decided to make C17 the default, as gcc 14 and clang do,
+    since the goal is compiling existing code; `-std=c23` (or `c2x`,
+    `gnu23`) gives C23. `-std=` and `-ansi` set `__STDC_VERSION__`
+    (none for C89). Before C23, `true`, `false`, `nullptr`, `constexpr`,
+    `bool`, `alignas`, `alignof`, `static_assert`, `thread_local` and
+    `typeof_unqual` are ordinary names (`<stdbool.h>` defines `bool`,
+    `true` and `false`), and `int f()` accepts any arguments. `typeof`,
+    `[[...]]` attributes, `auto` type inference and the rest of C23 stay
+    available in every mode, as GNU extensions. A test program can ask
+    for options with a `// flags:` line (`test/c23.c` uses `-std=c23`).
+  - [ ] Verified: tests for both modes (`test/c17.c`, `test/c23.c`,
+    `test/driver.sh`, `test/errors.sh`), and the third-party baseline is
+    no worse: the glibc headers, zlib and Lua pass as before.
 
 - [ ] **1.10 (Stretch) Errors for writing to `const`.** Assigning to a `const`
   object or through a pointer to `const` is an error, as the standard

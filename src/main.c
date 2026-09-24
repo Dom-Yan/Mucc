@@ -19,6 +19,7 @@ StringArray include_paths;
 bool opt_w; // -w: no warnings
 bool opt_fcommon = true;
 bool opt_fpic;
+int opt_std = 2017; // -std=: 1989, 1999, 2011, 2017 or 2023 (C17 by default, as gcc 14)
 
 static FileType opt_x;
 static StringArray opt_include;
@@ -161,6 +162,33 @@ static char *quote_makefile(char *s) {
   return buf;
 }
 
+static bool is_std_option(char *arg) {
+  return !strncmp(arg, "-std=", 5) || !strcmp(arg, "-ansi");
+}
+
+// -std=c17 or gnu17 and so on (the GNU and ISO modes are the same) sets
+// opt_std. It's read before the other options, since predefined macros
+// like __STDC_VERSION__ depend on it and -D and -U come after them.
+static void set_std(int argc, char **argv) {
+  static char *names[] = {"c89", "c90", "c99", "c9x", "c11", "c1x",
+                          "c17", "c18", "c2x", "c23"};
+  static int years[] = {1989, 1989, 1999, 1999, 2011, 2011, 2017, 2017, 2023, 2023};
+
+  for (int i = 1; i < argc; i++) {
+    if (!is_std_option(argv[i]))
+      continue;
+    char *s = argv[i][1] == 'a' ? "c89" : argv[i] + 5;
+    if (!strncmp(s, "gnu", 3))
+      s = format("c%s", s + 3);
+    int k = 0;
+    while (k < 10 && strcmp(s, names[k]))
+      k++;
+    if (k == 10)
+      error("unsupported standard: %s", argv[i]);
+    opt_std = years[k];
+  }
+}
+
 static void parse_args(int argc, char **argv) {
   // Make sure that all command line options that take an argument
   // have an argument.
@@ -215,6 +243,10 @@ static void parse_args(int argc, char **argv) {
       opt_fcommon = false;
       continue;
     }
+
+    // Read by set_std(), before the predefined macros are made.
+    if (is_std_option(argv[i]))
+      continue;
 
     if (!strcmp(argv[i], "-c")) {
       opt_c = true;
@@ -400,7 +432,6 @@ static void parse_args(int argc, char **argv) {
     if (!strncmp(argv[i], "-O", 2) ||
         !strncmp(argv[i], "-W", 2) ||
         !strncmp(argv[i], "-g", 2) ||
-        !strncmp(argv[i], "-std=", 5) ||
         !strcmp(argv[i], "-ffreestanding") ||
         !strcmp(argv[i], "-fno-builtin") ||
         !strcmp(argv[i], "-fno-omit-frame-pointer") ||
@@ -956,6 +987,7 @@ static FileType get_file_type(char *filename) {
 
 int main(int argc, char **argv) {
   atexit(cleanup);
+  set_std(argc, argv);
   init_macros();
   parse_args(argc, argv);
 

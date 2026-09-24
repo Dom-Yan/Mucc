@@ -390,7 +390,7 @@ static long eval_pp_expr(Token *start, Token *expr) {
   for (Token *t = expr; t->kind != TK_EOF; t = t->next) {
     if (t->kind == TK_IDENT) {
       Token *next = t->next;
-      *t = *new_num_token(equal(t, "true") ? 1 : 0, t);
+      *t = *new_num_token(opt_std >= 2023 && equal(t, "true") ? 1 : 0, t);
       t->next = next;
     }
   }
@@ -1483,7 +1483,6 @@ void init_macros(void) {
   define_macro("__STDC_NO_COMPLEX__", "1");
   define_macro("__STDC_UTF_16__", "1");
   define_macro("__STDC_UTF_32__", "1");
-  define_macro("__STDC_VERSION__", "202311L");
   define_macro("__STDC__", "1");
   define_macro("__USER_LABEL_PREFIX__", "");
   define_macro("__alignof__", "_Alignof");
@@ -1505,14 +1504,25 @@ void init_macros(void) {
   define_macro("linux", "1");
   define_macro("unix", "1");
 
-  // C23 keywords that are new spellings of C11 ones, and the GNU
-  // spellings of asm. (true, false and nullptr are real keywords.)
-  define_macro("alignas", "_Alignas");
-  define_macro("alignof", "_Alignof");
-  define_macro("bool", "_Bool");
-  define_macro("static_assert", "_Static_assert");
-  define_macro("thread_local", "_Thread_local");
-  define_macro("typeof_unqual", "typeof");
+  // -std= (C89 has no __STDC_VERSION__)
+  if (opt_std >= 1999)
+    define_macro("__STDC_VERSION__", opt_std == 1999 ? "199901L" :
+                 opt_std == 2011 ? "201112L" : opt_std == 2017 ? "201710L" :
+                 "202311L");
+
+  // C23 keywords that are new spellings of C11 ones. (true, false and
+  // nullptr are real keywords.) Before C23, they're ordinary names, and
+  // headers like <stdbool.h> define some of them.
+  if (opt_std >= 2023) {
+    define_macro("alignas", "_Alignas");
+    define_macro("alignof", "_Alignof");
+    define_macro("bool", "_Bool");
+    define_macro("static_assert", "_Static_assert");
+    define_macro("thread_local", "_Thread_local");
+    define_macro("typeof_unqual", "typeof");
+  }
+
+  // The GNU spellings of asm
   define_macro("__asm__", "asm");
   define_macro("__asm", "asm");
 

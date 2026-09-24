@@ -38,7 +38,7 @@ echo "testing asm asm-forms.s ... passed"
 n=0
 for f in test/*.c; do
     for pic in "" -fPIC; do
-        $mucc $pic -Iinclude -Itest -S -o $tmp/t.s $f 2> /dev/null || continue
+        $mucc $pic -Iinclude -Itest $(sed -n 's|^// flags: ||p' $f) -S -o $tmp/t.s $f 2> /dev/null || continue
         check $tmp/t.s "$f $pic"
         n=$((n+1))
     done
