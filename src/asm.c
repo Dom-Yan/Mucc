@@ -1996,8 +1996,10 @@ bool assemble_text(char *src, char *path, char **why) {
   cur = text;
   read_input(src);
 
-  // Mark the stack as not executable, as gcc does.
-  new_section(".note.GNU-stack", SHT_PROGBITS, 0);
+  // Mark the stack as not executable, as gcc does. mucc's own output
+  // already asks for this section; a hand-written .s file may not.
+  if (!find_section(".note.GNU-stack"))
+    new_section(".note.GNU-stack", SHT_PROGBITS, 0);
 
   for (int i = 0; i < nsections; i++)
     layout(sections[i]);

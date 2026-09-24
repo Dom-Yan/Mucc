@@ -2286,5 +2286,10 @@ void codegen(Obj *prog, FILE *out) {
   emit_data(prog);
   emit_text(prog);
 
+  // Mark the stack as not executable, as gcc does. The built-in assembler
+  // would add this anyway, but GNU `as` (used for asm() it can't handle)
+  // needs to be told, or ld warns that the stack is executable.
+  println("  .section .note.GNU-stack,\"\",@progbits");
+
   fwrite(out_buf, 1, out_len, out);
 }
