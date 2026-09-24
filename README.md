@@ -236,7 +236,7 @@ functions that can reach their end without a `return`.
 
 - C++, or any target but x86-64 Linux with glibc
 - These GNU attributes: `vector_size`, `mode`, `ifunc`, `naked`, `target`
-  and a few more; `aligned` above 16 on a local variable (so far)
+  and a few more
 - GNU `asm` with operands, `_Complex`, `__int128`, `_BitInt`,
   `<stdckdint.h>`, decimal floats, K&R-style definitions
 - Optimization beyond register variables and constant folding

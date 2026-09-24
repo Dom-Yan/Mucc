@@ -1685,17 +1685,14 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     // __attribute__((unused)) turns off the unused-variable warning.
     bool is_unused = da.is_unused || (attr && attr->is_unused);
 
-    // aligned(N) raises the variable's alignment. The stack is only
-    // 16-byte aligned, so more than that works only for a static.
+    // aligned(N) raises the variable's alignment. (Above 16, see
+    // assign_lvar_offsets() in cgen.c.)
     Attrs all = attr ? attr->gnu : (Attrs){};
     merge_attrs(&all, &da);
     no_global_attrs(&all, "a local variable");
     no_fn_attrs(&all, "a local variable");
     if (all.is_packed)
       error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
-    if (all.align > 16 && !(attr && attr->is_static))
-      error_tok(all.layout_tok,
-                "alignment above 16 on a local variable is not supported yet");
     Token *name = ty->name;
     bool is_constexpr = attr && attr->is_constexpr;
     if (is_constexpr && !equal(tok, "="))

@@ -37,6 +37,29 @@ int g1 __attribute__((aligned(64)));
 __attribute__((aligned(32))) static char g2;
 char g3 [[gnu::aligned(128)]];
 
+// Locals aligned above 16, of each kind, in a recursive function: the
+// result counts misaligned addresses and wrong values, so it must be 0.
+struct __attribute__((aligned(32))) over32 { int x, y; };
+typedef int ai64 __attribute__((aligned(64)));
+static struct over32 make_over(int x) { struct over32 s = {x, x + 1}; return s; }
+static int overaligned_locals(int depth) {
+  char pad = 1;
+  _Alignas(32) int a;
+  __attribute__((aligned(64))) char b[3];
+  struct over32 s = {0};
+  ai64 c = 5;
+  struct over32 r = make_over(depth);
+  int *pa = &a;
+  *pa = depth;
+  s.x = 7;
+  int bad = (uintptr_t)&a % 32 + (uintptr_t)b % 64 + (uintptr_t)&s % 32 +
+            (uintptr_t)&c % 64 + (uintptr_t)&r % 32;
+  if (depth > 0)
+    bad += overaligned_locals(depth - 1);
+  return bad + (a != depth) + (s.x != 7) + (s.y != 0) + (c != 5) +
+         (r.y != depth + 1) + (pad != 1);
+}
+
 #define SHOW(t, m) \
   printf("%-10s size=%zu align=%zu offset(%s)=%zu\n", #t, sizeof(t), \
          _Alignof(t), #m, offsetof(t, m))
@@ -74,6 +97,8 @@ int main(void) {
          (int)((uintptr_t)&g2 % 32), (int)((uintptr_t)&g3 % 128));
   printf("sl %% 64 = %d, l16 %% 16 = %d, l8 %% 8 = %d\n", (int)((uintptr_t)&sl % 64),
          (int)((uintptr_t)&l16 % 16), (int)((uintptr_t)&l8 % 8));
+
+  printf("overaligned locals: %d\n", overaligned_locals(3));
 
   // Like every program in test/, which test/link.sh runs too.
   printf("OK\n");

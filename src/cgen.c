@@ -211,6 +211,16 @@ static char *reg_ax(int sz) {
 
 //---------- Addresses, loads and stores -------------------------------------
 
+// Puts the address of local `var` in `reg`. One aligned above 16 is away
+// from the frame, and its slot holds its address (see
+// assign_lvar_offsets()).
+static void addr_of_local(Obj *var, char *reg) {
+  if (var->is_overaligned)
+    println("  mov %d(%%rbp), %s", var->offset, reg);
+  else
+    println("  lea %d(%%rbp), %s", var->offset, reg);
+}
+
 // Compute the absolute address of a given node.
 // It's an error if a given node does not reside in memory.
 static void gen_addr(Node *node) {
@@ -229,7 +239,7 @@ static void gen_addr(Node *node) {
 
     // Local variable
     if (node->var->is_local) {
-      println("  lea %d(%%rbp), %%rax", node->var->offset);
+      addr_of_local(node->var, "%rax");
       return;
     }
 
@@ -684,7 +694,8 @@ static bool is_int_or_ptr(Type *ty) {
 // A local scalar variable, whose value can be read straight from the
 // stack frame. Returns NULL for anything else.
 static Obj *local_scalar(Node *node) {
-  if (node->kind == ND_VAR && node->var->is_local && !is_aggregate(node->ty))
+  if (node->kind == ND_VAR && node->var->is_local && !is_aggregate(node->ty) &&
+      !node->var->is_overaligned)
     return node->var;
   return NULL;
 }
@@ -941,7 +952,7 @@ static int push_args(Node *node) {
   // If the return type is a large struct/union, the caller passes
   // a pointer to a buffer as if it were the first argument.
   if (node->ret_buffer && node->ty->size > 16) {
-    println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
+    addr_of_local(node->ret_buffer, "%rax");
     push();
   }
 
@@ -1282,7 +1293,8 @@ static void gen_expr(Node *node) {
     } else {
       char addr[32];
       Node *base = node->lhs;
-      if (base->kind == ND_VAR && base->var->is_local && base->ty->kind != TY_VLA) {
+      if (base->kind == ND_VAR && base->var->is_local && base->ty->kind != TY_VLA &&
+          !base->var->is_overaligned) {
         snprintf(addr, sizeof(addr), "%d(%%rbp)", base->var->offset + mem->offset);
       } else {
         gen_addr(base);
@@ -1375,7 +1387,7 @@ static void gen_expr(Node *node) {
 
     // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
     println("  mov $%d, %%rcx", node->var->ty->size);
-    println("  lea %d(%%rbp), %%rdi", node->var->offset);
+    addr_of_local(node->var, "%rdi");
     println("  mov $0, %%al");
     println("  rep stosb");
     return;
@@ -1974,6 +1986,13 @@ static void assign_registers(Obj *fn) {
 
 //---------- Stack frames and the data section -------------------------------
 
+static bool is_param(Obj *fn, Obj *var) {
+  for (Obj *p = fn->params; p; p = p->next)
+    if (p == var)
+      return true;
+  return false;
+}
+
 // Assign offsets to local variables.
 static void assign_lvar_offsets(Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
@@ -2032,6 +2051,19 @@ static void assign_lvar_offsets(Obj *prog) {
       // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf.
       int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
         ? MAX(16, var->align) : var->align;
+
+      // %rbp is only 16-byte aligned, so a local aligned above that gets
+      // an 8-byte slot here, and the prologue carves its storage out of
+      // the stack, aligned, and puts the address in the slot. (Not for a
+      // parameter, whose value arrives in its slot.)
+      if (align > 16 && var->ty->kind != TY_VLA && !is_param(fn, var)) {
+        var->is_overaligned = true;
+        align = 8;
+        bottom += 8;
+        bottom = align_to(bottom, align);
+        var->offset = -bottom;
+        continue;
+      }
 
       bottom += var->ty->size;
       bottom = align_to(bottom, align);
@@ -2240,6 +2272,15 @@ static void emit_text(Obj *prog) {
     println("  push %%rbp");
     println("  mov %%rsp, %%rbp");
     println("  sub $%d, %%rsp", fn->stack_size);
+
+    // Locals aligned above 16 (see assign_lvar_offsets())
+    for (Obj *var = fn->locals; var; var = var->next) {
+      if (!var->is_overaligned)
+        continue;
+      println("  sub $%d, %%rsp", var->ty->size);
+      println("  and $%d, %%rsp", -var->align);
+      println("  mov %%rsp, %d(%%rbp)", var->offset);
+    }
     println("  mov %%rsp, %d(%%rbp)", fn->alloca_bottom->offset);
     for (int i = 0; i < fn->nregs; i++)
       println("  mov %s, %d(%%rbp)", regs64[i], fn->regs_offset + i * 8);
