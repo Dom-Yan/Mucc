@@ -309,6 +309,29 @@ echo 'int main() {}' | $mucc -c -o $tmp/baz.o -xc -
 cc -Xlinker -z -Xlinker muldefs -Xlinker --gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
 check -Xlinker
 
+# -march= and -mtune= are accepted and ignored
+echo 'int main() { return 0; }' > $tmp/march.c
+$mucc -march=native -mtune=generic -o $tmp/march $tmp/march.c && $tmp/march
+check '-march= -mtune='
+
+# An unknown extension is an object file for the linker, as with gcc
+echo 'int seven(void) { return 7; }' > $tmp/seven-lo.c
+echo 'int seven(void); int main() { return seven(); }' > $tmp/main-lo.c
+$mucc -c -o $tmp/seven.lo $tmp/seven-lo.c
+$mucc -o $tmp/lo $tmp/main-lo.c $tmp/seven.lo
+$tmp/lo
+[ $? = 7 ]
+check '.lo input'
+$mucc -static -o $tmp/lo-static $tmp/main-lo.c $tmp/seven.lo
+$tmp/lo-static
+[ $? = 7 ]
+check '.lo input (static)'
+
+# ... but a source file mucc can't compile is a clear error
+echo '' > $tmp/foo.S
+$mucc -c $tmp/foo.S 2>&1 | grep -q 'unsupported file type'
+check 'unsupported file type'
+
 # Built-in assembler: a .s file and a C file link together
 printf '  .globl answer\n  .text\nanswer:\n  mov $42, %%eax\n  ret\n' > $tmp/answer.s
 printf 'int answer(void);\nint main(void) { return answer(); }\n' > $tmp/main.c

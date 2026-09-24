@@ -166,7 +166,9 @@ run time. mucc links those itself; `-fuse-ld=bfd` (any value) makes it use
 It accepts the usual flags: `-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-U`,
 `-static`, `-shared`, `-fPIC`, `-l`, `-L`, `-M*`, `-w`,
 `-fno-integrated-as`, `-fuse-ld=` and more (see `src/main.c`). `-O`, `-g`,
-`-std=` and `-W*` (except `-w`) are accepted and ignored.
+`-std=`, `-march=`, `-mtune=` and `-W*` (except `-w`) are accepted and
+ignored. As with gcc, a file with an extension mucc doesn't know (such as
+libtool's `.lo`) is passed to the linker as an object file.
 
 ## Features
 

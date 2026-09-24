@@ -93,6 +93,17 @@ Checked on 2026-09-23 against the source:
   - [ ] Verified: the table is filled in, with the first error for each
     failure.
 
+- [x] **0.4 Driver fixes the baseline found.** Accept and ignore `-march=`
+  and `-mtune=` (Lua's makefile passes `-march=native`; mucc only emits
+  baseline x86-64, which every x86-64 CPU runs). Pass files with unknown
+  extensions to the linker as objects, as gcc does (zlib's libtool-style
+  `.lo` files), while sources mucc can't compile (`.S`, C++, headers) get a
+  clear error.
+  - [x] Added
+  - [x] Verified: new `test/driver.sh` cases fail with the old mucc and pass
+    with the new one (including `.lo` with `-static`); `make test-all` and
+    `make difftest N=300` pass.
+
 | Project | Builds | Own tests pass | First failure |
 | --- | --- | --- | --- |
 | SQLite | | | |
