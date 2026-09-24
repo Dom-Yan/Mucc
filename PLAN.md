@@ -104,6 +104,19 @@ Checked on 2026-09-23 against the source:
     with the new one (including `.lo` with `-static`); `make test-all` and
     `make difftest N=300` pass.
 
+- [x] **0.5 Parameters in scope for later parameters (C99).** The baseline
+  found that `void f(int n, int a[n])` failed with "undeclared identifier",
+  which broke every program using glibc's `<regex.h>` (git, for one).
+  Parameters now have their own scope; a definition's size expressions
+  refer to the real parameters, and `int m[r][c]` gets its row size on
+  entry. Also: `int a[n]` parameters become pointers like fixed arrays do,
+  `[*]` is accepted in prototypes, and `const`/`volatile` inside `[]`.
+  - [x] Added
+  - [x] Verified: new cases in `test/vla.c` (indexing, `sizeof`, pointer
+    arithmetic on `int m[r][c]` parameters) and a `regexec` call in
+    `test/stdhdr.c`, all failing to compile with the old mucc; `make
+    test-all` and `make difftest N=300` pass.
+
 | Project | Builds | Own tests pass | First failure |
 | --- | --- | --- | --- |
 | SQLite | | | |
