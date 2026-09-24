@@ -541,6 +541,22 @@ int main(void) {
 }
 EOF
 
+expect_ok 'glibc getrlimit64 rename, struct passed by pointer' <<'EOF'
+#define _FILE_OFFSET_BITS 64
+#include <sys/resource.h>
+int main(void) {
+  struct rlimit r;
+  return getrlimit(RLIMIT_NOFILE, &r);
+}
+EOF
+
+expect_error "4:17: error: cannot convert 'struct s *' to 'struct s64 *' in initialization (use a cast if this is intended)" <<'EOF'
+struct s { int a; };
+struct s64 { long a; };
+struct s x;
+struct s64 *p = &x;
+EOF
+
 # Unused parameters get no warning (as with gcc without -Wextra)
 expect_clean 'unused parameter' <<'EOF'
 int f(int unused, int n, int a[n]) { return 0; }

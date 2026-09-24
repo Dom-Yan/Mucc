@@ -401,11 +401,31 @@ static bool is_null_const(Node *node) {
   return node->kind == ND_NUM && is_integer(node->ty) && node->val == 0;
 }
 
+// For compilers other than gcc, glibc's large-file support renames
+// functions with macros, like `#define getrlimit getrlimit64`, so a
+// `struct rlimit *` reaches a `struct rlimit64 *` parameter. The two have
+// the same layout: allow `struct X` and `struct X64` of the same size.
+static bool is_large_file_pair(Type *a, Type *b) {
+  if (a->kind != TY_STRUCT || b->kind != TY_STRUCT || !a->tag || !b->tag ||
+      a->size != b->size)
+    return false;
+  if (a->tag->len > b->tag->len) {
+    Type *t = a;
+    a = b;
+    b = t;
+  }
+  return b->tag->len == a->tag->len + 2 &&
+         !strncmp(a->tag->loc, b->tag->loc, a->tag->len) &&
+         !strncmp(b->tag->loc + a->tag->len, "64", 2);
+}
+
 // Can a pointer to `from` be stored in a pointer to `to` without a cast?
 static bool pointee_ok(Type *to, Type *from) {
   if (to->kind == TY_VOID || from->kind == TY_VOID)
     return true;
   if (is_compatible(to, from))
+    return true;
+  if (is_large_file_pair(to, from))
     return true;
 
   // Differing only in signedness (char * vs unsigned char *) is
