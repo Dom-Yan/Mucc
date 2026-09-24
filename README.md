@@ -75,13 +75,14 @@ AMD processor, old or new.
 
 | | |
 | --- | --- |
-| Compiler source | 14,794 lines of C in 12 files (11,253 without blank and comment lines) |
-| Largest file | `src/parser.c`, 4,081 lines |
+| Compiler source | 14,896 lines of C in 12 files (11,316 without blank and comment lines) |
+| Largest file | `src/parser.c`, 4,148 lines |
 | Headers it ships | 8 (`stddef.h`, `stdarg.h`, `stdatomic.h`, ...), 276 lines |
-| Binary size | 945 KB (built by gcc with `-O2 -g`) |
-| Test programs | 43, with 1,517 assertions |
-| Other checks | 176 command-line, error-message, assembler and linker cases |
-| Largest program it builds | SQLite 3.45, about 285,000 lines, passing its own tests |
+| Binary size | 948 KB (built by gcc with `-O2 -g`) |
+| Test programs | 43, with 1,529 assertions |
+| Other checks | 186 command-line, error-message, assembler and linker cases |
+| Largest program it builds | CPython 3.10, about 450,000 lines of C; 387 of its 396 test suites pass (gcc: 391 on the same machine) |
+| Other real programs | SQLite 3.34.0 (249,451 tests, 0 errors), Lua 5.4.7, zlib 1.3.1, libpng and TinyCC each pass their own tests |
 
 Speed, measured on WSL 2 (Ubuntu, gcc 15.2), one file at a time:
 
@@ -225,6 +226,12 @@ functions that can reach their end without a `return`.
 - Optimization beyond register variables and constant folding
 - Debug info for variables and types
 - `const` enforcement (except for `constexpr`)
+
+**Known issue:** glibc's headers drop `__attribute__` for compilers other
+than gcc and clang, so structs that glibc marks `packed` get the wrong
+layout under mucc. The one found so far is `struct epoll_event` (16 bytes
+instead of 12), which breaks programs that use epoll. The fix is item 1.6 in
+[PLAN.md](PLAN.md).
 
 ## Logistics
 
