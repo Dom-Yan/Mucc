@@ -86,12 +86,27 @@ Checked on 2026-09-23 against the source:
     script's repository answered `git ls-remote` over HTTPS. (The full
     clones happen in 0.3.)
 
-- [ ] **0.3 Record a baseline.** Run every third-party script and write the
+- [x] **0.3 Record a baseline.** Run every third-party script and write the
   result in the table below. This decides which GNU attributes and features
   matter, from real code instead of guesses.
-  - [ ] Added
-  - [ ] Verified: the table is filled in, with the first error for each
+  - [x] Added: `test/thirdparty/lua.sh` and `zlib.sh`, which the README's
+    claims had no script for.
+  - [x] Verified: the table is filled in, with the first error for each
     failure.
+
+Baseline: mucc at commit `f6817e9`, run on 2026-09-24 in an Ubuntu 24.04
+container (the system CI uses) with each project's build dependencies
+installed, as a normal user.
+
+| Project | Builds | Own tests pass | First failure |
+| --- | --- | --- | --- |
+| SQLite 3.34.0 (230,944 lines) | Yes | Yes: 249,451 tests, 0 errors; 45,957 fuzz cases, 0 errors | None. (`configure` runs `mucc -dumpmachine`, which was rejected; harmless here, fixed in 0.6.) |
+| Lua 5.4.7 | No | Yes, after 0.4: the full suite ends "final OK" | `unknown argument: -march=native` (fixed in 0.4) |
+| zlib 1.3.1 | Static library only | Yes, after 0.4: static and shared tests pass | `unknown file extension: adler32.lo` (fixed in 0.4) |
+| libpng | Yes | Yes | None |
+| Git | No | Not reached | `<regex.h>`: `undeclared identifier '__nmatch'`, a parameter used in a later parameter's size (fixed in 0.5) |
+| CPython 3.10 dev (about 450,000 lines of C) | Yes, except the `_decimal` module | 387 of 396 suites. gcc passes 391 on the same machine; the 5 it also fails are environment problems (OpenSSL 3 against old code). | `_decimal`: `asm` with operands (2.3). `test_epoll`, `test_selectors`: glibc strips `packed` for mucc, so `struct epoll_event` has the wrong layout (1.6). `test_distutils`, `test_peg_generator`: not yet diagnosed (1.12). |
+| TinyCC | Yes | Yes | None |
 
 - [x] **0.4 Driver fixes the baseline found.** Accept and ignore `-march=`
   and `-mtune=` (Lua's makefile passes `-march=native`; mucc only emits
@@ -117,15 +132,30 @@ Checked on 2026-09-23 against the source:
     `test/stdhdr.c`, all failing to compile with the old mucc; `make
     test-all` and `make difftest N=300` pass.
 
-| Project | Builds | Own tests pass | First failure |
-| --- | --- | --- | --- |
-| SQLite | | | |
-| Lua | | | |
-| zlib | | | |
-| libpng | | | |
-| Git | | | |
-| CPython | | | |
-| TinyCC | | | |
+- [x] **0.6 `-dumpmachine`.** Prints `x86_64-linux-gnu`, as gcc does.
+  SQLite's `configure` (through `dpkg-architecture`) asks for it.
+  - [x] Added
+  - [x] Verified: new `test/driver.sh` case; the old mucc rejected the flag;
+    `make test-all` and `make difftest N=300` pass.
+
+- [ ] **0.7 Two regressions from 0.5, and two older bugs they uncovered.**
+  Re-running git after 0.5 showed "cannot convert `struct archiver *` to
+  `struct archiver *`":
+  - (Regression) A struct's tag was only registered after its members, so
+    `struct S { int (*f)(struct S *); };` declared a second, separate
+    `struct S` inside the parameter list. Before 0.5 this happened to work.
+    The tag is now in scope from the `{`, as C requires.
+  - (Regression) Unused parameters got "unused variable" warnings.
+  - (Older) Every `-I` directory counted as a system header directory, so
+    type errors and warnings in those headers were hidden, and `-MMD` left
+    them out of `.d` files. This is also why the test suite, built with
+    `-Itest`, didn't catch the first regression.
+  - (Older) `-MD`/`-MMD` with `-c -o obj/x.o` wrote `x.d` in the current
+    directory instead of `obj/x.d` as gcc does.
+  - [x] Added
+  - [ ] Verified: new `test/errors.sh` and `test/driver.sh` cases each fail
+    with the 0.5 commit (`542e4c0`) and pass now; `make test-all` and `make
+    difftest N=300` pass; git builds and passes its tests.
 
 ## Phase 1: GNU attributes and the small C23 features
 
@@ -187,36 +217,56 @@ silently produces wrong code.
   - [ ] Added
   - [ ] Verified: a test for supported, ignored and unsupported names.
 
-- [ ] **1.6 C23 `enum E : type`.** A fixed underlying type, which sets the
+- [ ] **1.6 Keep glibc's attributes.** glibc's `<sys/cdefs.h>` defines
+  `__attribute__(x)` as nothing for any compiler that isn't gcc, clang or
+  tcc, so today mucc never sees glibc's `packed` and `aligned`. Found by
+  the baseline: under mucc, `struct epoll_event` is 16 bytes with its data
+  at offset 8; the kernel and gcc use 12 and 4, so every epoll program
+  built by mucc reads the wrong data. Once 1.1 to 1.4 are verified, undo
+  that `#define` (for example, a `sys/cdefs.h` in mucc's `include/` that
+  includes glibc's and then `#undef __attribute__`).
+  - [ ] Added
+  - [ ] Verified: a new test compares `sizeof`, `_Alignof` and member
+    offsets of glibc's structs between gcc and mucc (starting with
+    `struct epoll_event`: 12 and 4), and CPython's `test_epoll` and
+    `test_selectors` pass.
+
+- [ ] **1.7 C23 `enum E : type`.** A fixed underlying type, which sets the
   size, signedness and range checks of the enum.
   - [ ] Added
   - [ ] Verified: tests in `test/c23.c` for size, sign, out-of-range errors.
 
-- [ ] **1.7 `<stdckdint.h>`.** `ckd_add`, `ckd_sub` and `ckd_mul`, and gcc's
+- [ ] **1.8 `<stdckdint.h>`.** `ckd_add`, `ckd_sub` and `ckd_mul`, and gcc's
   `__builtin_add_overflow`, `__builtin_sub_overflow` and
   `__builtin_mul_overflow`, which share the same code.
   - [ ] Added
   - [ ] Verified: tests at the limits of every integer type, with results
     compared against gcc.
 
-- [ ] **1.8 C23 `int f()` means `int f(void)`.** Keep the old meaning under
+- [ ] **1.9 C23 `int f()` means `int f(void)`.** Keep the old meaning under
   `-std=c89` through `-std=c17`, since old code depends on it. `-std=`,
   ignored today, starts to count for this rule.
   - [ ] Added
   - [ ] Verified: tests for both modes, and the third-party baseline is no
     worse.
 
-- [ ] **1.9 (Stretch) Errors for writing to `const`.** Assigning to a `const`
+- [ ] **1.10 (Stretch) Errors for writing to `const`.** Assigning to a `const`
   object or through a pointer to `const` is an error, as the standard
   requires.
   - [ ] Added
   - [ ] Verified: `test/errors.sh` cases, and all tests and third-party
     builds still compile.
 
-- [ ] **1.10 Re-run the baseline.** Update the Phase 0 table and the README's
+- [ ] **1.11 Re-run the baseline.** Update the Phase 0 table and the README's
   lists of what mucc does and doesn't do.
   - [ ] Added
   - [ ] Verified: table and README match the results.
+
+- [ ] **1.12 Diagnose CPython's `test_distutils` and `test_peg_generator`.**
+  Both pass with gcc and fail with mucc, and both compile C during the
+  test. Find the cause, and fix it or add it to this plan.
+  - [ ] Added
+  - [ ] Verified: both pass, or the cause is written here with its own item.
 
 ## Phase 2: prepare for a bundled C library
 
