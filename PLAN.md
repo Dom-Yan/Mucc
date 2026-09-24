@@ -180,10 +180,9 @@ Git now builds with mucc and passes its tests, the same as gcc, which
 verified 0.7, 0.8 and 1.9. Phase 0 is done.
 
 Left in Phase 1: 1.6 (verify with CPython's `test_epoll` and
-`test_selectors`), 1.7 (`enum E : type`), 1.8 (`<stdckdint.h>`), 1.10
-(stretch: `const` errors), 1.11 (re-run the baseline), 1.12 (CPython's
-`test_distutils` and `test_peg_generator`) and 1.13 (locals aligned above
-16).
+`test_selectors`), 1.7 (added; verified once CI passes), 1.11 (re-run the baseline),
+1.12 (CPython's `test_distutils` and `test_peg_generator`) and 1.13
+(locals aligned above 16). 1.8 and 1.10 were dropped as not needed.
 
 glibc headers, re-checked: of the 123 in `/usr/include/*.h` that gcc
 compiles alone, mucc compiles all but `<complex.h>` and `<tgmath.h>`
@@ -330,15 +329,14 @@ silently produces wrong code.
 
 - [ ] **1.7 C23 `enum E : type`.** A fixed underlying type, which sets the
   size, signedness and range checks of the enum.
-  - [ ] Added
-  - [ ] Verified: tests in `test/c23.c` for size, sign, out-of-range errors.
+  - [x] Added: also `enum E : type;` with no list, and the constants take
+    the enum's type (so `sizeof` of one can be 1 or 8). `struct { enum E :
+    3; }` is still a bit-field. Available in every mode, as with gcc.
+  - [ ] Verified: tests in `test/c23.c` for size, sign, out-of-range errors
+    (and `test/errors.sh`); the same results as gcc 15 for all of them.
 
-- [ ] **1.8 `<stdckdint.h>`.** `ckd_add`, `ckd_sub` and `ckd_mul`, and gcc's
-  `__builtin_add_overflow`, `__builtin_sub_overflow` and
-  `__builtin_mul_overflow`, which share the same code.
-  - [ ] Added
-  - [ ] Verified: tests at the limits of every integer type, with results
-    compared against gcc.
+- **1.8 Dropped** (see "Not planned"): `<stdckdint.h>` and the
+  `__builtin_*_overflow` builtins.
 
 - [x] **1.9 C23 `int f()` means `int f(void)`.** Keep the old meaning under
   `-std=c89` through `-std=c17`, since old code depends on it. `-std=`,
@@ -363,12 +361,7 @@ silently produces wrong code.
     builds and passes its tests. (gcc 15, which defaults to C23, fails on
     git the way mucc used to; it needs `-std=gnu17`.)
 
-- [ ] **1.10 (Stretch) Errors for writing to `const`.** Assigning to a `const`
-  object or through a pointer to `const` is an error, as the standard
-  requires.
-  - [ ] Added
-  - [ ] Verified: `test/errors.sh` cases, and all tests and third-party
-    builds still compile.
+- **1.10 Dropped** (see "Not planned"): errors for writing to `const`.
 
 - [ ] **1.11 Re-run the baseline.** Update the Phase 0 table and the README's
   lists of what mucc does and doesn't do.
@@ -512,7 +505,14 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 
 These stay out unless a real program needs them:
 
-- `_Complex` and `_BitInt`: large, and rare in real code.
+- `_Complex` and `_BitInt`: large, and rare in real code. musl's
+  `src/complex/` is left out of the bundled libc (Phase 3).
+- `<stdckdint.h>` and `__builtin_add_overflow` and the like (was 1.8):
+  none of the baseline projects need them. Code that checks with
+  `__has_builtin` or `__GNUC__` (which mucc doesn't define) uses its own
+  fallback.
+- Errors for writing to `const` (was 1.10, a stretch goal): a check, not
+  something real code needs, and it would touch much of the type checker.
 - Dynamic linking in mucc's own linker: `--libc=system` uses `ld` for that.
 - Building mucc from source without `make`: users get the binary; building
   from source may still use `make`.

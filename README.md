@@ -194,6 +194,7 @@ takes any arguments instead of meaning `int f(void)`:
 - `auto x = expr;` and `constexpr` variables
 - `#embed` with `limit`, `prefix`, `suffix` and `if_empty`, and `__has_embed`
 - `static_assert`, `alignas`, `alignof`, `thread_local`, `typeof_unqual`
+- `enum E : type`, with a fixed underlying type
 - `[[attributes]]`, `unreachable()`, digit separators (`1'000'000`)
 - `#elifdef`, `#elifndef`, `#warning`, `__has_include`, empty initializers `{}`
 
@@ -236,7 +237,7 @@ functions that can reach their end without a `return`.
 - C++, or any target but x86-64 Linux with glibc
 - These GNU attributes: `vector_size`, `mode`, `ifunc`, `naked`, `target`
   and a few more; `aligned` above 16 on a local variable (so far)
-- GNU `asm` with operands, `_Complex`, `__int128`, `_BitInt`, `enum E : type`,
+- GNU `asm` with operands, `_Complex`, `__int128`, `_BitInt`,
   `<stdckdint.h>`, decimal floats, K&R-style definitions
 - Optimization beyond register variables and constant folding
 - Debug info for variables and types

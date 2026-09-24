@@ -141,7 +141,26 @@ end:
   return sum;
 }
 
+// enum E : type fixes the enum's size and sign, and its constants' type.
+enum E8 : unsigned char { E8A, E8B = 255 };
+enum E64 : long { E64A = 1L << 40 };
+enum ES : short { ESA = -5 };
+enum EF : unsigned;  // complete without a list
+struct EnumBits { enum E8 : 3; enum E8 f : 2; }; // bit-fields, not fixed types
+
 int main() {
+  ASSERT(1, sizeof(enum E8));
+  ASSERT(8, sizeof(enum E64));
+  ASSERT(2, sizeof(enum ES));
+  ASSERT(4, sizeof(enum EF));
+  ASSERT(1, (enum E8)-1 > 0);
+  ASSERT(1, (enum ES)-1 < 0);
+  ASSERT(1, sizeof(E8A));
+  ASSERT(8, sizeof(E64A));
+  ASSERT(1, E64A == 1L << 40);
+  ASSERT(-5, ESA);
+  ASSERT(1, sizeof(struct EnumBits));
+
   // bool, true, false
   bool b = true;
   ASSERT(1, b);
