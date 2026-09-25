@@ -95,6 +95,61 @@ static bool in_include_paths(char *dir) {
   return false;
 }
 
+// A C library mucc compiles and links against: where its headers,
+// startup files and libraries are, and what else to link. This is the
+// only place with system paths. --libc=system, the only one yet, is
+// glibc as installed, with gcc's startup files and runtime library.
+typedef struct {
+  char *name;          // as in --libc=
+  char **include_dirs; // its headers, searched after mucc's own
+  char **crt_dirs;     // the first with crti.o has crt1.o, crti.o, crtn.o
+  char **gcc_dirs;     // the first match has crtbegin.o, crtend.o, libgcc
+  char **lib_dirs;     // searched for -l, after -L and the gcc directory
+  char **static_libs;  // linked after the inputs with -static
+  char **shared_libs;  // otherwise (in ld's syntax)
+  char *dynamic_linker;
+} Libc;
+
+static char *system_include_dirs[] = {
+  "/usr/local/include", "/usr/include/x86_64-linux-gnu", "/usr/include", NULL,
+};
+static char *system_crt_dirs[] = {
+  "/usr/lib/x86_64-linux-gnu", "/usr/lib64", NULL,
+};
+static char *system_gcc_dirs[] = {
+  "/usr/lib/gcc/x86_64-linux-gnu/*",
+  "/usr/lib/gcc/x86_64-pc-linux-gnu/*", // Gentoo
+  "/usr/lib/gcc/x86_64-redhat-linux/*", // Fedora
+  NULL,
+};
+static char *system_lib_dirs[] = {
+  "/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/lib64",
+  "/usr/lib/x86_64-pc-linux-gnu", "/usr/lib/x86_64-redhat-linux", "/usr/lib",
+  "/lib", NULL,
+};
+static char *system_static_libs[] = {"-lgcc", "-lgcc_eh", "-lc", NULL};
+static char *system_shared_libs[] = {
+  "-lc", "-lgcc", "--as-needed", "-lgcc_s", "--no-as-needed", NULL,
+};
+
+static Libc libcs[] = {
+  {"system", system_include_dirs, system_crt_dirs, system_gcc_dirs,
+   system_lib_dirs, system_static_libs, system_shared_libs,
+   "/lib64/ld-linux-x86-64.so.2"},
+};
+
+static Libc *libc = &libcs[0];
+
+static void set_libc(char *name) {
+  for (int i = 0; i < sizeof(libcs) / sizeof(*libcs); i++) {
+    if (!strcmp(libcs[i].name, name)) {
+      libc = &libcs[i];
+      return;
+    }
+  }
+  error("unknown C library: --libc=%s", name);
+}
+
 static void add_default_include_paths(char *argv0) {
   // mucc's own headers are in ./include next to the binary when run from
   // the source tree, or in ../lib/mucc/include after `make install`.
@@ -103,12 +158,14 @@ static void add_default_include_paths(char *argv0) {
   if (!file_exists(inc))
     inc = format("%s/../lib/mucc/include", dir);
 
-  // mucc's headers and these are the system headers: -MMD leaves them
-  // out, and warnings and some type checks don't apply to them. -I
-  // directories, added to include_paths before this runs, are not.
-  char *sys[] = {"/usr/local/include", "/usr/include/x86_64-linux-gnu",
-                 "/usr/include"};
-  int nsys = sizeof(sys) / sizeof(*sys);
+  // mucc's headers and the C library's are the system headers: -MMD
+  // leaves them out, and warnings and some type checks don't apply to
+  // them. -I directories, added to include_paths before this runs, are
+  // not.
+  char **sys = libc->include_dirs;
+  int nsys = 0;
+  while (sys[nsys])
+    nsys++;
 
   // As with gcc, -I of a system directory is ignored, and it's searched
   // in its place, after mucc's headers. (CPython's build passes
@@ -413,6 +470,11 @@ static void parse_args(int argc, char **argv) {
 
     if (!strncmp(argv[i], "-fuse-ld=", 9)) {
       opt_system_ld = true;
+      continue;
+    }
+
+    if (!strncmp(argv[i], "--libc=", 7)) {
+      set_libc(argv[i] + 7);
       continue;
     }
 
@@ -919,40 +981,35 @@ bool file_exists(char *path) {
   return !stat(path, &st);
 }
 
+// Where the C library's crt1.o, crti.o and crtn.o are.
 static char *find_libpath(void) {
-  if (file_exists("/usr/lib/x86_64-linux-gnu/crti.o"))
-    return "/usr/lib/x86_64-linux-gnu";
-  if (file_exists("/usr/lib64/crti.o"))
-    return "/usr/lib64";
+  for (char **dir = libc->crt_dirs; *dir; dir++)
+    if (file_exists(format("%s/crti.o", *dir)))
+      return *dir;
   error("library path is not found");
 }
 
+// Where gcc's crtbegin.o, crtend.o and libgcc are (the latest version).
 static char *find_gcc_libpath(void) {
-  char *paths[] = {
-    "/usr/lib/gcc/x86_64-linux-gnu/*/crtbegin.o",
-    "/usr/lib/gcc/x86_64-pc-linux-gnu/*/crtbegin.o", // For Gentoo
-    "/usr/lib/gcc/x86_64-redhat-linux/*/crtbegin.o", // For Fedora
-  };
-
-  for (int i = 0; i < sizeof(paths) / sizeof(*paths); i++) {
-    char *path = find_file(paths[i]);
+  for (char **dir = libc->gcc_dirs; *dir; dir++) {
+    char *path = find_file(format("%s/crtbegin.o", *dir));
     if (path)
       return dirname(path);
   }
-
   error("gcc library path is not found");
 }
 
 // Where libraries (libc.a, libgcc.a, ...) are searched, after -L dirs.
 static void add_library_paths(StringArray *arr, char *gcc_libpath) {
   strarray_push(arr, gcc_libpath);
-  strarray_push(arr, "/usr/lib/x86_64-linux-gnu");
-  strarray_push(arr, "/usr/lib64");
-  strarray_push(arr, "/lib64");
-  strarray_push(arr, "/usr/lib/x86_64-pc-linux-gnu");
-  strarray_push(arr, "/usr/lib/x86_64-redhat-linux");
-  strarray_push(arr, "/usr/lib");
-  strarray_push(arr, "/lib");
+  for (char **dir = libc->lib_dirs; *dir; dir++)
+    strarray_push(arr, *dir);
+}
+
+// Appends a NULL-terminated list of strings.
+static void push_all(StringArray *arr, char **strs) {
+  for (; *strs; strs++)
+    strarray_push(arr, *strs);
 }
 
 // Links with mucc's own linker (link.c), which makes static executables.
@@ -992,12 +1049,10 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
     strarray_push(&files, inputs->data[i]);
     strarray_push(&names, hashmap_get(&object_sources, inputs->data[i]));
   }
-  strarray_push(&files, "-lgcc");
-  strarray_push(&files, "-lgcc_eh");
-  strarray_push(&files, "-lc");
+  push_all(&files, libc->static_libs);
   strarray_push(&files, format("%s/crtend.o", gcc_libpath));
   strarray_push(&files, format("%s/crtn.o", libpath));
-  for (int i = 0; i < 5; i++)
+  while (names.len < files.len)
     strarray_push(&names, NULL);
 
   char *why;
@@ -1038,7 +1093,7 @@ static void run_linker(StringArray *inputs, char *output) {
 
   if (!opt_static) {
     strarray_push(&arr, "-dynamic-linker");
-    strarray_push(&arr, "/lib64/ld-linux-x86-64.so.2");
+    strarray_push(&arr, libc->dynamic_linker);
   }
 
   for (int i = 0; i < ld_extra_args.len; i++)
@@ -1049,16 +1104,10 @@ static void run_linker(StringArray *inputs, char *output) {
 
   if (opt_static) {
     strarray_push(&arr, "--start-group");
-    strarray_push(&arr, "-lgcc");
-    strarray_push(&arr, "-lgcc_eh");
-    strarray_push(&arr, "-lc");
+    push_all(&arr, libc->static_libs);
     strarray_push(&arr, "--end-group");
   } else {
-    strarray_push(&arr, "-lc");
-    strarray_push(&arr, "-lgcc");
-    strarray_push(&arr, "--as-needed");
-    strarray_push(&arr, "-lgcc_s");
-    strarray_push(&arr, "--no-as-needed");
+    push_all(&arr, libc->shared_libs);
   }
 
   if (opt_shared)

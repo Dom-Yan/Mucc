@@ -482,24 +482,34 @@ silently produces wrong code.
 
 ## Phase 2: prepare for a bundled C library
 
-- [ ] **2.1 Keep "no libgcc" true.** A test that compiles every test program
+- [x] **2.1 Keep "no libgcc" true.** A test that compiles every test program
   and mucc itself and fails if any object needs a symbol from `libgcc`.
   - [x] Added: `test/libgcc.sh`, in `make test` and `test-stage2`. It
     lists what `libgcc.a` and `libgcc_eh.a` define (found with `gcc
     -print-libgcc-file-name`; skipped without gcc) and fails if an
     object of a test program or of mucc refers to any of them. It first
     checks itself on an object that calls `__popcountdi2`.
-  - [ ] Verified: the test runs in `make test` and passes; adding a call to a
+  - [x] Verified: the test runs in `make test` and passes; adding a call to a
     `libgcc` helper makes it fail. (Both pass in `make test-all`, stage 1
-    and 2; check the box once CI passes.)
+    and 2, and in CI, `0cf6793`, where gcc is there and it runs.)
 
 - [ ] **2.2 One place for system paths.** Move the hard-coded paths in
   `src/main.c` into one table describing a C library: where its headers,
   startup files and libraries are, and what else to link. Today's behavior
   becomes `--libc=system`.
-  - [ ] Added
+  - [x] Added: `Libc` and `libcs[]` in `src/main.c` hold the header
+    directories, where `crt1.o`/`crti.o`/`crtn.o` and gcc's `crtbegin.o`
+    and libraries are, the library directories, what to link with and
+    without `-static`, and the dynamic linker. `--libc=NAME` picks one;
+    `system` is the only one, and the default. No other system path is
+    left in `src/`.
   - [ ] Verified: no behavior change; `make test-all` passes and the output
-    of `test/driver.sh` is identical.
+    of `test/driver.sh` is identical. (The previous commit's
+    `test/driver.sh` prints the same with the old and new mucc; `-###`
+    shows the same commands for a plain, `-static`, `-shared -fPIC`,
+    `-fuse-ld=bfd` and `-c` build; `make test-all` and `make difftest
+    N=300` pass; new `test/driver.sh` cases for `--libc=system` and an
+    unknown `--libc=`. Check the box once CI passes.)
 
 - [ ] **2.3 GNU `asm` with operands.** Constraints `r`, `a`, `b`, `c`, `d`,
   `S`, `D`, `m`, `i`, `n`, matching digits, the modifiers `=`, `+` and `&`,
