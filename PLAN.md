@@ -182,12 +182,12 @@ are `test_distutils` and `test_peg_generator` (1.12) and `test_lzma` and
 ## Where we left off (2026-09-24, evening)
 
 Phase 0 is done. In Phase 1, everything is done and verified except
-1.11 and 1.12, and 1.14, which waits for CI (1.8 and 1.10 were dropped
+1.11 and 1.15, and 1.14, which waits for CI (1.8 and 1.10 were dropped
 as not needed). Git builds with mucc and passes its tests, the same as
 gcc.
 
-Next: 1.12, then finish 1.11 (update the README's lists) and move to
-Phase 2.
+Next: 1.15 (line markers in `-E` output), then finish 1.11 (update the
+README's lists) and move to Phase 2.
 
 How the baseline is run now: in the `ubuntu:24.04` Docker image (as the
 first baseline was), with the projects' build dependencies installed and
@@ -403,11 +403,43 @@ silently produces wrong code.
     locals of each kind, compared with gcc (`test/attribute-layout.c`,
     in a recursive function).
 
-- [ ] **1.12 Diagnose CPython's `test_distutils` and `test_peg_generator`.**
+- [x] **1.12 Diagnose CPython's `test_distutils` and `test_peg_generator`.**
   Both pass with gcc and fail with mucc, and both compile C during the
   test. Find the cause, and fix it or add it to this plan.
+  - [x] Added: two different causes, neither a miscompile.
+    - `test_distutils` (only `test_search_cpp` fails): it preprocesses
+      `/* xxx */` in `_configtest.c` and looks for `_configtest` in the
+      output, which gcc writes in its line markers (`# 1
+      "_configtest.c"`). mucc's `-E` writes no line markers at all. See
+      1.15.
+    - `test_peg_generator` (the 9 `TestCParser` tests): each builds a
+      parser extension that defines its own `_PyPegen_parse` and other
+      functions the interpreter also has. CPython's configure only builds
+      with `-fvisibility=hidden` if the compiler accepts it; mucc rejects
+      the flag, so the interpreter exports all its internal functions,
+      and the dynamic linker binds the extension's calls to the
+      interpreter's `_PyPegen_parse` (checked with `LD_DEBUG=bindings`),
+      which parses Python instead of the test's grammar. The same
+      extension built with gcc fails the same way under the mucc-built
+      interpreter. Supporting `-fvisibility=hidden` would not help:
+      CPython's `Include/exports.h` only marks its API
+      `visibility("default")` under `__GNUC__` or clang, so with the flag
+      every API function would be hidden and no extension module would
+      load. This stays a known difference, like the environment failures
+      gcc has.
+  - [x] Verified: both pass, or the cause is written here with its own item.
+
+- [ ] **1.15 Line markers in `-E` output.** Write `# N "file"` at the
+  start and whenever the file or line jumps, with gcc's flags (1 entering
+  an include, 2 returning, 3 a system header), so the output compiled
+  again reports errors and debug info against the original files, and
+  tools that read them (distutils, ccache) work. `-P` leaves them out, as
+  with gcc. mucc already reads such markers in its input. Fixes CPython's
+  `test_distutils` (1.12).
   - [ ] Added
-  - [ ] Verified: both pass, or the cause is written here with its own item.
+  - [ ] Verified: `test/driver.sh` cases compare the markers with gcc's
+    for a file with includes, and compiling `-E` output with an error in
+    an included file reports that file and line; `test_distutils` passes.
 
 - [ ] **1.14 CPython's `test_lzma` and `test_zipfile`.** Found by the 1.11
   re-run: both fail with mucc and pass with gcc in the same container
