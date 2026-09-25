@@ -182,8 +182,7 @@ are `test_distutils` and `test_peg_generator` (1.12) and `test_lzma` and
 ## Where we left off (2026-09-24, evening)
 
 Phase 0 is done. In Phase 1, everything is done and verified except
-1.11, and 1.15, which waits for CI (1.8 and 1.10 were dropped as not
-needed). Git builds with mucc and passes its tests, the same as gcc.
+1.11 (1.8 and 1.10 were dropped as not needed). Git builds with mucc and passes its tests, the same as gcc.
 
 Next: finish 1.11 (run the baseline once more, update the README's
 lists) and move to Phase 2. CPython should now fail only
@@ -429,7 +428,7 @@ silently produces wrong code.
       gcc has.
   - [x] Verified: both pass, or the cause is written here with its own item.
 
-- [ ] **1.15 Line markers in `-E` output.** Write `# N "file"` at the
+- [x] **1.15 Line markers in `-E` output.** Write `# N "file"` at the
   start and whenever the file or line jumps, with gcc's flags (1 entering
   an include, 2 returning, 3 a system header), so the output compiled
   again reports errors and debug info against the original files, and
@@ -447,14 +446,14 @@ silently produces wrong code.
     wrong numbers); diagnostics after a `#line` paired its line number
     with the real file's name; and `__LINE__` and the other built-in
     macros started a new line in `-E` output.
-  - [ ] Verified: `test/driver.sh` cases check the markers for a file
+  - [x] Verified: `test/driver.sh` cases check the markers for a file
     with includes and `#line` (the same places and flags as gcc's), a
     system header's flag 3, `-P`, and that compiled `-E` output reports
     an error in an included file at that file and line, puts its debug
     lines there, and gives no warnings for glibc's headers; the old mucc
     fails them. `make test-all` and `make difftest N=300` pass.
     `test_distutils` passes (with `test_lzma` and `test_zipfile`, in the
-    Ubuntu 24.04 container). Check the box once CI passes.
+    Ubuntu 24.04 container). CI passed (`965ab75`).
 
 - [x] **1.14 CPython's `test_lzma` and `test_zipfile`.** Found by the 1.11
   re-run: both fail with mucc and pass with gcc in the same container
