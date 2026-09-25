@@ -216,6 +216,11 @@ Found while working on these, to keep in mind:
 - Run the tests from a copy on WSL's Linux filesystem, not `/mnt/c`: it
   is much faster, and a runaway there can't stall on the Windows drive.
   Use `ulimit -v` so a runaway fails instead of taking the WSL VM down.
+  When copying the tree there, leave out the root `mucc` binary
+  (`rsync --exclude /mucc`): the Windows checkout has an old one, from
+  before the `#include_next` fix, and running it crashed WSL again on
+  2026-09-24. Start long runs with `docker run -d`, so they survive the
+  client being killed.
 - The glibc stripping (1.6) was worse than the epoll bug: it also removed
   `__attribute__` from the user's own code after any `#include <stdio.h>`,
   so every attribute in a real program was silently dropped. Before 1.6,
@@ -479,9 +484,14 @@ silently produces wrong code.
 
 - [ ] **2.1 Keep "no libgcc" true.** A test that compiles every test program
   and mucc itself and fails if any object needs a symbol from `libgcc`.
-  - [ ] Added
+  - [x] Added: `test/libgcc.sh`, in `make test` and `test-stage2`. It
+    lists what `libgcc.a` and `libgcc_eh.a` define (found with `gcc
+    -print-libgcc-file-name`; skipped without gcc) and fails if an
+    object of a test program or of mucc refers to any of them. It first
+    checks itself on an object that calls `__popcountdi2`.
   - [ ] Verified: the test runs in `make test` and passes; adding a call to a
-    `libgcc` helper makes it fail.
+    `libgcc` helper makes it fail. (Both pass in `make test-all`, stage 1
+    and 2; check the box once CI passes.)
 
 - [ ] **2.2 One place for system paths.** Move the hard-coded paths in
   `src/main.c` into one table describing a C library: where its headers,
