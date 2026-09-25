@@ -87,6 +87,18 @@ int main() {
   ASSERT(1, ({ int i=0; switch(7) { case 0 ... 7: i=1; break; case 8 ... 10: i=2; break; } i; }));
   ASSERT(1, ({ int i=0; switch(7) { case 0: i=1; break; case 7 ... 7: i=1; break; } i; }));
 
+  // 64-bit case values, which don't fit in an instruction's immediate.
+  ASSERT(1, ({ long x=0x4000000000000001; int i=0; switch(x) { case 0x4000000000000001: i=1; break; case 1: i=2; break; } i; }));
+  ASSERT(2, ({ long x=1; int i=0; switch(x) { case 0x4000000000000001: i=1; break; case 1: i=2; break; } i; }));
+  ASSERT(0, ({ long x=0x100000001; int i=0; switch(x) { case 1: i=1; break; } i; }));
+  ASSERT(1, ({ long x=0x100000003; int i=0; switch(x) { case 0x100000000 ... 0x100000005: i=1; break; } i; }));
+  ASSERT(0, ({ long x=3; int i=0; switch(x) { case 0x100000000 ... 0x100000005: i=1; break; } i; }));
+  ASSERT(1, ({ long x=-0x100000000; int i=0; switch(x) { case -0x100000000: i=1; break; } i; }));
+  ASSERT(1, ({ unsigned long x=-1; int i=0; switch(x) { case 0xffffffffffffffff: i=1; break; } i; }));
+  ASSERT(1, ({ unsigned long x=-1; int i=0; switch(x) { case 1 ... 0xffffffffffffffff: i=1; break; } i; }));
+  ASSERT(1, ({ unsigned x=-1; int i=0; switch(x) { case 1 ... 0xffffffff: i=1; break; } i; }));
+  ASSERT(1, ({ char x=-1; int i=0; switch(x) { case -1: i=1; break; } i; }));
+
   ASSERT(3, ({ void *p = &&v11; int i=0; goto *p; v11:i++; v12:i++; v13:i++; i; }));
   ASSERT(2, ({ void *p = &&v22; int i=0; goto *p; v21:i++; v22:i++; v23:i++; i; }));
   ASSERT(1, ({ void *p = &&v33; int i=0; goto *p; v31:i++; v32:i++; v33:i++; i; }));

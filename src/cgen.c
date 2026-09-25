@@ -1763,6 +1763,18 @@ static void gen_expr(Node *node) {
 
 //---------- Statements ------------------------------------------------------
 
+// The operand for comparing a switch's value with `val`. An instruction's
+// immediate is 32 bits, sign-extended, so a 64-bit value outside that
+// range is loaded into %rdx first.
+static char *case_operand(int64_t val, bool is64) {
+  if (!is64)
+    return format("$%d", (int32_t)val);
+  if (val == (int32_t)val)
+    return format("$%ld", val);
+  println("  mov $%ld, %%rdx", val);
+  return "%rdx";
+}
+
 static void gen_stmt(Node *node) {
   emit_loc(node->tok);
 
@@ -1806,19 +1818,20 @@ static void gen_stmt(Node *node) {
     gen_expr(node->cond);
 
     for (Node *n = node->case_next; n; n = n->case_next) {
-      char *ax = (node->cond->ty->size == 8) ? "%rax" : "%eax";
-      char *di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
+      bool is64 = node->cond->ty->size == 8;
+      char *ax = is64 ? "%rax" : "%eax";
+      char *di = is64 ? "%rdi" : "%edi";
 
       if (n->begin == n->end) {
-        println("  cmp $%ld, %s", n->begin, ax);
+        println("  cmp %s, %s", case_operand(n->begin, is64), ax);
         println("  je %s", n->label);
         continue;
       }
 
       // [GNU] Case ranges
       println("  mov %s, %s", ax, di);
-      println("  sub $%ld, %s", n->begin, di);
-      println("  cmp $%ld, %s", n->end - n->begin, di);
+      println("  sub %s, %s", case_operand(n->begin, is64), di);
+      println("  cmp %s, %s", case_operand(n->end - n->begin, is64), di);
       println("  jbe %s", n->label);
     }
 
