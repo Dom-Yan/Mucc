@@ -1793,6 +1793,175 @@ static char *case_operand(int64_t val, bool is64) {
   return "%rdx";
 }
 
+//---------- asm statements with operands ------------------------------------
+//
+// The parser has put each operand in a temporary local and picked its
+// register (see asm_stmt() in parser.c). Here they are loaded, the
+// template is written with the operands filled in, and outputs are
+// stored back.
+
+static char *reg64(int reg) {
+  return format("%%%s", gp_reg_name(reg, 8));
+}
+
+// Register `reg` as a `size`-byte operand, or as modifier `mod` asks.
+static char *asm_reg_text(Node *node, int reg, int size, char mod) {
+  if (mod == 'h') {
+    static char *high[] = {"ah", "ch", "dh", "bh"};
+    if (reg > 3)
+      error_tok(node->tok, "%%h needs %%rax, %%rbx, %%rcx or %%rdx");
+    return format("%%%s", high[reg]);
+  }
+  if (mod == 'b') size = 1;
+  if (mod == 'w') size = 2;
+  if (mod == 'k') size = 4;
+  if (mod == 'q') size = 8;
+  if (size != 1 && size != 2 && size != 4)
+    size = 8;
+  return format("%%%s", gp_reg_name(reg, size));
+}
+
+// Operand `op` as the template's `%N` (with modifier `mod`) asks.
+static char *asm_operand_text(Node *node, AsmOperand *op, char mod) {
+  if (mod && !strchr("bhwkqcPna", mod))
+    error_tok(node->tok, "asm operand modifier '%c' is not supported", mod);
+
+  if (op->kind == 'r') {
+    if (mod == 'a')
+      return format("(%s)", reg64(op->reg));
+    return asm_reg_text(node, op->reg, op->ty->size, mod);
+  }
+  if (op->kind == 'm') {
+    if (op->addr)
+      return format("(%s)", reg64(op->reg));
+    return format("%d(%%rbp)", op->value->offset);
+  }
+
+  // A constant: `$5`, or with c, P, a or n (negated) just `5`.
+  int64_t val = (mod == 'n') ? -op->val : op->val;
+  char *dollar = (mod && strchr("cPan", mod)) ? "" : "$";
+  if (!op->label)
+    return format("%s%ld", dollar, val);
+  if (!val)
+    return format("%s%s", dollar, *op->label);
+  return format("%s%s%+ld", dollar, *op->label, val);
+}
+
+// The template with its operands filled in: `%0` or `%[name]`, maybe
+// with a modifier (`%k0`), `%=` (a number unique to this asm), `%%`.
+// `{att|intel}` picks the first alternative, as for AT&T syntax.
+static char *asm_template(Node *node) {
+  static int id;
+  id++;
+
+  char *buf;
+  size_t buflen;
+  FILE *out = open_memstream(&buf, &buflen);
+  int alt = 0; // 1 in {'s first alternative, 2 in the others
+
+  for (char *p = node->asm_str; *p; p++) {
+    if (*p == '{') {
+      alt = 1;
+      continue;
+    }
+    if (*p == '|' && alt) {
+      alt = 2;
+      continue;
+    }
+    if (*p == '}' && alt) {
+      alt = 0;
+      continue;
+    }
+    if (alt == 2)
+      continue;
+    if (*p != '%') {
+      fputc(*p, out);
+      continue;
+    }
+
+    p++;
+    if (*p && strchr("%{|}", *p)) {
+      fputc(*p, out);
+      continue;
+    }
+    if (*p == '=') {
+      fprintf(out, "%d", id);
+      continue;
+    }
+
+    char mod = 0;
+    if (isalpha(*p))
+      mod = *p++;
+
+    AsmOperand *op = NULL;
+    if (isdigit(*p)) {
+      int i = strtol(p, &p, 10);
+      p--;
+      if (i >= node->asm_nops)
+        error_tok(node->tok, "asm operand number %d out of range", i);
+      op = &node->asm_ops[i];
+    } else if (*p == '[') {
+      char *end = strchr(p, ']');
+      if (!end)
+        error_tok(node->tok, "missing ']' in asm template");
+      for (int i = 0; i < node->asm_nops; i++) {
+        char *name = node->asm_ops[i].name;
+        if (name && strlen(name) == end - p - 1 && !strncmp(name, p + 1, end - p - 1))
+          op = &node->asm_ops[i];
+      }
+      if (!op)
+        error_tok(node->tok, "undefined asm operand name '%.*s'",
+                  (int)(end - p - 1), p + 1);
+      p = end;
+    } else {
+      error_tok(node->tok, "invalid '%%' in asm template");
+    }
+    fputs(asm_operand_text(node, op, mod), out);
+  }
+
+  fclose(out);
+  return buf;
+}
+
+// Loads the `ty` value at `src` into register `reg`.
+static void asm_load(Type *ty, char *src, int reg) {
+  switch (ty->size) {
+  case 1: println("  movzbl %s, %s", src, format("%%%s", gp_reg_name(reg, 4))); return;
+  case 2: println("  movzwl %s, %s", src, format("%%%s", gp_reg_name(reg, 4))); return;
+  case 4: println("  mov %s, %s", src, format("%%%s", gp_reg_name(reg, 4))); return;
+  }
+  println("  mov %s, %s", src, reg64(reg));
+}
+
+static void gen_asm(Node *node) {
+  // The operands' values and addresses, into their temporaries
+  for (Node *n = node->body; n; n = n->next)
+    gen_stmt(n);
+
+  for (int i = 0; i < node->asm_nops; i++) {
+    AsmOperand *op = &node->asm_ops[i];
+    if (op->kind == 'm' && op->addr) {
+      println("  mov %d(%%rbp), %s", op->addr->offset, reg64(op->reg));
+    } else if (op->kind == 'r' && op->is_rw) {
+      println("  mov %d(%%rbp), %s", op->addr->offset, reg64(op->reg));
+      asm_load(op->ty, format("(%s)", reg64(op->reg)), op->reg);
+    } else if (op->kind == 'r' && op->value) {
+      asm_load(op->ty, format("%d(%%rbp)", op->value->offset), op->reg);
+    }
+  }
+
+  println("  %s", asm_template(node));
+
+  for (int i = 0; i < node->asm_nops; i++) {
+    AsmOperand *op = &node->asm_ops[i];
+    if (!op->is_output || op->kind != 'r')
+      continue;
+    println("  mov %d(%%rbp), %s", op->addr->offset, reg64(node->asm_scratch));
+    println("  mov %s, (%s)", asm_reg_text(node, op->reg, op->ty->size, 0),
+            reg64(node->asm_scratch));
+  }
+}
+
 static void gen_stmt(Node *node) {
   emit_loc(node->tok);
 
@@ -1904,7 +2073,10 @@ static void gen_stmt(Node *node) {
     return;
   case ND_ASM:
     has_inline_asm = true;
-    println("  %s", node->asm_str);
+    if (node->asm_extended)
+      gen_asm(node);
+    else
+      println("  %s", node->asm_str);
     return;
   }
 
@@ -1998,8 +2170,16 @@ static bool can_be_in_register(Obj *fn, Obj *var) {
 static void assign_registers(Obj *fn) {
   no_register_vars = false;
   scan_uses(fn->body, 1);
-  if (no_register_vars)
+
+  // With variables in memory, the prologue saves the callee-saved
+  // registers (regs64[]: %rbx, %r12-%r15) its asm statements use instead.
+  if (no_register_vars) {
+    static int nums[] = {3, 12, 13, 14, 15};
+    for (int i = 0; i < NREGS; i++)
+      if (fn->asm_regs & (1 << nums[i]))
+        fn->nregs = i + 1;
     return;
+  }
 
   while (fn->nregs < NREGS) {
     // A variable used only once or twice isn't worth saving and

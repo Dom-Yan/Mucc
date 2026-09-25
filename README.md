@@ -16,7 +16,7 @@ uses, it builds large real-world programs (SQLite, Lua, zlib) that then pass
 their own test suites, and it compiles, assembles and links itself with no
 help from gcc. Everything it needs to turn C into a running Linux program is
 in this repository and covered by tests. The C features it leaves out
-(`_Complex`, `_BitInt`, GNU `asm` operands, K&R definitions) are rare in
+(`_Complex`, `_BitInt`, K&R definitions) are rare in
 practice, and adding them would make the code bigger without making mucc
 more useful for what it is for.
 
@@ -224,7 +224,14 @@ takes any arguments instead of meaning `int f(void)`:
   `cleanup` and `gnu_inline`. Attributes that would change the program but
   aren't implemented are errors, never silently ignored.
   `__has_attribute` and `__has_builtin` tell which are there.
-- Plain `asm("...")` statements
+- `asm` statements, plain or with operands (GNU extended asm): the
+  constraints `r`, `q`, `a`, `b`, `c`, `d`, `S`, `D`, `m`, `i`, `n` and
+  matching digits, with `=`, `+` and `&`, named operands, the `%b`, `%h`,
+  `%w`, `%k`, `%q`, `%c` and `%n` modifiers, `%=`, and clobbers. `register
+  long x asm("r10")` puts `x` in that register for an asm statement, as
+  musl's system calls do. Not supported: `asm goto`, alternative
+  constraints (`"r,m"`), SSE and x87 register operands, and asm labels on
+  functions and global variables.
 
 **Code generation.** A simple stack machine with three things that keep it
 from being slow: each function's most used integer and pointer locals live in
@@ -242,7 +249,7 @@ functions that can reach their end without a `return`.
 - C++, or any target but x86-64 Linux with glibc
 - These GNU attributes: `vector_size`, `mode`, `ifunc`, `naked`, `target`
   and a few more
-- GNU `asm` with operands, `_Complex`, `__int128`, `_BitInt`,
+- `asm goto`, `_Complex`, `__int128`, `_BitInt`,
   `<stdckdint.h>`, decimal floats, K&R-style definitions
 - Optimization beyond register variables and constant folding
 - Debug info for variables and types

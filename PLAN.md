@@ -220,7 +220,9 @@ Found while working on these, to keep in mind:
   (`rsync --exclude /mucc`): the Windows checkout has an old one, from
   before the `#include_next` fix, and running it crashed WSL again on
   2026-09-24. Start long runs with `docker run -d`, so they survive the
-  client being killed.
+  client being killed, and keep a `wsl -e sleep 86400` running meanwhile:
+  with no `.wslconfig`, WSL shuts its VM down, and the containers in it,
+  soon after the last `wsl` command ends.
 - The glibc stripping (1.6) was worse than the epoll bug: it also removed
   `__attribute__` from the user's own code after any `#include <stdio.h>`,
   so every attribute in a real program was silently dropped. Before 1.6,
@@ -493,7 +495,7 @@ silently produces wrong code.
     `libgcc` helper makes it fail. (Both pass in `make test-all`, stage 1
     and 2, and in CI, `0cf6793`, where gcc is there and it runs.)
 
-- [ ] **2.2 One place for system paths.** Move the hard-coded paths in
+- [x] **2.2 One place for system paths.** Move the hard-coded paths in
   `src/main.c` into one table describing a C library: where its headers,
   startup files and libraries are, and what else to link. Today's behavior
   becomes `--libc=system`.
@@ -503,21 +505,40 @@ silently produces wrong code.
     without `-static`, and the dynamic linker. `--libc=NAME` picks one;
     `system` is the only one, and the default. No other system path is
     left in `src/`.
-  - [ ] Verified: no behavior change; `make test-all` passes and the output
+  - [x] Verified: no behavior change; `make test-all` passes and the output
     of `test/driver.sh` is identical. (The previous commit's
     `test/driver.sh` prints the same with the old and new mucc; `-###`
     shows the same commands for a plain, `-static`, `-shared -fPIC`,
     `-fuse-ld=bfd` and `-c` build; `make test-all` and `make difftest
     N=300` pass; new `test/driver.sh` cases for `--libc=system` and an
-    unknown `--libc=`. Check the box once CI passes.)
+    unknown `--libc=`. CI passed, `bb0751b`.)
 
 - [ ] **2.3 GNU `asm` with operands.** Constraints `r`, `a`, `b`, `c`, `d`,
   `S`, `D`, `m`, `i`, `n`, matching digits, the modifiers `=`, `+` and `&`,
   the clobbers `memory`, `cc` and named registers, and `volatile`. musl's
   system calls need it, and so does a lot of real code. `asm goto` stays out.
-  - [ ] Added
+  - [x] Added: `asm_stmt()` in `src/parser.c` reads the operands and
+    clobbers, puts each operand's value or address in a hidden local, and
+    picks the registers (caller-saved first; no two operands share one,
+    except an input and a non-`&` output, or a matching digit); `gen_asm()`
+    in `src/cgen.c` loads them, fills in the template (`%0`, `%[name]`,
+    the `b h w k q c P n a` modifiers, `%=`, `{att|intel}`) and stores the
+    outputs. A function with an asm already keeps its variables in
+    memory; its prologue now saves the callee-saved registers its asm
+    statements use. Also `q`, `R`, `g`, `X` and the constant letters
+    (`I` to `O`, `e`, `Z`, `s`), and `register long x asm("r10")`, which
+    musl's system calls use to put an operand in a register no letter
+    names. asm labels on functions and globals (symbol names), `asm goto`,
+    alternatives (`"r,m"`) and SSE/x87 operands are clear errors. mucc's
+    assembler learned `syscall`.
   - [ ] Verified: `test/asm-operands.c` covers each constraint, including a
-    raw `write` system call, with results compared against gcc.
+    raw `write` system call, with results compared against gcc. (It also
+    makes a 4-argument system call through `%r10`, and checks that the
+    callee-saved registers a caller keeps variables in survive; gcc runs
+    the same file with the same results. `test/errors.sh` has a case per
+    error. `make test-all` and `make difftest N=300` pass. Check the box
+    once CI passes. CPython's `_decimal`, which needed this, is checked in
+    1.11's last run.)
 
 - [ ] **2.4 An archiver.** `mucc -ar rcs lib.a a.o b.o` writes a standard
   `ar` archive that mucc's linker, `ld` and `nm` all read.

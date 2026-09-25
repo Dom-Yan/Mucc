@@ -149,6 +149,7 @@ struct Obj {
   int offset;
   bool is_used; // named somewhere after its declaration (for warnings)
   int reg;      // kept in callee-saved register reg - 1, or 0 (cgen.c)
+  int asm_reg;  // `register T x asm("r10")`: x86 register number + 1, or 0
   bool is_overaligned; // aligned above 16: its slot holds its address (cgen.c)
   int uses;     // how often it's used, weighted by loop depth (cgen.c)
   bool is_addr_taken;
@@ -184,6 +185,7 @@ struct Obj {
   int stack_size;
   int nregs;        // callee-saved registers its variables use
   int regs_offset;  // where it saves them in its frame
+  int asm_regs;     // x86 registers its asm statements use (bit mask)
   bool is_kept;     // __attribute__((used)): emitted even if never called
   bool is_ctor;     // __attribute__((constructor)): run before main
   bool is_dtor;     // __attribute__((destructor)): run after main
@@ -260,6 +262,23 @@ typedef enum {
   ND_UNREACHABLE, // __builtin_unreachable() (C23 unreachable())
 } NodeKind;
 
+// An operand of an asm statement: `[name] "constraint" (expr)`. x86
+// registers are numbered as the instruction set does: %rax 0, %rcx 1,
+// %rdx 2, %rbx 3, %rsp 4, %rbp 5, %rsi 6, %rdi 7, %r8-%r15 8-15.
+typedef struct {
+  char *name;      // [name], or NULL
+  Token *tok;      // the constraint, for errors
+  bool is_output;
+  bool is_rw;      // '+': an output that is also read
+  char kind;       // 'r' register, 'm' memory, 'i' constant
+  int reg;         // 'r': its register; 'm' through `addr`: the address's
+  Type *ty;        // its type
+  Obj *value;      // a temporary holding the input's value, or NULL
+  Obj *addr;       // a temporary holding the operand's address, or NULL
+  int64_t val;     // 'i': the constant, plus the address of `label`
+  char **label;
+} AsmOperand;
+
 // AST node type
 struct Node {
   NodeKind kind; // Node kind
@@ -309,8 +328,13 @@ struct Node {
   long begin;
   long end;
 
-  // "asm" string literal
+  // "asm" string literal. With operands (or any ':'), `%` in it refers to
+  // them; `body` computes their values and addresses first.
   char *asm_str;
+  bool asm_extended;
+  AsmOperand *asm_ops; // outputs, then inputs
+  int asm_nops;
+  int asm_scratch;     // a register free after the asm, to store outputs
 
   // Atomic compare-and-swap
   Node *cas_addr;
@@ -457,6 +481,8 @@ extern bool has_inline_asm;
 //---------- asm.c: assembler (stage 5) --------------------------------------
 
 bool assemble_text(char *src, char *path, char **why);
+int gp_reg_number(char *name);
+char *gp_reg_name(int num, int size);
 
 //---------- link.c: static linker (stage 6) ---------------------------------
 
