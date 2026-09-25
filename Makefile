@@ -41,6 +41,7 @@ test: $(TESTS)
 	test/link.sh ./mucc
 	test/attribute-layout.sh ./mucc
 	test/libgcc.sh ./mucc
+	test/ar.sh ./mucc
 
 test-all: test test-stage2 selfhost
 
@@ -76,6 +77,7 @@ test-stage2: $(TESTS:test/%=stage2/test/%)
 	test/link.sh ./stage2/mucc
 	test/attribute-layout.sh ./stage2/mucc
 	test/libgcc.sh ./stage2/mucc
+	test/ar.sh ./stage2/mucc
 
 # Stage 3 (mucc compiled by the mucc that was compiled by mucc)
 #

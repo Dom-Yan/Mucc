@@ -1151,6 +1151,12 @@ static FileType get_file_type(char *filename) {
 }
 
 int main(int argc, char **argv) {
+  // mucc -ar and mucc -ranlib are the archiver (ar.c).
+  if (argc >= 2 && !strcmp(argv[1], "-ar"))
+    return run_ar(argc - 2, argv + 2);
+  if (argc >= 2 && !strcmp(argv[1], "-ranlib"))
+    return run_ranlib(argc - 2, argv + 2);
+
   atexit(cleanup);
   set_std(argc, argv);
   init_macros();
