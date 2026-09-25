@@ -12,7 +12,7 @@ Website: <https://dom-yan.github.io/Mucc/>
 ## Project status: feature complete
 
 mucc is feature complete. It compiles C11 and the parts of C23 that real code
-uses, it builds large real-world programs (SQLite, Lua, zlib) that then pass
+uses, it builds large real-world programs (CPython, Git, SQLite, Lua) that then pass
 their own test suites, and it compiles, assembles and links itself with no
 help from gcc. Everything it needs to turn C into a running Linux program is
 in this repository and covered by tests. The C features it leaves out
@@ -81,8 +81,8 @@ AMD processor, old or new.
 | Binary size | 948 KB (built by gcc with `-O2 -g`) |
 | Test programs | 43, with 1,529 assertions |
 | Other checks | 186 command-line, error-message, assembler and linker cases |
-| Largest program it builds | CPython 3.10, about 450,000 lines of C; 387 of its 396 test suites pass (gcc: 391 on the same machine) |
-| Other real programs | SQLite 3.34.0 (249,451 tests, 0 errors), Lua 5.4.7, zlib 1.3.1, libpng and TinyCC each pass their own tests |
+| Largest program it builds | CPython 3.10, about 450,000 lines of C, with every module; 402 of its 408 test suites that run pass. gcc fails 5 of the 6 too on the same machine (OpenSSL 3 and network tests); the other, `test_peg_generator`, needs `-fvisibility=hidden` |
+| Other real programs | Git (21,115 tests pass, 0 fail, as with gcc), SQLite 3.34.0 (249,453 tests, 0 errors), Lua 5.4.7, zlib 1.3.1, libpng and TinyCC each pass their own tests |
 
 Speed, measured on WSL 2 (Ubuntu, gcc 15.2), one file at a time:
 
