@@ -484,6 +484,11 @@ bool assemble_text(char *src, char *path, char **why);
 int gp_reg_number(char *name);
 char *gp_reg_name(int num, int size);
 
+//---------- ar.c: archiver --------------------------------------------------
+
+int run_ar(int argc, char **argv);
+int run_ranlib(int argc, char **argv);
+
 //---------- link.c: static linker (stage 6) ---------------------------------
 
 bool link_static(StringArray *inputs, StringArray *names, StringArray *lib_paths,

@@ -174,7 +174,10 @@ ignored. As with gcc, a file with an extension mucc doesn't know (such as
 libtool's `.lo`) is passed to the linker as an object file. `-E` writes
 line markers (`# 12 "foo.h" 1`) as gcc does, so its output, compiled
 again, reports errors and debug info against the original files; `-P`
-leaves them out. `--libc=system` picks the C library to compile and link
+leaves them out. `mucc -ar rcs libfoo.a a.o b.o` is an archiver for
+static libraries (operations `r`, `q`, `d` and `t`; its archives are the
+same, byte for byte, as GNU `ar`'s), and `mucc -ranlib libfoo.a` rewrites
+an archive's symbol index. `--libc=system` picks the C library to compile and link
 against; the system's (glibc, with gcc's startup files) is the only one
 so far, and the default.
 
@@ -269,6 +272,7 @@ functions that can reach their end without a `return`.
 | `src/cgen.c` | Syntax tree to x86-64 assembly |
 | `src/asm.c` | Assembly to an ELF object file |
 | `src/link.c` | Static linker |
+| `src/ar.c` | Archiver for static libraries (`mucc -ar`) |
 | `src/mucc.h` | Declarations shared by every file |
 | `src/hashmap.c`, `src/strings.c`, `src/unicode.c` | Hash table, string helpers, UTF-8 |
 | `include/` | Headers mucc ships for the programs it compiles |

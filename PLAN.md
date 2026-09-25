@@ -513,7 +513,7 @@ silently produces wrong code.
     N=300` pass; new `test/driver.sh` cases for `--libc=system` and an
     unknown `--libc=`. CI passed, `bb0751b`.)
 
-- [ ] **2.3 GNU `asm` with operands.** Constraints `r`, `a`, `b`, `c`, `d`,
+- [x] **2.3 GNU `asm` with operands.** Constraints `r`, `a`, `b`, `c`, `d`,
   `S`, `D`, `m`, `i`, `n`, matching digits, the modifiers `=`, `+` and `&`,
   the clobbers `memory`, `cc` and named registers, and `volatile`. musl's
   system calls need it, and so does a lot of real code. `asm goto` stays out.
@@ -531,20 +531,29 @@ silently produces wrong code.
     names. asm labels on functions and globals (symbol names), `asm goto`,
     alternatives (`"r,m"`) and SSE/x87 operands are clear errors. mucc's
     assembler learned `syscall`.
-  - [ ] Verified: `test/asm-operands.c` covers each constraint, including a
+  - [x] Verified: `test/asm-operands.c` covers each constraint, including a
     raw `write` system call, with results compared against gcc. (It also
     makes a 4-argument system call through `%r10`, and checks that the
     callee-saved registers a caller keeps variables in survive; gcc runs
     the same file with the same results. `test/errors.sh` has a case per
-    error. `make test-all` and `make difftest N=300` pass. Check the box
-    once CI passes. CPython's `_decimal`, which needed this, is checked in
+    error. `make test-all` and `make difftest N=300` pass. CI passed,
+    `8323b22`. CPython's `_decimal`, which needed this, is checked in
     1.11's last run.)
 
 - [ ] **2.4 An archiver.** `mucc -ar rcs lib.a a.o b.o` writes a standard
   `ar` archive that mucc's linker, `ld` and `nm` all read.
-  - [ ] Added
+  - [x] Added: `src/ar.c`. `mucc -ar` does `r`, `q`, `d` and `t`, with
+    `c`, `s`, `S` (and `u`, `D`, `v` accepted); it writes the symbol
+    index (`/`) and long names (`//`) as GNU ar does, deterministically
+    (dates and owners 0, mode 644), through a temporary file. `mucc
+    -ranlib` rewrites the index, for makefiles that run `$(RANLIB)`
+    (musl's does).
   - [ ] Verified: an archive made by mucc links the same as one made by GNU
-    `ar`, and `ar t` lists it.
+    `ar`, and `ar t` lists it. (`test/ar.sh`, in `make test` and
+    `test-stage2`: after `rcs`, `r`, `q`, `d`, `rcS` and `-ranlib`, mucc's
+    archive is byte for byte GNU `ar D`'s, with a long member name and an
+    odd-sized member; `ar t`, `nm -s`, `ld` and mucc's linker read it.
+    Check the box once CI passes.)
 
 - [ ] **2.5 A cheap way to embed large files.** Either make `#embed` use
   about as much memory as the data itself, or add `.incbin` to the
