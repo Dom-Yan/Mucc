@@ -152,6 +152,14 @@ check -D
 echo foo | $mucc -Dfoo=bar -Ufoo -E -xc - | grep -q foo
 check -U
 
+# --libc=system is the system's C library, as without it; others are errors.
+echo 'int main() { return 0; }' | $mucc --libc=system -o $tmp/libc -xc - && $tmp/libc
+check --libc=system
+
+echo 'int main() { return 0; }' | $mucc --libc=nope -o $tmp/libc -xc - 2>&1 |
+  grep -q 'unknown C library: --libc=nope'
+check '--libc= unknown'
+
 # ignored options
 $mucc -c -O -Wall -g -std=c11 -ffreestanding -fno-builtin \
          -fno-omit-frame-pointer -fno-stack-protector -fno-strict-aliasing \

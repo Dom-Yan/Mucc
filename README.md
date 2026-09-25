@@ -174,7 +174,9 @@ ignored. As with gcc, a file with an extension mucc doesn't know (such as
 libtool's `.lo`) is passed to the linker as an object file. `-E` writes
 line markers (`# 12 "foo.h" 1`) as gcc does, so its output, compiled
 again, reports errors and debug info against the original files; `-P`
-leaves them out.
+leaves them out. `--libc=system` picks the C library to compile and link
+against; the system's (glibc, with gcc's startup files) is the only one
+so far, and the default.
 
 ## Features
 
