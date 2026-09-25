@@ -724,6 +724,104 @@ expect_error "1:16: error: constructor priorities must be from 0 to 65535" <<'EO
 __attribute__((constructor(70000))) void f(void) {}
 EOF
 
+# asm statements with operands
+expect_error "1:20: error: asm goto is not supported" <<'EOF'
+void f(void) { asm goto("jmp %l0" :::: out); out:; }
+EOF
+
+expect_error "1:26: error: asm constraint 'x' is not supported" <<'EOF'
+void f(int x) { asm("" : "=x"(x)); }
+EOF
+
+expect_error "1:26: error: alternative asm constraints are not supported" <<'EOF'
+void f(int x) { asm("" : "=r,m"(x)); }
+EOF
+
+expect_error "1:26: error: an output operand's constraint must start with '=' or '+'" <<'EOF'
+void f(int x) { asm("" : "r"(x)); }
+EOF
+
+expect_error "1:33: error: an asm output must be an lvalue" <<'EOF'
+void f(int x) { asm("" : "=r"(x + 1)); }
+EOF
+
+expect_error "1:34: error: an asm memory operand must be an lvalue" <<'EOF'
+void f(int x) { asm("" : : "m"(x + 1)); }
+EOF
+
+expect_error "1:31: error: an operand of type 'double' can't go in a general register" <<'EOF'
+void f(double d) { asm("" : : "r"(d)); }
+EOF
+
+expect_error "1:37: error: unknown register name 'foo' in asm" <<'EOF'
+void f(int x) { asm("" : : "r"(x) : "foo"); }
+EOF
+
+expect_error "1:37: error: an asm statement can't clobber rsp" <<'EOF'
+void f(int x) { asm("" : : "r"(x) : "rsp"); }
+EOF
+
+expect_error "1:36: error: register rax is used twice in this asm statement" <<'EOF'
+void f(int x) { asm("" : : "a"(x), "a"(x)); }
+EOF
+
+expect_error "1:37: error: register rax is used twice in this asm statement" <<'EOF'
+void f(int x) { asm("" : "=&a"(x) : "a"(x)); }
+EOF
+
+expect_error "1:28: error: register rax is used twice in this asm statement" <<'EOF'
+void f(int x) { asm("" : : "a"(x) : "rax"); }
+EOF
+
+expect_error "1:28: error: a matching constraint must name an output" <<'EOF'
+void f(int x) { asm("" : : "1"(x)); }
+EOF
+
+expect_error "1:32: error: an asm constant operand must be a constant" <<'EOF'
+void f(int x) { asm("" : : "i"(x)); }
+EOF
+
+expect_error "1:17: error: asm operand number 2 out of range" <<'EOF'
+void f(int x) { asm("%2" : : "r"(x)); }
+EOF
+
+expect_error "1:17: error: undefined asm operand name 'y'" <<'EOF'
+void f(int x) { asm("%[y]" : : [x] "r"(x)); }
+EOF
+
+expect_error "1:17: error: asm operand modifier 'z' is not supported" <<'EOF'
+void f(int x) { asm("%z0" : : "r"(x)); }
+EOF
+
+expect_error "1:210: error: not enough registers for this asm statement's operands" <<'EOF'
+void f(int a,int b,int c,int d,int e,int g,int h,int i,int j,int k,int l,int m,int n,int o,int p) { asm("" : : "r"(a),"r"(b),"r"(c),"r"(d),"r"(e),"r"(g),"r"(h),"r"(i),"r"(j),"r"(k),"r"(l),"r"(m),"r"(n),"r"(o),"r"(p)); }
+EOF
+
+expect_ok 'an input and an output in the same register, and other clobbers' <<'EOF'
+void f(int x) { asm("" : "=a"(x) : "a"(x)); asm volatile("" ::: "memory", "cc", "xmm0", "%r11"); }
+EOF
+
+# asm labels: only a register variable's register
+expect_error "1:13: error: an asm label is not supported on a function" <<'EOF'
+int f(void) __asm__("g");
+EOF
+
+expect_error "1:7: error: an asm label is not supported on a global variable" <<'EOF'
+int x __asm__("g");
+EOF
+
+expect_error "1:22: error: an asm label is only supported on a register variable" <<'EOF'
+void f(void) { int x asm("rax"); }
+EOF
+
+expect_error "1:31: error: invalid register name 'foo'" <<'EOF'
+void f(void) { register int x asm("foo"); }
+EOF
+
+expect_error "1:34: error: only an integer or a pointer can be a register variable" <<'EOF'
+void f(void) { register double x asm("rax"); }
+EOF
+
 expect_warning "1:3: warning: unknown attribute 'bogus' ignored" <<'EOF'
 [[bogus]] int x;
 EOF

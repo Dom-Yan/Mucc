@@ -284,6 +284,7 @@ func:
   rep stosb
   nop
   ud2
+  syscall
   ret
 
   .local local_func

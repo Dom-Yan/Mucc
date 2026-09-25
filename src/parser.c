@@ -70,6 +70,8 @@ typedef struct {
   Token *vis_tok;     // visibility("hidden") and so on, or NULL
   char *visibility;
   Token *gnu_inline_tok;
+  Token *asm_label_tok; // `asm("name")` after a declarator, or NULL
+  char *asm_label;
 } Attrs;
 
 // Variable attributes such as typedef or extern.
@@ -81,6 +83,7 @@ typedef struct {
   bool is_tls;
   bool is_noreturn;
   bool is_constexpr;
+  bool is_register;
   bool is_unused; // __attribute__((unused)): no unused-variable warning
   int align;
   Attrs gnu;      // all GNU attributes in the declaration specifiers
@@ -742,6 +745,10 @@ static void merge_attrs(Attrs *dst, Attrs *src) {
   }
   if (src->gnu_inline_tok)
     dst->gnu_inline_tok = src->gnu_inline_tok;
+  if (src->asm_label_tok) {
+    dst->asm_label_tok = src->asm_label_tok;
+    dst->asm_label = src->asm_label;
+  }
 }
 
 // Reports the first of `toks` that is set: an attribute that can't be
@@ -767,6 +774,13 @@ static void no_global_attrs(Attrs *a, char *what) {
   not_on(toks, 4, what);
 }
 
+// An asm label names a register variable's register. On a function or
+// global, it would name its symbol, which mucc doesn't support.
+static void no_asm_label(Attrs *a, char *what) {
+  if (a->asm_label_tok)
+    error_tok(a->asm_label_tok, "an asm label is not supported on %s", what);
+}
+
 // For declarations that aren't a local variable.
 static void no_cleanup(Attrs *a, char *what) {
   if (a->cleanup_tok)
@@ -779,6 +793,7 @@ static void no_symbol_attrs(Attrs *a, char *what) {
   no_global_attrs(a, what);
   no_fn_attrs(a, what);
   no_cleanup(a, what);
+  no_asm_label(a, what);
 }
 
 // For declarations where no `packed`, `aligned`, `weak` and so on can be
@@ -920,9 +935,18 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       continue;
     }
 
+    // `register` only matters with an asm label: `register long x
+    // asm("r10")` puts x in that register for asm statements.
+    if (equal(tok, "register")) {
+      if (attr)
+        attr->is_register = true;
+      tok = tok->next;
+      continue;
+    }
+
     // These keywords are recognized but ignored.
     if (consume(&tok, tok, "const") || consume(&tok, tok, "volatile") ||
-        consume(&tok, tok, "register") || consume(&tok, tok, "restrict") ||
+        consume(&tok, tok, "restrict") ||
         consume(&tok, tok, "__restrict") || consume(&tok, tok, "__restrict__"))
       continue;
 
@@ -1226,8 +1250,34 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
   return ty;
 }
 
+// asm-label = ("asm" "(" string-literal ")")?
+static Token *asm_label(Token *tok, Attrs *attrs) {
+  if (!equal(tok, "asm"))
+    return tok;
+  attrs->asm_label_tok = tok;
+  tok = skip(tok->next, "(");
+  if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
+    error_tok(tok, "expected string literal");
+  attrs->asm_label = tok->str;
+  return skip(tok->next, ")");
+}
+
+// `register long x asm("r10")`: where x is an asm statement's register
+// operand, it goes in r10 (musl's system calls need this). Elsewhere x
+// is an ordinary variable.
+static void set_asm_register(Obj *var, Attrs *a) {
+  int reg = gp_reg_number(a->asm_label);
+  if (reg < 0 || reg == 4 || reg == 5)
+    error_tok(a->asm_label_tok, "invalid register name '%s'", a->asm_label);
+  if (!is_integer(var->ty) && var->ty->kind != TY_PTR)
+    error_tok(a->asm_label_tok,
+              "only an integer or a pointer can be a register variable");
+  var->asm_reg = reg + 1;
+}
+
 // declarator = attributes pointers attributes
-//              ("(" declarator ")" | ident attributes)? type-suffix attributes
+//              ("(" declarator ")" | ident attributes)? type-suffix asm-label
+//              attributes
 //
 // The declarator's attributes, like `noreturn` in
 // `void f(void) __attribute__((noreturn));`, go to `attrs`. With NULL
@@ -1248,6 +1298,7 @@ static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs) {
     declarator(&tok, start->next, &dummy, &ignored);
     tok = skip(tok, ")");
     ty = type_suffix(&tok, tok, ty);
+    tok = asm_label(tok, attrs);
     *rest = attributes(tok, attrs, true);
     ty = declarator(&tok, start->next, ty, attrs);
   } else {
@@ -1260,6 +1311,7 @@ static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs) {
     }
 
     ty = type_suffix(&tok, tok, ty);
+    tok = asm_label(tok, attrs);
     *rest = attributes(tok, attrs, true);
     ty->name = name;
     ty->name_pos = name_pos;
@@ -1700,6 +1752,10 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     if (basety == &auto_type)
       check_auto_declarator(ty, tok);
 
+    if (all.asm_label_tok && !(attr && attr->is_register))
+      error_tok(all.asm_label_tok,
+                "an asm label is only supported on a register variable");
+
     if (attr && attr->is_static) {
       // static local variable
       no_cleanup(&all, "a static variable");
@@ -1717,6 +1773,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 
     // C23 `auto x = init;`: x takes init's type.
     if (ty == &auto_type && equal(tok, "=")) {
+      no_asm_label(&all, "an auto variable");
       Node *init = assign(&tok, tok->next);
       Obj *var = new_lvar(get_ident(name), auto_type_of(init));
       var->tok = name;
@@ -1740,6 +1797,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       if (equal(tok, "="))
         error_tok(tok, "variable-sized object may not be initialized");
       no_cleanup(&all, "a variable-length array");
+      no_asm_label(&all, "a variable-length array");
 
       // Variable length arrays (VLAs) are translated to alloca() calls.
       // For example, `int x[n+2]` is translated to `tmp = n + 2,
@@ -1759,6 +1817,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     Obj *var = new_lvar(get_ident(ty->name), ty);
     var->tok = ty->name;
     var->is_used = is_unused;
+    if (all.asm_label_tok)
+      set_asm_register(var, &all);
     if (attr && attr->align)
       var->align = attr->align;
     var->align = MAX(var->align, all.align);
@@ -2456,19 +2516,337 @@ static Token *static_assertion(Token *tok) {
   return tok;
 }
 
-// asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal ")"
+//---------- asm statements with operands ------------------------------------
+//
+// GNU extended asm: `asm("add %1, %0" : "+r"(x) : "r"(y))`. Every
+// operand's value or address is first computed into a temporary local
+// (a function with an asm keeps all its variables in memory, see cgen.c),
+// then loaded into the register it gets here, and outputs are stored
+// back after the asm. No two operands share a register, which also
+// keeps early-clobber ('&') outputs apart from the inputs.
+
+#define ASM_GENERAL 0xffcf // every register but %rsp and %rbp
+
+// The registers constraint letter `c` allows, or 0 if it isn't a
+// register constraint.
+static int asm_reg_class(char c) {
+  switch (c) {
+  case 'a': return 1 << 0;
+  case 'b': return 1 << 3;
+  case 'c': return 1 << 1;
+  case 'd': return 1 << 2;
+  case 'S': return 1 << 6;
+  case 'D': return 1 << 7;
+  case 'q': case 'Q': return 0xf;
+  case 'R': return 0xcf;
+  case 'r': case 'g': case 'X': return ASM_GENERAL;
+  }
+  return 0;
+}
+
+// The order registers are handed out in: the caller-saved ones first,
+// since the callee-saved ones have to be saved in the prologue.
+static int asm_reg_order[] = {0, 1, 2, 6, 7, 8, 9, 10, 11, 3, 12, 13, 14, 15};
+
+static int asm_pick_reg(int allowed, int used) {
+  for (int i = 0; i < sizeof(asm_reg_order) / sizeof(*asm_reg_order); i++) {
+    int r = asm_reg_order[i];
+    if ((allowed & (1 << r)) && !(used & (1 << r)))
+      return r;
+  }
+  return -1;
+}
+
+static bool is_one_reg(int regs) {
+  return regs && !(regs & (regs - 1));
+}
+
+static int reg_of(int regs) {
+  int r = 0;
+  while (!(regs & (1 << r)))
+    r++;
+  return r;
+}
+
+static bool is_asm_lvalue(Node *node) {
+  switch (node->kind) {
+  case ND_VAR:
+    return node->ty->kind != TY_FUNC;
+  case ND_DEREF:
+    return true;
+  case ND_MEMBER:
+    return !node->member->is_bitfield;
+  }
+  return false;
+}
+
+// A constant: an integer constant expression, or the address of a
+// global, as in "i"(&x).
+static bool is_asm_constant(Node *node) {
+  if (is_const_expr(node))
+    return true;
+  while (node->kind == ND_CAST)
+    node = node->lhs;
+  if (node->kind == ND_ADDR)
+    node = node->lhs;
+  return node->kind == ND_VAR && !node->var->is_local;
+}
+
+// A hidden local that holds an operand's value or address; `*init` gets
+// the statement that sets it to `val`.
+static Obj *asm_temp(Type *ty, Node *val, Node **init) {
+  Obj *var = new_lvar("", ty);
+  var->is_used = true;
+  Node *set = new_binary(ND_ASSIGN, new_var_node(var, val->tok), val, val->tok);
+  add_type(set);
+  *init = (*init)->next = new_unary(ND_EXPR_STMT, set, val->tok);
+  return var;
+}
+
+// asm-operands = (asm-operand ("," asm-operand)*)?
+// asm-operand  = ("[" ident "]")? string-literal "(" expr ")"
+static Token *asm_operands(Token *tok, AsmOperand *ops, Node **exprs, int *n,
+                           bool is_output) {
+  for (bool first = true; !equal(tok, ":") && !equal(tok, ")"); first = false) {
+    if (!first)
+      tok = skip(tok, ",");
+    if (*n == 30)
+      error_tok(tok, "an asm statement can have at most 30 operands");
+    AsmOperand *op = &ops[*n];
+    if (equal(tok, "[")) {
+      op->name = get_ident(tok->next);
+      tok = skip(tok->next->next, "]");
+    }
+    if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
+      error_tok(tok, "expected an asm constraint string");
+    op->tok = tok;
+    op->is_output = is_output;
+    tok = skip(tok->next, "(");
+    exprs[(*n)++] = expr(&tok, tok);
+    tok = skip(tok, ")");
+  }
+  return tok;
+}
+
+// Reads operand `op`'s constraint: sets its kind, and returns the
+// registers it allows; `*match` is the output an input shares, or -1.
+static int asm_constraint(AsmOperand *op, int noutputs, int *match) {
+  char *s = op->tok->str;
+  if (op->is_output) {
+    if (*s == '+')
+      op->is_rw = true;
+    else if (*s != '=')
+      error_tok(op->tok, "an output operand's constraint must start with '=' or '+'");
+    s++;
+  }
+
+  int regs = 0;
+  bool mem = false, imm = false;
+  *match = -1;
+  for (; *s; s++) {
+    if (strchr("&%?!", *s))
+      continue;
+    if (*s == '*') {
+      if (s[1])
+        s++;
+      continue;
+    }
+    if (isdigit(*s)) {
+      *match = strtol(s, &s, 10);
+      s--;
+      continue;
+    }
+    if (*s == ',')
+      error_tok(op->tok, "alternative asm constraints are not supported");
+    if (*s == '=' || *s == '+')
+      error_tok(op->tok, "'%c' must come first in an output's constraint", *s);
+    if (asm_reg_class(*s)) {
+      regs |= asm_reg_class(*s);
+      continue;
+    }
+    if (strchr("moV<>", *s)) {
+      mem = true;
+      continue;
+    }
+    if (strchr("insIJKLMNOeZ", *s)) {
+      imm = true;
+      continue;
+    }
+    error_tok(op->tok, "asm constraint '%c' is not supported", *s);
+  }
+
+  if (*match >= 0) {
+    if (op->is_output || *match >= noutputs)
+      error_tok(op->tok, "a matching constraint must name an output");
+    op->kind = 'r';
+    return 0;
+  }
+  op->kind = regs ? 'r' : mem ? 'm' : imm ? 'i' : 0;
+  if (!op->kind)
+    error_tok(op->tok, "empty asm constraint");
+  if (op->kind == 'i' && op->is_output)
+    error_tok(op->tok, "an output can't be a constant");
+  return regs;
+}
+
+// clobbers = (string-literal ("," string-literal)*)?
+// Returns the general registers named. mucc keeps nothing in memory
+// caches, flags or other registers from one statement to the next, so
+// "memory", "cc" and the rest need nothing.
+static int asm_clobbers(Token **rest, Token *tok) {
+  int regs = 0;
+  for (bool first = true; !equal(tok, ":") && !equal(tok, ")"); first = false) {
+    if (!first)
+      tok = skip(tok, ",");
+    if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
+      error_tok(tok, "expected a string literal");
+    char *name = tok->str + (tok->str[0] == '%');
+    int r = gp_reg_number(name);
+    if (r == 4 || r == 5)
+      error_tok(tok, "an asm statement can't clobber %s", name);
+    if (r >= 0)
+      regs |= 1 << r;
+    else if (strcmp(name, "memory") && strcmp(name, "cc") &&
+             strcmp(name, "dirflag") && strcmp(name, "fpsr") &&
+             strcmp(name, "flags") && strncmp(name, "xmm", 3) &&
+             strncmp(name, "ymm", 3) && strncmp(name, "mm", 2) &&
+             strncmp(name, "st", 2))
+      error_tok(tok, "unknown register name '%s' in asm", name);
+    tok = tok->next;
+  }
+  *rest = tok;
+  return regs;
+}
+
+// asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal
+//            (":" asm-operands (":" asm-operands (":" clobbers)?)?)? ")"
 static Node *asm_stmt(Token **rest, Token *tok) {
   Node *node = new_node(ND_ASM, tok);
   tok = tok->next;
 
-  while (equal(tok, "volatile") || equal(tok, "inline"))
+  while (equal(tok, "volatile") || equal(tok, "inline") || equal(tok, "goto")) {
+    if (equal(tok, "goto"))
+      error_tok(tok, "asm goto is not supported");
     tok = tok->next;
+  }
 
   tok = skip(tok, "(");
   if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
     error_tok(tok, "expected string literal");
   node->asm_str = tok->str;
-  *rest = skip(tok->next, ")");
+  tok = tok->next;
+
+  if (!equal(tok, ":")) {
+    *rest = skip(tok, ")");
+    return node;
+  }
+  node->asm_extended = true;
+
+  AsmOperand ops[30] = {};
+  Node *exprs[30];
+  int n = 0, clobbered = 0;
+  tok = asm_operands(tok->next, ops, exprs, &n, true);
+  int noutputs = n;
+  if (consume(&tok, tok, ":")) {
+    tok = asm_operands(tok, ops, exprs, &n, false);
+    if (consume(&tok, tok, ":"))
+      clobbered = asm_clobbers(&tok, tok);
+  }
+  if (equal(tok, ":"))
+    error_tok(tok, "asm goto is not supported");
+  *rest = skip(tok, ")");
+
+  // Each operand's kind and type, and the temporaries its value or
+  // address goes in.
+  int allowed[30], match[30];
+  Node head = {};
+  Node *init = &head;
+  for (int i = 0; i < n; i++) {
+    AsmOperand *op = &ops[i];
+    Node *e = exprs[i];
+    add_type(e);
+    allowed[i] = asm_constraint(op, noutputs, &match[i]);
+    if (match[i] >= 0 && ops[match[i]].kind != 'r')
+      error_tok(op->tok, "a matching constraint must name a register output");
+
+    // `register long x asm("r10")` as a register operand goes in r10.
+    if (allowed[i] == ASM_GENERAL && e->kind == ND_VAR && e->var->asm_reg)
+      allowed[i] = 1 << (e->var->asm_reg - 1);
+
+    Type *ty = e->ty;
+    if (!op->is_output && (ty->kind == TY_ARRAY || ty->kind == TY_FUNC)) {
+      ty = pointer_to(ty->kind == TY_ARRAY ? ty->base : ty);
+      e = new_cast(new_unary(ND_ADDR, e, e->tok), ty);
+    }
+    op->ty = ty;
+
+    if (op->kind == 'r' && !is_integer(ty) && ty->kind != TY_PTR)
+      error_tok(op->tok, "an operand of type '%s' can't go in a general register",
+                type_name(ty));
+
+    if (op->kind == 'i') {
+      if (!is_asm_constant(e))
+        error_tok(e->tok, "an asm constant operand must be a constant");
+      op->val = eval2(e, &op->label);
+    } else if (op->is_output || op->kind == 'm') {
+      if (!is_asm_lvalue(e))
+        error_tok(e->tok, op->is_output ? "an asm output must be an lvalue"
+                                        : "an asm memory operand must be an lvalue");
+      op->addr = asm_temp(pointer_to(ty), new_unary(ND_ADDR, e, e->tok), &init);
+    } else {
+      op->value = asm_temp(ty, e, &init);
+    }
+  }
+  node->body = head.next;
+
+  // Registers: first the operands that need a particular one, then the
+  // rest, then inputs that share an output's. An input may be in the
+  // same register as an output, as in `"=a"(ret) : "a"(nr)`, unless the
+  // output is early-clobber ('&'): written before the inputs are read.
+  int outs = 0, ins = 0, early = 0;
+  for (int i = 0; i < n; i++) {
+    if (ops[i].kind != 'r' || !is_one_reg(allowed[i]))
+      continue;
+    int r = reg_of(allowed[i]);
+    int taken = clobbered | (ops[i].is_output ? outs : ins | early);
+    if (taken & (1 << r))
+      error_tok(ops[i].tok, "register %s is used twice in this asm statement",
+                gp_reg_name(r, 8));
+    ops[i].reg = r;
+    if (!ops[i].is_output || ops[i].is_rw)
+      ins |= 1 << r;
+    if (ops[i].is_output)
+      outs |= 1 << r;
+    if (ops[i].is_output && strchr(ops[i].tok->str, '&'))
+      early |= 1 << r;
+  }
+  int used = clobbered | outs | ins;
+  for (int i = 0; i < n; i++) {
+    bool needs = (ops[i].kind == 'r' && match[i] < 0 && !is_one_reg(allowed[i])) ||
+                 (ops[i].kind == 'm' && ops[i].addr);
+    if (!needs)
+      continue;
+    int r = asm_pick_reg(ops[i].kind == 'm' ? ASM_GENERAL : allowed[i], used);
+    if (r < 0)
+      error_tok(ops[i].tok, "not enough registers for this asm statement's operands");
+    ops[i].reg = r;
+    used |= 1 << r;
+  }
+  for (int i = 0; i < n; i++)
+    if (match[i] >= 0)
+      ops[i].reg = ops[match[i]].reg;
+
+  // After the asm, outputs are stored through a register none of them is in.
+  int outputs = 0;
+  for (int i = 0; i < noutputs; i++)
+    if (ops[i].kind == 'r')
+      outputs |= 1 << ops[i].reg;
+  node->asm_scratch = asm_pick_reg(ASM_GENERAL, outputs);
+  current_fn->asm_regs |= used | (1 << node->asm_scratch);
+
+  node->asm_ops = calloc(n, sizeof(AsmOperand));
+  memcpy(node->asm_ops, ops, n * sizeof(AsmOperand));
+  node->asm_nops = n;
   return node;
 }
 
@@ -4582,6 +4960,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   if (da.weak_tok && attr->is_static)
     error_tok(da.weak_tok, "a weak function must not be static");
   no_cleanup(&da, "a function");
+  no_asm_label(&da, "a function");
 
   Obj *fn = find_func(name_str);
   if (fn) {
@@ -4718,6 +5097,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
     no_fn_attrs(&all, "a variable");
     no_cleanup(&all, "a global variable");
+    no_asm_label(&all, "a global variable");
 
     Token *name = ty->name;
     if (basety == &auto_type) {

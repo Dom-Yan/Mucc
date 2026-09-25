@@ -301,6 +301,26 @@ static Reg regs[] = {
   {"fs", SEG, 0x64},
 };
 
+// The number (0-15) of general register `name`, as in "r10", "%eax" or
+// "ah", or -1. For asm statements' clobbers and register variables.
+int gp_reg_number(char *name) {
+  if (*name == '%')
+    name++;
+  for (int i = 0; i < sizeof(regs) / sizeof(*regs); i++)
+    if (regs[i].kind == GP && !strcmp(regs[i].name, name))
+      return regs[i].is_high ? regs[i].num - 4 : regs[i].num;
+  return -1;
+}
+
+// The name of general register `num` for `size` bytes, as in "r10d".
+char *gp_reg_name(int num, int size) {
+  for (int i = 0; i < sizeof(regs) / sizeof(*regs); i++)
+    if (regs[i].kind == GP && regs[i].num == num && regs[i].size == size &&
+        !regs[i].is_high)
+      return regs[i].name;
+  return NULL;
+}
+
 // Relocation suffixes, as in `foo@PLT`.
 typedef enum { NO_SUFFIX, AT_PLT, AT_GOTPCREL, AT_TLSGD, AT_TPOFF } Suffix;
 
@@ -673,6 +693,7 @@ static Insn insns[] = {
   {"cqto", FIXED, 2, .bytes = {0x48, 0x99}},
   {"cltq", FIXED, 2, .bytes = {0x48, 0x98}},
   {"ud2", FIXED, 2, .bytes = {0x0f, 0x0b}},
+  {"syscall", FIXED, 2, .bytes = {0x0f, 0x05}},
   {"stosb", FIXED, 1, .bytes = {0xaa}},
   {"faddp", FIXED, 2, .bytes = {0xde, 0xc1}},
   {"fmulp", FIXED, 2, .bytes = {0xde, 0xc9}},
