@@ -117,6 +117,19 @@ container fails 5 (`test_email`, `test_imaplib`, `test_ssl`,
 are `test_distutils` and `test_peg_generator` (1.12) and `test_lzma` and
 `test_zipfile` (1.14, new since the first baseline).
 
+Final run for 1.11, on 2026-09-25, the same way, with mucc at `adb96bb`
+(after 1.15) and, for CPython, at `8323b22` (after 2.3; 2.4 and 2.5 don't
+change what mucc compiles): zlib, Lua, libpng and TinyCC pass;
+SQLite: 249,453 tests and 45,957 fuzz cases, 0 errors; git: 21,115
+pass, 0 fail, 231 known breakages. CPython builds every module, `_decimal`
+too (its `asm` needed 2.3), and 402 of the 408 suites that run pass. The
+6 that fail: `test_email`, `test_imaplib`, `test_ssl`, `test_urllib2`
+and `test_urllib2_localnet`, which gcc fails in the same container (the
+environment; `test_ssl` even aborts on an assertion with both), and
+`test_peg_generator` (1.12). `test_poplib` failed once in an earlier run
+of the same day and passed in this one and with gcc: under heavy load,
+it seems.
+
 - [x] **0.4 Driver fixes the baseline found.** Accept and ignore `-march=`
   and `-mtune=` (Lua's makefile passes `-march=native`; mucc only emits
   baseline x86-64, which every x86-64 CPU runs). Pass files with unknown
@@ -179,14 +192,15 @@ are `test_distutils` and `test_peg_generator` (1.12) and `test_lzma` and
     `struct s64` are still an error; `make test-all` and `make difftest
     N=300` pass; git builds and passes its tests (see the baseline table).
 
-## Where we left off (2026-09-24, evening)
+## Where we left off (2026-09-25)
 
-Phase 0 is done. In Phase 1, everything is done and verified except
-1.11 (1.8 and 1.10 were dropped as not needed). Git builds with mucc and passes its tests, the same as gcc.
+Phases 0, 1 and 2 are done and verified (1.8 and 1.10 were dropped as
+not needed). Git and CPython build with mucc and pass their tests as
+with gcc, except CPython's `test_peg_generator` (1.12).
 
-Next: finish 1.11 (run the baseline once more, update the README's
-lists) and move to Phase 2. CPython should now fail only
-`test_peg_generator` beyond gcc's environment failures (see 1.12).
+Next: Phase 3, starting with 3.1 (vendor musl). `mucc -ar`/`-ranlib`
+(2.4) can archive it, `asm` with operands and register variables (2.3)
+cover its system calls, and `.incbin` (2.5) is ready for Phase 4.
 
 How the baseline is run now: in the `ubuntu:24.04` Docker image (as the
 first baseline was), with the projects' build dependencies installed and
@@ -386,12 +400,12 @@ silently produces wrong code.
 
 - **1.10 Dropped** (see "Not planned"): errors for writing to `const`.
 
-- [ ] **1.11 Re-run the baseline.** Update the Phase 0 table and the README's
+- [x] **1.11 Re-run the baseline.** Update the Phase 0 table and the README's
   lists of what mucc does and doesn't do.
-  - [ ] Added: re-run, results under the Phase 0 table. Left: finish 1.12
-    and 1.14, run it once more, and update the README (it doesn't list
-    git yet).
-  - [ ] Verified: table and README match the results.
+  - [x] Added: re-run twice, results under the Phase 0 table. The README
+    and the website list git and CPython's new numbers; the README's
+    lists of what mucc does and doesn't do were updated with each item.
+  - [x] Verified: table and README match the results.
 
 - [x] **1.13 Locals aligned above 16 bytes.** Locals are placed relative to
   `%rbp`, which is only 16-byte aligned, so `_Alignas(32)` on a local, or
@@ -555,7 +569,7 @@ silently produces wrong code.
     odd-sized member; `ar t`, `nm -s`, `ld` and mucc's linker read it.
     CI passed, `2dcb6a8`.)
 
-- [ ] **2.5 A cheap way to embed large files.** Either make `#embed` use
+- [x] **2.5 A cheap way to embed large files.** Either make `#embed` use
   about as much memory as the data itself, or add `.incbin` to the
   assembler. Needed to put a C library inside the binary.
   - [x] Added: `.incbin "file"[, skip[, count]]` in mucc's assembler,
@@ -567,14 +581,13 @@ silently produces wrong code.
     `.data`, `.bss`, ...) gets GNU as's flags; and running out of memory
     is now an error instead of a crash (reporting it allocated memory,
     which recursed until the stack overflowed).
-  - [ ] Verified: embedding a 10 MB file uses under 50 MB of memory, and the
+  - [x] Verified: embedding a 10 MB file uses under 50 MB of memory, and the
     bytes come out exactly right. (`test/driver.sh`: 10 MB of random
     bytes with at most 24 MB in memory, measured with `getrusage`, and
     `objcopy` gets the same bytes back; a program links against them;
     `test/asm-forms.s` has `.incbin` with and without skip and count,
     the same as with GNU as. The previous commit fails these (falling
-    back to GNU as) and the out-of-memory case. Check the box once CI
-    passes.)
+    back to GNU as) and the out-of-memory case. CI passed, `2d6328e`.)
 
 ## Phase 3: bundle musl
 
