@@ -182,12 +182,12 @@ are `test_distutils` and `test_peg_generator` (1.12) and `test_lzma` and
 ## Where we left off (2026-09-24, evening)
 
 Phase 0 is done. In Phase 1, everything is done and verified except
-1.11, 1.12 and 1.14, and 1.6, whose last fix waits for CI (1.8 and 1.10
-were dropped as not needed). Git builds
-with mucc and passes its tests, the same as gcc.
+1.11 and 1.12, and 1.14, which waits for CI (1.8 and 1.10 were dropped
+as not needed). Git builds with mucc and passes its tests, the same as
+gcc.
 
-Start the next session with 1.14 (`test_lzma`, `test_zipfile`), then
-1.12, then finish 1.11 (update the README's lists) and move to Phase 2.
+Next: 1.12, then finish 1.11 (update the README's lists) and move to
+Phase 2.
 
 How the baseline is run now: in the `ubuntu:24.04` Docker image (as the
 first baseline was), with the projects' build dependencies installed and
@@ -323,7 +323,7 @@ silently produces wrong code.
   - [x] Verified: a test for supported, ignored and unsupported names
     (`test/attribute.c`).
 
-- [ ] **1.6 Keep glibc's attributes.** glibc's `<sys/cdefs.h>` defines
+- [x] **1.6 Keep glibc's attributes.** glibc's `<sys/cdefs.h>` defines
   `__attribute__(x)` as nothing for any compiler that isn't gcc, clang or
   tcc, so today mucc never sees glibc's `packed` and `aligned`. Found by
   the baseline: under mucc, `struct epoll_event` is 16 bytes with its data
@@ -338,11 +338,11 @@ silently produces wrong code.
     `-I/usr/include/x86_64-linux-gnu`, which put glibc's `<sys/cdefs.h>`
     first again, so its `select` module still had a 16-byte
     `epoll_event`.
-  - [ ] Verified: a new test compares `sizeof`, `_Alignof` and member
+  - [x] Verified: a new test compares `sizeof`, `_Alignof` and member
     offsets of glibc's structs between gcc and mucc (starting with
     `struct epoll_event`: 12 and 4), and CPython's `test_epoll` and
-    `test_selectors` pass. (Both pass now; check the box once CI passes
-    on the commit with the `-I` fix.)
+    `test_selectors` pass. CI passed on the commit with the `-I` fix
+    (`ed73d4e`).
 
 - [x] **1.7 C23 `enum E : type`.** A fixed underlying type, which sets the
   size, signedness and range checks of the enum.
@@ -416,9 +416,19 @@ silently produces wrong code.
   64-bit `LZMA_FILTER_LZMA1`; `test_zipfile` uses lzma too. Suspected
   cause, not yet checked: `case` labels are read into an `int` in
   `stmt()` (`src/parser.c`), so a 64-bit case value is cut to 32 bits.
-  - [ ] Added
+  - [x] Added: that was it, and more. `case` values were cut to 32 bits
+    in the parser, and codegen compared with `cmp $imm, %rax`, whose
+    immediate is only 32 bits, sign-extended. Case values are now 64
+    bits, converted to the switch's promoted type as C requires (so an
+    unsigned range like `case 1 ... 0xffffffff` is no longer "empty"),
+    and a value that doesn't fit an immediate is loaded into `%rdx`
+    first.
   - [ ] Verified: a test with 64-bit `case` values (or whatever the cause
-    is), compared with gcc; `test_lzma` and `test_zipfile` pass.
+    is), compared with gcc; `test_lzma` and `test_zipfile` pass. (New
+    cases in `test/control.c` fail with the previous commit and match
+    gcc; `make test-all` and `make difftest N=300` pass; both CPython
+    suites pass in the Ubuntu 24.04 container. Check the box once CI
+    passes.)
 
 ## Phase 2: prepare for a bundled C library
 

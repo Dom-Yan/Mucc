@@ -2472,6 +2472,15 @@ static Node *asm_stmt(Token **rest, Token *tok) {
   return node;
 }
 
+// A case label's value converted to the promoted type of the switch's
+// controlling expression `ty`, as C requires: all 64 bits for a 64-bit
+// switch, 32 otherwise.
+static int64_t case_value(Type *ty, int64_t val) {
+  if (ty->size == 8)
+    return val;
+  return (ty->is_unsigned && ty->size == 4) ? (uint32_t)val : (int32_t)val;
+}
+
 // stmt = "return" expr? ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "switch" "(" expr ")" stmt
@@ -2535,6 +2544,7 @@ static Node *stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_SWITCH, tok);
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
+    add_type(node->cond);
     tok = skip(tok, ")");
 
     Node *sw = current_switch;
@@ -2561,13 +2571,15 @@ static Node *stmt(Token **rest, Token *tok) {
       error_tok(tok, "jump into the scope of a variable with a cleanup");
 
     Node *node = new_node(ND_CASE, tok);
-    int begin = const_expr(&tok, tok->next);
-    int end;
+    Type *ty = current_switch->cond->ty;
+    bool uns = ty->is_unsigned && ty->size >= 4;
+    int64_t begin = case_value(ty, const_expr(&tok, tok->next));
+    int64_t end;
 
     if (equal(tok, "...")) {
       // [GNU] Case ranges, e.g. "case 1 ... 5:"
-      end = const_expr(&tok, tok->next);
-      if (end < begin)
+      end = case_value(ty, const_expr(&tok, tok->next));
+      if (uns ? (uint64_t)end < (uint64_t)begin : end < begin)
         error_tok(tok, "empty case range specified");
     } else {
       end = begin;
