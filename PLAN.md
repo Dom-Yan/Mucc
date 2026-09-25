@@ -540,7 +540,7 @@ silently produces wrong code.
     `8323b22`. CPython's `_decimal`, which needed this, is checked in
     1.11's last run.)
 
-- [ ] **2.4 An archiver.** `mucc -ar rcs lib.a a.o b.o` writes a standard
+- [x] **2.4 An archiver.** `mucc -ar rcs lib.a a.o b.o` writes a standard
   `ar` archive that mucc's linker, `ld` and `nm` all read.
   - [x] Added: `src/ar.c`. `mucc -ar` does `r`, `q`, `d` and `t`, with
     `c`, `s`, `S` (and `u`, `D`, `v` accepted); it writes the symbol
@@ -548,19 +548,33 @@ silently produces wrong code.
     (dates and owners 0, mode 644), through a temporary file. `mucc
     -ranlib` rewrites the index, for makefiles that run `$(RANLIB)`
     (musl's does).
-  - [ ] Verified: an archive made by mucc links the same as one made by GNU
+  - [x] Verified: an archive made by mucc links the same as one made by GNU
     `ar`, and `ar t` lists it. (`test/ar.sh`, in `make test` and
     `test-stage2`: after `rcs`, `r`, `q`, `d`, `rcS` and `-ranlib`, mucc's
     archive is byte for byte GNU `ar D`'s, with a long member name and an
     odd-sized member; `ar t`, `nm -s`, `ld` and mucc's linker read it.
-    Check the box once CI passes.)
+    CI passed, `2dcb6a8`.)
 
 - [ ] **2.5 A cheap way to embed large files.** Either make `#embed` use
   about as much memory as the data itself, or add `.incbin` to the
   assembler. Needed to put a C library inside the binary.
-  - [ ] Added
+  - [x] Added: `.incbin "file"[, skip[, count]]` in mucc's assembler,
+    read straight into the section. `#embed` stays as it is: `.incbin`
+    works however mucc is built (gcc 13 in CI has no `#embed`), through
+    a small generated `.s` file, which Phase 4 will use. On the way: a
+    section without jumps (data) is no longer copied once more at the
+    end; a `.section` with a well-known name and no flags (`.rodata`,
+    `.data`, `.bss`, ...) gets GNU as's flags; and running out of memory
+    is now an error instead of a crash (reporting it allocated memory,
+    which recursed until the stack overflowed).
   - [ ] Verified: embedding a 10 MB file uses under 50 MB of memory, and the
-    bytes come out exactly right.
+    bytes come out exactly right. (`test/driver.sh`: 10 MB of random
+    bytes with at most 24 MB in memory, measured with `getrusage`, and
+    `objcopy` gets the same bytes back; a program links against them;
+    `test/asm-forms.s` has `.incbin` with and without skip and count,
+    the same as with GNU as. The previous commit fails these (falling
+    back to GNU as) and the out-of-memory case. Check the box once CI
+    passes.)
 
 ## Phase 3: bundle musl
 

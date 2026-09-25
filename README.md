@@ -188,7 +188,8 @@ builds it with no gcc at all, and with `LDFLAGS=-static` without `ld` either.
 A mucc built by mucc builds a byte-identical mucc.
 
 **Its own toolchain.** The assembler (`src/asm.c`) produces object files
-byte-for-byte identical to GNU `as` from the same input. The linker
+byte-for-byte identical to GNU `as` from the same input; `.incbin` puts a
+file's bytes in an object without holding more than one copy. The linker
 (`src/link.c`) makes static executables, including thread-local data and
 glibc's IFUNC functions.
 

@@ -30,8 +30,11 @@ void *arena_alloc(size_t size) {
   if (!p || end - p < size) {
     size_t block = size > ARENA_BLOCK ? size : ARENA_BLOCK;
     p = mmap(NULL, block, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED)
-      error("out of memory");
+    if (p == MAP_FAILED) {
+      // Not error(): formatting its message would allocate here again.
+      fprintf(stderr, "mucc: error: out of memory\n");
+      exit(1);
+    }
     madvise(p, block, MADV_HUGEPAGE);
     end = p + block;
   }

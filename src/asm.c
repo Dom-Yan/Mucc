@@ -244,6 +244,24 @@ static void out_n(int n, uint64_t val) {
     out((val >> (i * 8)) & 0xff);
 }
 
+// Adds `n` bytes to the current section and returns where they go, for
+// .incbin to read a file into.
+static unsigned char *reserve(int64_t n) {
+  if (cur->type == SHT_NOBITS)
+    fail("data in a section without contents");
+  Bytes *b = &cur->bytes;
+  if (b->len + n > INT32_MAX)
+    fail("section over 2 GiB");
+  if (b->len + n > b->cap) {
+    b->cap = MAX(b->cap * 2, b->len + n);
+    b->data = realloc(b->data, b->cap);
+    if (!b->data)
+      fail("out of memory");
+  }
+  b->len += n;
+  return b->data + b->len - n;
+}
+
 static void out_zeros(int n) {
   if (cur->type == SHT_NOBITS)
     cur->bytes.len += n;
@@ -1341,6 +1359,20 @@ static void section_directive(void) {
       while (*p)
         p++;
     }
+  } else {
+    // Without flags, a well-known name gets the ones GNU as gives it.
+    if (!strncmp(name, ".text", 5))
+      flags = SHF_ALLOC | SHF_EXECINSTR;
+    else if (!strncmp(name, ".rodata", 7))
+      flags = SHF_ALLOC;
+    else if (!strncmp(name, ".data", 5) || type != SHT_PROGBITS)
+      flags = SHF_ALLOC | SHF_WRITE;
+    else if (!strncmp(name, ".bss", 4))
+      flags = SHF_ALLOC | SHF_WRITE;
+    else if (!strncmp(name, ".tdata", 6) || !strncmp(name, ".tbss", 5))
+      flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
+    if (!strncmp(name, ".bss", 4) || !strncmp(name, ".tbss", 5))
+      type = SHT_NOBITS;
   }
 
   Section *sec = find_section(name);
@@ -1420,6 +1452,34 @@ static void directive(char *name, int len) {
       fail("symbol in a data directive smaller than .quad");
   } else if (IS(".zero")) {
     out_zeros(read_int());
+  } else if (IS(".incbin")) {
+    // .incbin "file"[, skip[, count]]: the file's bytes, as they are
+    char *path = read_string();
+    int64_t skip = 0, count = -1;
+    skip_space();
+    if (*p == ',') {
+      p++;
+      skip = read_int();
+      skip_space();
+      if (*p == ',') {
+        p++;
+        count = read_int();
+      }
+    }
+    FILE *fp = fopen(path, "rb");
+    if (!fp)
+      fail(".incbin: %s: %s", path, strerror(errno));
+    fseek(fp, 0, SEEK_END);
+    int64_t size = ftell(fp);
+    if (skip < 0 || skip > size || count < -1 || (count >= 0 && skip + count > size))
+      fail(".incbin: %s: skip or count out of range", path);
+    if (count < 0)
+      count = size - skip;
+    fseek(fp, skip, SEEK_SET);
+    unsigned char *dest = reserve(count);
+    if (fread(dest, 1, count, fp) != count)
+      fail(".incbin: %s: read error", path);
+    fclose(fp);
   } else if (IS(".comm")) {
     Sym *sym = read_sym();
     expect_comma();
@@ -1633,13 +1693,29 @@ static void fill_hole(Section *sec, uint64_t offset, int type, Sym *sym, int64_t
   add_reloc(sec, offset, type, sym, NULL, addend);
 }
 
+static void place_jumps(Section *sec);
+
 // Writes the final bytes of `sec`, with its jumps in place, then fills
 // its holes.
 static void finish_section(Section *sec) {
   if (sec->type == SHT_NOBITS)
     return;
+  if (sec->njumps)
+    place_jumps(sec);
 
+  for (int i = 0; i < sec->nholes; i++) {
+    Hole *h = &sec->holes[i];
+    uint64_t offset = h->pos + sec->jumps_before[h->njumps];
+    fill_hole(sec, offset, h->type, h->sym, h->addend);
+  }
+}
+
+// Copies `sec`'s bytes with its jumps, now that their sizes are known,
+// in place. (Without jumps, as in data, its bytes are already final.)
+static void place_jumps(Section *sec) {
   Bytes out = {calloc(1, sec->size + 1), sec->size, sec->size + 1};
+  if (!out.data)
+    fail("out of memory");
   uint64_t dst = 0;
   int src = 0;
 
@@ -1673,12 +1749,6 @@ static void finish_section(Section *sec) {
   for (int i = 0; i < sec->njumps; i++)
     if (sec->jumps[i].is_long)
       fill_hole(sec, sec->jumps[i].field, R_X86_64_PC32, sec->jumps[i].target, -4);
-
-  for (int i = 0; i < sec->nholes; i++) {
-    Hole *h = &sec->holes[i];
-    uint64_t offset = h->pos + sec->jumps_before[h->njumps];
-    fill_hole(sec, offset, h->type, h->sym, h->addend);
-  }
 }
 
 //---------- DWARF line numbers ----------------------------------------------
