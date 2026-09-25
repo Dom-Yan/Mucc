@@ -349,3 +349,9 @@ v1:
   .align 8
 v2:
   .zero 8
+
+  # A file's bytes (this one's, from the top directory, where test/asm.sh
+  # runs): all of it, then 16 bytes from offset 4.
+  .section .rodata
+  .incbin "test/asm-forms.s"
+  .incbin "test/asm-forms.s", 4, 16

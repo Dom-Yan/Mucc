@@ -516,4 +516,30 @@ $mucc -o $tmp/repro2 $tmp/repro.c
 cmp -s $tmp/repro1 $tmp/repro2
 check 'reproducible builds'
 
+# .incbin puts a file in an object cheaply: 10 MB in under 50 MB of memory
+# (the most mucc had in RAM at once), byte for byte. (A C program can
+# refer to `blob` and `blob_end`.)
+head -c 10000000 /dev/urandom > $tmp/big.bin
+printf '.section .rodata\n.globl blob\nblob:\n.incbin "%s"\n.globl blob_end\nblob_end:\n' \
+  $tmp/big.bin > $tmp/blob.s
+kb=$(python3 -c '
+import resource, subprocess, sys
+subprocess.run(sys.argv[1:], check=True)
+print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' \
+  $mucc -c -o $tmp/blob.o $tmp/blob.s 2> $tmp/err) &&
+  [ "$kb" -lt 51200 ] && [ ! -s $tmp/err ] &&
+  objcopy -O binary --only-section=.rodata $tmp/blob.o $tmp/blob.bin &&
+  cmp $tmp/big.bin $tmp/blob.bin
+check ".incbin of 10 MB ($kb KB of memory)"
+
+echo 'extern char blob[], blob_end[];
+int main() { return blob_end - blob == 10000000 && blob[0] == blob[0] ? 0 : 1; }' > $tmp/blob.c
+$mucc -o $tmp/blob $tmp/blob.c $tmp/blob.o && $tmp/blob
+check '.incbin linked into a program'
+
+# Out of memory is an error, not a crash. (mucc reserves memory 64 MB at a
+# time, so it can't start under a 50 MB address space limit.)
+(ulimit -v 51200; $mucc -c -o $tmp/oom.o $tmp/empty.c) 2>&1 | grep -q 'error: out of memory'
+check 'out of memory'
+
 echo OK
