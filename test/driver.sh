@@ -85,6 +85,55 @@ echo "#include \"$tmp/out1\"" | $mucc -E -o $tmp/out2 -xc -
 cat $tmp/out2 | grep -q foo
 check '-E and -o'
 
+# -E line markers, as gcc writes them: 1 entering an include, 2 returning,
+# 3 a system header. A few empty lines stand in for a short jump.
+mkdir $tmp/lm
+echo 'int a;' > $tmp/lm/a.h
+printf '#include "a.h"\nint b;\n\n\nint c = __LINE__;\n#line 100 "other.c"\nint d;\n' > $tmp/lm/main.c
+(cd $tmp/lm; $OLDPWD/$mucc -E main.c) > $tmp/lm/out
+cat > $tmp/lm/expected <<'EOF'
+# 1 "main.c"
+
+# 1 "./a.h" 1
+int a;
+# 2 "main.c" 2
+int b;
+
+
+int c = 5;
+# 100 "other.c"
+int d;
+EOF
+diff $tmp/lm/out $tmp/lm/expected
+check '-E line markers'
+
+echo '#include <errno.h>' | $mucc -E -xc - | grep -q '/errno\.h" 1 3$'
+check '-E line marker of a system header'
+
+echo '#include <errno.h>' | $mucc -E -P -xc - | grep -q '^#'
+[ $? = 1 ]
+check '-E -P'
+
+# -E output compiled again reports errors where they were written, and
+# no warnings from system headers.
+printf 'int x;\nint y = ;\n' > $tmp/lm/bad.h
+printf '\n\n#include "bad.h"\n' > $tmp/lm/bad.c
+(cd $tmp/lm; $OLDPWD/$mucc -E bad.c) > $tmp/lm/bad.i
+$mucc -c -o /dev/null -xc $tmp/lm/bad.i 2>&1 | grep -q '^\./bad\.h:2:'
+check '-E output compiled again'
+
+printf 'int f(void) {\n  return 1;\n}\n' > $tmp/lm/f.h
+echo '#include "f.h"' > $tmp/lm/f.c
+(cd $tmp/lm; $OLDPWD/$mucc -E f.c) > $tmp/lm/f.i
+$mucc -g -c -o $tmp/lm/f.o -xc $tmp/lm/f.i
+objdump --dwarf=decodedline $tmp/lm/f.o | grep -q '^\./f\.h  *2  *0x'
+check '-E output compiled again, debug info'
+
+printf '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n' |
+  $mucc -Iinclude -E -o $tmp/lm/sys.i -xc -
+[ -z "$($mucc -c -o /dev/null -xc $tmp/lm/sys.i 2>&1)" ]
+check '-E output of system headers compiled again'
+
 # -I
 mkdir $tmp/dir
 echo foo > $tmp/dir/i-option-test
@@ -92,7 +141,7 @@ echo "#include \"i-option-test\"" | $mucc -I$tmp/dir -E -xc - | grep -q foo
 check -I
 
 # -D
-echo foo | $mucc -Dfoo -E -xc - | grep -q 1
+echo foo | $mucc -Dfoo -E -xc - | grep -qx 1
 check -D
 
 # -D

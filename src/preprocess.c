@@ -744,10 +744,18 @@ static bool expand_macro(Token **rest, Token *tok) {
   if (!m)
     return false;
 
+  // The expansion's tokens point back to `tok` (their origin), which -E
+  // uses to put them on the line `tok` came from.
+  tok->line_delta = tok->file->line_delta;
+  tok->filename = tok->file->display_name;
+
   // Built-in dynamic macro application such as __LINE__
   if (m->handler) {
     *rest = m->handler(tok);
     (*rest)->next = tok->next;
+    (*rest)->origin = tok;
+    (*rest)->at_bol = tok->at_bol;
+    (*rest)->has_space = tok->has_space;
     return true;
   }
 
@@ -1195,7 +1203,8 @@ static void read_line_marker(Token **rest, Token *tok) {
 
   if (tok->kind != TK_NUM || tok->ty->kind != TY_INT)
     error_tok(tok, "invalid line marker");
-  start->file->line_delta = tok->val - start->line_no;
+  // The number is that of the line after the directive.
+  start->file->line_delta = tok->val - start->line_no - 1;
 
   tok = tok->next;
   if (tok->kind == TK_EOF)
@@ -1644,10 +1653,13 @@ Token *preprocess(Token *tok) {
   tok = preprocess2(tok);
   if (cond_incl)
     error_tok(cond_incl->tok, "unterminated conditional directive");
-  convert_pp_tokens(tok);
-  join_adjacent_string_literals(tok);
 
+  // Before anything else can report an error, so the line agrees with
+  // the file name #line gave.
   for (Token *t = tok; t; t = t->next)
     t->line_no += t->line_delta;
+
+  convert_pp_tokens(tok);
+  join_adjacent_string_literals(tok);
   return tok;
 }

@@ -133,11 +133,17 @@ static Token *user_token(Token *tok) {
   return tok;
 }
 
+// The file `tok` is reported in: the name #line or a line marker gave,
+// once the preprocessor has passed it on.
+static char *tok_filename(Token *tok) {
+  return tok->filename ? tok->filename : tok->file->name;
+}
+
 void error_tok(Token *tok, char *fmt, ...) {
   tok = user_token(tok);
   va_list ap;
   va_start(ap, fmt);
-  print_diag("error", tok->file->name, tok->file->contents, tok->line_no,
+  print_diag("error", tok_filename(tok), tok->file->contents, tok->line_no,
              tok->loc, vformat(fmt, ap));
   after_error();
 }
@@ -148,7 +154,7 @@ void warn_tok(Token *tok, char *fmt, ...) {
   tok = user_token(tok);
   va_list ap;
   va_start(ap, fmt);
-  print_diag("warning", tok->file->name, tok->file->contents, tok->line_no,
+  print_diag("warning", tok_filename(tok), tok->file->contents, tok->line_no,
              tok->loc, vformat(fmt, ap));
   va_end(ap);
 }
@@ -168,7 +174,7 @@ void error_expected(Token *tok, char *what) {
     }
 
     if (input < p) {
-      print_diag("error", tok->file->name, input, line_no, p,
+      print_diag("error", tok_filename(tok), input, line_no, p,
                  format("expected %s", what));
       after_error();
     }
