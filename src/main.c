@@ -24,6 +24,7 @@ int opt_std = 2017; // -std=: 1989, 1999, 2011, 2017 or 2023 (C17 by default, as
 static FileType opt_x;
 static StringArray opt_include;
 static bool opt_E;
+static bool opt_P;
 static bool opt_M;
 static bool opt_MD;
 static bool opt_MMD;
@@ -276,6 +277,11 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-E")) {
       opt_E = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-P")) {
+      opt_P = true;
       continue;
     }
 
@@ -583,20 +589,107 @@ static void run_cc1(int argc, char **argv, char *input, char *output, bool obj) 
 
 //---------- -E (preprocessed output) and -M (dependencies) ------------------
 
-// Print tokens to stdout. Used for -E.
-static void print_tokens(Token *tok) {
-  FILE *out = open_file(opt_o ? opt_o : "-");
+static bool in_std_include_path(char *path);
 
-  int line = 1;
-  for (; tok->kind != TK_EOF; tok = tok->next) {
-    if (line > 1 && tok->at_bol)
-      fprintf(out, "\n");
-    if (tok->has_space && !tok->at_bol)
-      fprintf(out, " ");
-    fprintf(out, "%.*s", tok->len, tok->loc);
-    line++;
+// Where -E's output is: the file being printed (its real name, and the
+// name it is shown as, which #line can change), the line of it the output
+// is on, and the files that included it.
+static FILE *pp_out;
+static char *pp_file;
+static char *pp_name;
+static int pp_line;
+static StringArray pp_stack;
+
+// Writes a line marker as gcc does: `# 12 "foo.h"`, plus flag 1 when
+// entering an included file, 2 when returning to one, and 3 for a system
+// header.
+static void line_marker(char *file, char *name, int line) {
+  int flag = 0;
+  if (pp_file && strcmp(file, pp_file)) {
+    flag = 1;
+    for (int i = pp_stack.len - 1; i >= 0; i--) {
+      if (!strcmp(pp_stack.data[i], file)) {
+        pp_stack.len = i;
+        flag = 2;
+        break;
+      }
+    }
+    if (flag == 1)
+      strarray_push(&pp_stack, pp_file);
   }
-  fprintf(out, "\n");
+
+  fprintf(pp_out, "# %d \"", line);
+  for (char *p = name; *p; p++) {
+    if (*p == '"' || *p == '\\')
+      fputc('\\', pp_out);
+    fputc(*p, pp_out);
+  }
+  fprintf(pp_out, "\"");
+  if (flag)
+    fprintf(pp_out, " %d", flag);
+  if (in_std_include_path(file))
+    fprintf(pp_out, " 3");
+  fprintf(pp_out, "\n");
+
+  pp_file = file;
+  pp_name = name;
+  pp_line = line;
+}
+
+// Moves the output to the start of `line` of a file, with a line marker
+// unless a few newlines get there.
+static void move_to(char *file, char *name, int line) {
+  if (!strcmp(file, pp_file) && !strcmp(name, pp_name) &&
+      pp_line < line && line - pp_line <= 8) {
+    for (; pp_line < line; pp_line++)
+      fprintf(pp_out, "\n");
+    return;
+  }
+  fprintf(pp_out, "\n");
+  line_marker(file, name, line);
+}
+
+// Print tokens for -E. Unless -P is given, line markers say where each
+// line came from, so the output, compiled again, reports errors and debug
+// info against the original files. A macro's expansion stays on the line
+// of its name.
+static void print_tokens(Token *tok) {
+  pp_out = open_file(opt_o ? opt_o : "-");
+  if (!opt_P)
+    line_marker(base_file, base_file, 1);
+
+  for (bool first = true; tok->kind != TK_EOF; tok = tok->next, first = false) {
+    if (!tok->at_bol && !first) {
+      if (tok->has_space)
+        fprintf(pp_out, " ");
+      fprintf(pp_out, "%.*s", tok->len, tok->loc);
+      continue;
+    }
+
+    // Tokens in the output have had line_delta (#line) added already,
+    // macro names they came from haven't.
+    Token *src = tok;
+    int line = tok->line_no;
+    if (tok->origin) {
+      while (src->origin)
+        src = src->origin;
+      line = src->line_no + src->line_delta;
+    }
+
+    if (opt_P || !src->filename) {
+      if (!first) {
+        fprintf(pp_out, "\n");
+        pp_line++;
+      }
+    } else if (strcmp(src->file->name, pp_file) ||
+               strcmp(src->filename, pp_name) || line != pp_line) {
+      move_to(src->file->name, src->filename, line);
+    } else if (!first) {
+      fprintf(pp_out, " ");
+    }
+    fprintf(pp_out, "%.*s", tok->len, tok->loc);
+  }
+  fprintf(pp_out, "\n");
 }
 
 static bool in_std_include_path(char *path) {
@@ -610,9 +703,11 @@ static bool in_std_include_path(char *path) {
 }
 
 // True if `tok` was written in a system header such as /usr/include/stdio.h
-// (possibly reaching the user's code through a macro).
+// (possibly reaching the user's code through a macro), or, in -E output
+// compiled again, after a line marker naming such a file.
 bool in_system_header(Token *tok) {
-  return in_std_include_path(tok->file->name);
+  return in_std_include_path(tok->file->name) ||
+         (tok->filename && in_std_include_path(tok->filename));
 }
 
 // If -M options is given, the compiler write a list of input files to

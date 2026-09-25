@@ -182,12 +182,12 @@ are `test_distutils` and `test_peg_generator` (1.12) and `test_lzma` and
 ## Where we left off (2026-09-24, evening)
 
 Phase 0 is done. In Phase 1, everything is done and verified except
-1.11 and 1.15, and 1.14, which waits for CI (1.8 and 1.10 were dropped
-as not needed). Git builds with mucc and passes its tests, the same as
-gcc.
+1.11, and 1.15, which waits for CI (1.8 and 1.10 were dropped as not
+needed). Git builds with mucc and passes its tests, the same as gcc.
 
-Next: 1.15 (line markers in `-E` output), then finish 1.11 (update the
-README's lists) and move to Phase 2.
+Next: finish 1.11 (run the baseline once more, update the README's
+lists) and move to Phase 2. CPython should now fail only
+`test_peg_generator` beyond gcc's environment failures (see 1.12).
 
 How the baseline is run now: in the `ubuntu:24.04` Docker image (as the
 first baseline was), with the projects' build dependencies installed and
@@ -436,12 +436,27 @@ silently produces wrong code.
   tools that read them (distutils, ccache) work. `-P` leaves them out, as
   with gcc. mucc already reads such markers in its input. Fixes CPython's
   `test_distutils` (1.12).
-  - [ ] Added
-  - [ ] Verified: `test/driver.sh` cases compare the markers with gcc's
-    for a file with includes, and compiling `-E` output with an error in
-    an included file reports that file and line; `test_distutils` passes.
+  - [x] Added: markers at the start, on entering and leaving each file
+    and after `#line`, and for jumps of more than 8 lines (shorter ones
+    are empty lines, as gcc writes them). A macro's expansion stays on
+    the line of its name. Compiling such output again, diagnostics and
+    `.loc` debug info name the file a marker gave (each such name gets
+    its own `.file` number), and a marker naming a system header keeps
+    its warnings quiet. Three older bugs this found: `#line N` made the
+    line after it N + 1 instead of N (so `test/line.c` expected the
+    wrong numbers); diagnostics after a `#line` paired its line number
+    with the real file's name; and `__LINE__` and the other built-in
+    macros started a new line in `-E` output.
+  - [ ] Verified: `test/driver.sh` cases check the markers for a file
+    with includes and `#line` (the same places and flags as gcc's), a
+    system header's flag 3, `-P`, and that compiled `-E` output reports
+    an error in an included file at that file and line, puts its debug
+    lines there, and gives no warnings for glibc's headers; the old mucc
+    fails them. `make test-all` and `make difftest N=300` pass.
+    `test_distutils` passes (with `test_lzma` and `test_zipfile`, in the
+    Ubuntu 24.04 container). Check the box once CI passes.
 
-- [ ] **1.14 CPython's `test_lzma` and `test_zipfile`.** Found by the 1.11
+- [x] **1.14 CPython's `test_lzma` and `test_zipfile`.** Found by the 1.11
   re-run: both fail with mucc and pass with gcc in the same container
   (they passed in the first baseline). `test_lzma` fails with "Invalid
   filter ID: 4611686018427387905", which is `0x4000000000000001`, liblzma's
@@ -455,12 +470,11 @@ silently produces wrong code.
     unsigned range like `case 1 ... 0xffffffff` is no longer "empty"),
     and a value that doesn't fit an immediate is loaded into `%rdx`
     first.
-  - [ ] Verified: a test with 64-bit `case` values (or whatever the cause
+  - [x] Verified: a test with 64-bit `case` values (or whatever the cause
     is), compared with gcc; `test_lzma` and `test_zipfile` pass. (New
     cases in `test/control.c` fail with the previous commit and match
     gcc; `make test-all` and `make difftest N=300` pass; both CPython
-    suites pass in the Ubuntu 24.04 container. Check the box once CI
-    passes.)
+    suites pass in the Ubuntu 24.04 container; CI passed on `850fb26`.)
 
 ## Phase 2: prepare for a bundled C library
 

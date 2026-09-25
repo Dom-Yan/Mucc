@@ -1202,9 +1202,27 @@ static void gen_discard(Node *node) {
 // from, for debuggers. Most expressions share a line with the statement
 // around them, so only emit a .loc when the line actually changes.
 static void emit_loc(Token *tok) {
-  if (tok->file->file_no == loc_file && tok->line_no == loc_line)
+  int file_no = tok->file->file_no;
+
+  // A name given by #line or a line marker (in -E output compiled again)
+  // gets a file number of its own, after the files actually read.
+  if (tok->filename && strcmp(tok->filename, tok->file->name)) {
+    static HashMap names;
+    static int last_no;
+    file_no = (int)(intptr_t)hashmap_get(&names, tok->filename);
+    if (!file_no) {
+      if (!last_no)
+        while (get_input_files()[last_no])
+          last_no++;
+      file_no = ++last_no;
+      hashmap_put(&names, tok->filename, (void *)(intptr_t)file_no);
+      println("  .file %d \"%s\"", file_no, tok->filename);
+    }
+  }
+
+  if (file_no == loc_file && tok->line_no == loc_line)
     return;
-  loc_file = tok->file->file_no;
+  loc_file = file_no;
   loc_line = tok->line_no;
   println("  .loc %d %d", loc_file, loc_line);
 }
