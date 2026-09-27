@@ -18,12 +18,26 @@ The C library mucc bundles (see Phase 3 of `PLAN.md`). MIT license, in
   published at https://musl.libc.org/musl.pub.
 - `musl/` is the tarball's `musl-1.2.6/` directory.
 
-Local patches: none.
+Local patches, in `patches/`, applied in this order. Both are musl's own
+fixes for the advisories on its front page that cover 1.2.6, taken from its
+mailing list:
+
+- `musl-cve-2026-40200.patch`: qsort could write past a stack array. Only
+  reachable on x86-64 with more than about 34 trillion elements, but the
+  patch also fixes undefined shifts in the same code. From
+  https://www.openwall.com/lists/musl/2026/04/10/3/1
+- `musl-cve-2026-6042.patch`: iconv's GB18030 decoder could take seconds
+  per character (a denial of service), and decoded some characters wrong.
+  From https://www.openwall.com/lists/musl/2026/04/03/2/1
 
 ### Checking the tree
 
 ```
 tar xzf musl-1.2.6.tar.gz
+cd musl-1.2.6
+patch -p1 < ../thirdparty/patches/musl-cve-2026-40200.patch
+patch -p1 < ../thirdparty/patches/musl-cve-2026-6042.patch
+cd ..
 diff -r musl-1.2.6 thirdparty/musl
 ```
 
