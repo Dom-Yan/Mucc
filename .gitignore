@@ -3,6 +3,7 @@
 **/*.o
 **/*.s
 !/test/asm-forms.s
+!/thirdparty/**/*.s
 **/a.out
 /tmp*
 /test/thirdparty/work
