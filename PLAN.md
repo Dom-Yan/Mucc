@@ -192,35 +192,21 @@ it seems.
     `struct s64` are still an error; `make test-all` and `make difftest
     N=300` pass; git builds and passes its tests (see the baseline table).
 
-## Where we left off (2026-09-25)
+## Where we left off (2026-09-27)
 
 Phases 0, 1 and 2 are done and verified (1.8 and 1.10 were dropped as
 not needed). Git and CPython build with mucc and pass their tests as
 with gcc, except CPython's `test_peg_generator` (1.12).
 
-Next: Phase 3, starting with 3.1 (vendor musl). `mucc -ar`/`-ranlib`
-(2.4) can archive it, `asm` with operands and register variables (2.3)
-cover its system calls, and `.incbin` (2.5) is ready for Phase 4.
+Phase 3 has started: 3.1 (vendor musl) is added and checked locally,
+and is verified once CI passes. Next is 3.2 (musl's assembly in mucc's
+assembler). `mucc -ar`/`-ranlib` (2.4) can archive musl, `asm` with
+operands and register variables (2.3) cover its system calls, and
+`.incbin` (2.5) is ready for Phase 4.
 
-For 3.1, found so far (nothing committed yet):
-
-- The latest release is musl 1.2.6. musl.libc.org answers, but very
-  slowly from here (plain requests time out at 20 to 60 seconds), so
-  download with long timeouts and retries (`curl -m 600 --retry 3`). A
-  download to `~/musl-dl` in WSL was started: the tarball, its `.asc`
-  signature, the front page and the signing key (`musl.pub`). Check it
-  finished before using it.
-- musl publishes GPG signatures, not checksums: verify the `.asc`
-  against the key, and record the tarball's SHA-256 in
-  `thirdparty/README.md` too.
-- The front page has a security advisory: "All releases through 1.2.6
-  are affected by ...". Read it in full first; if it comes with a patch,
-  apply it and list it in `thirdparty/README.md`.
-- `.gitignore` ignores `**/*.s`, and musl has many hand-written `.s`
-  files: add `!/thirdparty/**/*.s`. `.gitattributes` has `* text=auto
-  eol=lf`: add `thirdparty/** -text`, so git stores musl's files exactly
-  as released. Then check the committed tree against the extracted
-  tarball (`diff -r`).
+The musl tarball, its signature, `musl.pub` and the two patches are in
+`~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
+time out at 20 to 60 seconds); download with `curl -m 600 --retry 3`.
 
 How the baseline is run now: in the `ubuntu:24.04` Docker image (as the
 first baseline was), with the projects' build dependencies installed and
@@ -618,8 +604,20 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 - [ ] **3.1 Vendor musl.** Add a pinned musl release to `thirdparty/musl/`
   with its license. `thirdparty/README.md` records the version, where it came
   from, its checksum, and any local patches.
-  - [ ] Added
+  - [x] Added: musl 1.2.6, committed unchanged (`c93c57a`), then patched
+    for the two advisories on musl's front page that cover 1.2.6
+    (CVE-2026-40200 in qsort, CVE-2026-6042 in iconv), with musl's own
+    patches, kept in `thirdparty/patches/`. `.gitattributes` stores
+    `thirdparty/` byte for byte and `.gitignore` lets its `.s` files in.
+    musl's own `.gitignore` hides `dist/config.mak`, so that one file was
+    added with `git add -f`.
   - [ ] Verified: the files match the release tarball's published checksum.
+    (musl publishes a GPG signature, not a checksum: the tarball's
+    signature is good for musl's key `56BCDB593020450F`. The tree from
+    `git archive` of `c93c57a` is the tarball's, all 2,660 files and the
+    exec bits, and of `11af6d8` the tarball with the two patches, checked
+    by the recipe in `thirdparty/README.md`. `make test-all` and `make
+    difftest N=300` pass. Waiting for CI.)
 
 - [ ] **3.2 Everything musl's x86-64 code needs is in mucc's assembler,** so
   the system `as` is never used. Add a flag that makes falling back to `as`
