@@ -502,6 +502,27 @@ echo 'int main() { asm("pushq %rbx; cpuid; popq %rbx"); return 0; }' > $tmp/cpui
 $mucc -o $tmp/cpuid $tmp/cpuid.c 2> $tmp/err && [ ! -s $tmp/err ] && $tmp/cpuid
 check 'unknown instruction in asm() falls back to as'
 
+# -fno-as-fallback: either one is an error instead, naming the reason
+$mucc -fno-as-fallback -c -o $tmp/cpuid.o $tmp/cpuid.s 2>&1 |
+    grep -q "cpuid.s: the built-in assembler can't assemble this: unknown instruction 'cpuid'"
+check '-fno-as-fallback with a .s file'
+
+$mucc -fno-as-fallback -c -o $tmp/cpuid.o $tmp/cpuid.c 2>&1 |
+    grep -q "cpuid.c: the built-in assembler can't assemble an asm statement"
+check '-fno-as-fallback with asm()'
+
+$mucc -fno-as-fallback -fno-integrated-as -c -o $tmp/seven.o $tmp/empty.c 2>&1 |
+    grep -q "can't be used together"
+check '-fno-as-fallback with -fno-integrated-as'
+
+# ... and what the built-in assembler knows still works, with no `as`
+mkdir -p $tmp/noas
+ln -sf $(command -v false) $tmp/noas/as
+PATH=$tmp/noas:$PATH $mucc -fno-as-fallback -o $tmp/answer $tmp/answer.s $tmp/main.c
+$tmp/answer
+[ $? = 42 ]
+check '-fno-as-fallback builds without as'
+
 # -fno-integrated-as uses `as`, with the same result
 echo 'int main() { return 7; }' > $tmp/seven.c
 $mucc -fno-integrated-as -o $tmp/seven $tmp/seven.c

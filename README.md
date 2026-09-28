@@ -170,7 +170,9 @@ It accepts the usual flags: `-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-U`,
 picks the C standard: C17 by default, as with gcc 14 and clang, and
 `-std=c23` for C23 (`-std=gnu17` and the like work too; `-ansi` is C89).
 `-O`, `-g`, `-march=`, `-mtune=` and `-W*` (except `-w`) are accepted and
-ignored. As with gcc, a file with an extension mucc doesn't know (such as
+ignored. When mucc's built-in assembler doesn't know an instruction (in a
+`.s` file or an `asm` statement), mucc runs the system's `as` instead;
+`-fno-as-fallback` makes that an error. As with gcc, a file with an extension mucc doesn't know (such as
 libtool's `.lo`) is passed to the linker as an object file. `-E` writes
 line markers (`# 12 "foo.h" 1`) as gcc does, so its output, compiled
 again, reports errors and debug info against the original files; `-P`
