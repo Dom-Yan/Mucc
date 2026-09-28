@@ -193,7 +193,8 @@ static int64_t eval_rval(Node *node, char ***label);
 static bool is_const_expr(Node *node);
 static Node *assign(Token **rest, Token *tok);
 static Node *logor(Token **rest, Token *tok);
-static double eval_double(Node *node);
+static long double eval_double(Node *node);
+static long double to_flonum(Type *ty, long double val);
 static Node *conditional(Token **rest, Token *tok);
 static Node *logand(Token **rest, Token *tok);
 static Node *bitor(Token **rest, Token *tok);
@@ -1547,7 +1548,7 @@ static void set_constexpr_value(Obj *var, Node *init) {
   var->is_constexpr = true;
 
   if (is_flonum(ty)) {
-    var->constexpr_fval = eval_double(init);
+    var->constexpr_fval = to_flonum(ty, eval_double(init));
     return;
   }
 
@@ -2430,6 +2431,11 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
 
   if (ty->kind == TY_DOUBLE) {
     *(double *)(buf + offset) = eval_double(init->expr);
+    return cur;
+  }
+
+  if (ty->kind == TY_LDOUBLE) {
+    *(long double *)(buf + offset) = eval_double(init->expr);
     return cur;
   }
 
@@ -3465,7 +3471,32 @@ int64_t const_expr(Token **rest, Token *tok) {
   return eval(node);
 }
 
-static double eval_double(Node *node) {
+// `val` rounded to floating type `ty`.
+static long double to_flonum(Type *ty, long double val) {
+  if (ty->kind == TY_FLOAT)
+    return (float)val;
+  if (ty->kind == TY_DOUBLE)
+    return (double)val;
+  return val;
+}
+
+// `a op b` done in floating type `ty`, so it rounds as it would at run
+// time. (Done in long double and then rounded, it could round twice.)
+static long double fold_flonum(Type *ty, NodeKind op, long double a, long double b) {
+  if (ty->kind == TY_FLOAT) {
+    float x = a, y = b;
+    return op == ND_ADD ? x + y : op == ND_SUB ? x - y : op == ND_MUL ? x * y : x / y;
+  }
+  if (ty->kind == TY_DOUBLE) {
+    double x = a, y = b;
+    return op == ND_ADD ? x + y : op == ND_SUB ? x - y : op == ND_MUL ? x * y : x / y;
+  }
+  return op == ND_ADD ? a + b : op == ND_SUB ? a - b : op == ND_MUL ? a * b : a / b;
+}
+
+// Evaluates a floating-point constant expression, in the precision of
+// each part's type (float, double or long double).
+static long double eval_double(Node *node) {
   add_type(node);
 
   if (is_integer(node->ty)) {
@@ -3476,13 +3507,11 @@ static double eval_double(Node *node) {
 
   switch (node->kind) {
   case ND_ADD:
-    return eval_double(node->lhs) + eval_double(node->rhs);
   case ND_SUB:
-    return eval_double(node->lhs) - eval_double(node->rhs);
   case ND_MUL:
-    return eval_double(node->lhs) * eval_double(node->rhs);
   case ND_DIV:
-    return eval_double(node->lhs) / eval_double(node->rhs);
+    return fold_flonum(node->ty, node->kind, eval_double(node->lhs),
+                       eval_double(node->rhs));
   case ND_NEG:
     return -eval_double(node->lhs);
   case ND_COND:
@@ -3490,11 +3519,9 @@ static double eval_double(Node *node) {
   case ND_COMMA:
     return eval_double(node->rhs);
   case ND_CAST:
-    if (is_flonum(node->lhs->ty))
-      return eval_double(node->lhs);
-    return eval(node->lhs);
+    return to_flonum(node->ty, eval_double(node->lhs));
   case ND_NUM:
-    return node->fval;
+    return to_flonum(node->ty, node->fval);
   case ND_VAR:
     if (node->var->is_constexpr)
       return node->var->constexpr_fval;
