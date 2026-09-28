@@ -826,15 +826,80 @@ static void struct_regs(Type *ty, int *ngp, int *nfp) {
 }
 
 // Is a struct or union passed in registers, when `gp` general-purpose and
-// `fp` XMM registers are already taken? It goes either entirely in
-// registers or entirely on the stack. The caller and the callee must
-// both decide this the same way, so both use this function.
+// `fp` XMM registers are already taken (these count past the last one
+// once arguments go on the stack)? It goes either entirely in registers
+// or entirely on the stack, and only the kinds of registers it needs
+// matter. The caller and the callee must both decide this the same way,
+// so both use this function.
 static bool struct_in_regs(Type *ty, int gp, int fp) {
   if (ty->size > 16)
     return false;
   int ngp, nfp;
   struct_regs(ty, &ngp, &nfp);
-  return gp + ngp <= GP_MAX && fp + nfp <= FP_MAX;
+  return (!ngp || gp + ngp <= GP_MAX) && (!nfp || fp + nfp <= FP_MAX);
+}
+
+// va_arg(ap, ty): the address of the next variadic argument, found the
+// way the caller passed it (see push_args). An argument that went in
+// registers is in the register save area the prologue filled, at
+// gp_offset or fp_offset; one on the stack is at overflow_arg_area. A
+// struct in two registers is copied back together into node->var.
+static void gen_va_arg(Node *node) {
+  Type *ty = node->ty->base;
+  int c = count();
+  gen_expr(node->lhs);
+  println("  mov %%rax, %%rcx"); // the va_list
+
+  int ngp = 0, nfp = 0;
+  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+    if (ty->size <= 16)
+      struct_regs(ty, &ngp, &nfp);
+  } else if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE) {
+    nfp = 1;
+  } else if (ty->kind != TY_LDOUBLE) {
+    ngp = 1;
+  }
+
+  if (ngp + nfp) {
+    // Only if all of it fits in the registers left
+    if (ngp) {
+      println("  cmpl $%d, (%%rcx)", 48 - ngp * 8);
+      println("  ja .L.va_stack.%d", c);
+    }
+    if (nfp) {
+      println("  cmpl $%d, 4(%%rcx)", 176 - nfp * 16);
+      println("  ja .L.va_stack.%d", c);
+    }
+
+    // Each 8-byte part, from a general-purpose or an XMM register
+    int nparts = ty->size > 8 ? 2 : 1;
+    for (int i = 0; i < nparts; i++) {
+      bool fp = ty->kind == TY_STRUCT || ty->kind == TY_UNION
+                  ? has_flonum(ty, i * 8, i * 8 + 8, 0) : nfp > 0;
+      println("  movl %d(%%rcx), %%eax", fp ? 4 : 0);
+      println("  add 16(%%rcx), %%rax");
+      println("  addl $%d, %d(%%rcx)", fp ? 16 : 8, fp ? 4 : 0);
+      if (nparts == 1)
+        break;
+      println("  mov (%%rax), %%rdx");
+      println("  mov %%rdx, %d(%%rbp)", node->var->offset + i * 8);
+      if (i == 1)
+        println("  lea %d(%%rbp), %%rax", node->var->offset);
+    }
+    println("  jmp .L.va_end.%d", c);
+  }
+
+  // On the stack: aligned to 16 if its type is, and taking a multiple of
+  // 8 bytes
+  println(".L.va_stack.%d:", c);
+  println("  mov 8(%%rcx), %%rax");
+  if (ty->align > 8) {
+    println("  add $15, %%rax");
+    println("  and $-16, %%rax");
+  }
+  println("  lea %d(%%rax), %%rdx", align_to(ty->size, 8));
+  println("  mov %%rdx, 8(%%rcx)");
+  println(".L.va_end.%d:", c);
 }
 
 static void push_struct(Type *ty) {
@@ -874,6 +939,12 @@ static void push_args2(Node *args, bool first_pass) {
     break;
   default:
     push();
+  }
+
+  // Padding between it and the argument before it (see push_args)
+  if (args->stack_pad) {
+    println("  sub $8, %%rsp");
+    depth++;
   }
 }
 
@@ -917,8 +988,10 @@ static int push_args(Node *node) {
         gp += ngp;
         fp += nfp;
       } else {
+        // On the stack, 16-byte aligned if its type is
         arg->pass_by_stack = true;
-        stack += align_to(ty->size, 8) / 8;
+        arg->stack_pad = ty->align > 8 && stack % 2;
+        stack += arg->stack_pad + align_to(ty->size, 8) / 8;
       }
       break;
     case TY_FLOAT:
@@ -930,7 +1003,8 @@ static int push_args(Node *node) {
       break;
     case TY_LDOUBLE:
       arg->pass_by_stack = true;
-      stack += 2;
+      arg->stack_pad = stack % 2;
+      stack += arg->stack_pad + 2;
       break;
     default:
       if (gp++ >= GP_MAX) {
@@ -1566,6 +1640,9 @@ static void gen_expr(Node *node) {
     return;
   case ND_UNREACHABLE:
     println("  ud2");
+    return;
+  case ND_VA_ARG:
+    gen_va_arg(node);
     return;
   case ND_CAS: {
     gen_expr(node->cas_addr);
@@ -2245,7 +2322,8 @@ static void assign_lvar_offsets(Obj *prog) {
           continue;
       }
 
-      top = align_to(top, 8);
+      // On the stack: 8-byte aligned, or 16 if its type is (as push_args)
+      top = align_to(top, ty->align > 8 ? 16 : 8);
       var->offset = top;
       top += var->ty->size;
     }
@@ -2496,49 +2574,16 @@ static void emit_text(Obj *prog) {
     for (int i = 0; i < fn->nregs; i++)
       println("  mov %s, %d(%%rbp)", regs64[i], fn->regs_offset + i * 8);
 
-    // Save arg registers if function is variadic
-    if (fn->va_area) {
-      int gp = 0, fp = 0;
-      for (Obj *var = fn->params; var; var = var->next) {
-        if (is_flonum(var->ty))
-          fp++;
-        else
-          gp++;
-      }
-
-      int off = fn->va_area->offset;
-
-      // va_elem
-      println("  movl $%d, %d(%%rbp)", gp * 8, off);          // gp_offset
-      println("  movl $%d, %d(%%rbp)", fp * 8 + 48, off + 4); // fp_offset
-      println("  movq %%rbp, %d(%%rbp)", off + 8);            // overflow_arg_area
-      println("  addq $16, %d(%%rbp)", off + 8);
-      println("  movq %%rbp, %d(%%rbp)", off + 16);           // reg_save_area
-      println("  addq $%d, %d(%%rbp)", off + 24, off + 16);
-
-      // __reg_save_area__
-      println("  movq %%rdi, %d(%%rbp)", off + 24);
-      println("  movq %%rsi, %d(%%rbp)", off + 32);
-      println("  movq %%rdx, %d(%%rbp)", off + 40);
-      println("  movq %%rcx, %d(%%rbp)", off + 48);
-      println("  movq %%r8, %d(%%rbp)", off + 56);
-      println("  movq %%r9, %d(%%rbp)", off + 64);
-      println("  movsd %%xmm0, %d(%%rbp)", off + 72);
-      println("  movsd %%xmm1, %d(%%rbp)", off + 80);
-      println("  movsd %%xmm2, %d(%%rbp)", off + 88);
-      println("  movsd %%xmm3, %d(%%rbp)", off + 96);
-      println("  movsd %%xmm4, %d(%%rbp)", off + 104);
-      println("  movsd %%xmm5, %d(%%rbp)", off + 112);
-      println("  movsd %%xmm6, %d(%%rbp)", off + 120);
-      println("  movsd %%xmm7, %d(%%rbp)", off + 128);
-    }
-
     // Save passed-by-register arguments to the stack, or move them to
-    // their registers.
+    // their registers. (This leaves the argument registers as they were,
+    // except the part of one holding a named argument, so a variadic
+    // function saves them afterwards.)
     int gp = 0, fp = 0;
+    int stack_end = 16; // where the named arguments on the stack end
     for (Obj *var = fn->params; var; var = var->next) {
       // Passed on the stack (only a register variable moves)
       if (var->offset > 0) {
+        stack_end = MAX(stack_end, var->offset + align_to(var->ty->size, 8));
         if (var->reg)
           println("  mov %d(%%rbp), %s", var->offset, regs64[var->reg - 1]);
         continue;
@@ -2574,6 +2619,24 @@ static void emit_text(Obj *prog) {
       default:
         store_gp(gp++, var->offset, ty->size);
       }
+    }
+
+    // A variadic function's va_list (__va_area__), which va_start copies,
+    // and the register save area after it, laid out as the psABI says,
+    // so a va_list can be passed to code built by other compilers:
+    // 6 general-purpose registers, then 8 XMM registers of 16 bytes.
+    if (fn->va_area) {
+      int off = fn->va_area->offset;
+      println("  movl $%d, %d(%%rbp)", gp * 8, off);          // gp_offset
+      println("  movl $%d, %d(%%rbp)", 48 + fp * 16, off + 4); // fp_offset
+      println("  lea %d(%%rbp), %%rax", stack_end);           // overflow_arg_area
+      println("  mov %%rax, %d(%%rbp)", off + 8);
+      println("  lea %d(%%rbp), %%rax", off + 24);             // reg_save_area
+      println("  mov %%rax, %d(%%rbp)", off + 16);
+      for (int i = 0; i < GP_MAX; i++)
+        println("  mov %s, %d(%%rbp)", argreg64[i], off + 24 + i * 8);
+      for (int i = 0; i < FP_MAX; i++)
+        println("  movsd %%xmm%d, %d(%%rbp)", i, off + 72 + i * 16);
     }
 
     // Emit code

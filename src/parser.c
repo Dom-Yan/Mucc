@@ -160,6 +160,7 @@ static Cleanup *cont_cleanups;
 static Cleanup *case_cleanups;
 
 static Obj *builtin_alloca;
+static Type *va_elem_ty; // an element of __builtin_va_list
 
 // declspec() returns this for `auto` with no other type, as in C23's
 // `auto x = 1;`. declaration() and global_variable() then take the type
@@ -4545,10 +4546,59 @@ static Node *generic_selection(Token **rest, Token *tok) {
 
 // The builtins primary() handles.
 static char *builtin_names[] = {
-  "__builtin_types_compatible_p", "__builtin_reg_class",
-  "__builtin_unreachable", "__builtin_compare_and_swap",
-  "__builtin_atomic_exchange",
+  "__builtin_types_compatible_p", "__builtin_unreachable",
+  "__builtin_compare_and_swap", "__builtin_atomic_exchange",
+  "__builtin_va_start", "__builtin_va_end", "__builtin_va_copy",
+  "__builtin_va_arg",
 };
+
+// <stdarg.h>'s va_start, va_end, va_copy and va_arg, as gcc's builtins:
+// va_start copies the va_list the prologue made for a variadic function
+// (__va_area__, see function()), and va_arg is ND_VA_ARG, which cgen.c
+// turns into code that finds the next argument as the calling convention
+// passed it.
+static Node *va_builtin(Token **rest, Token *tok) {
+  Token *start = tok;
+  tok = skip(tok->next, "(");
+  Node *ap = assign(&tok, tok);
+  add_type(ap);
+
+  if (equal(start, "__builtin_va_arg")) {
+    tok = skip(tok, ",");
+    Type *ty = typename(&tok, tok);
+    *rest = skip(tok, ")");
+    if (ty->kind == TY_VOID || ty->kind == TY_VLA || ty->kind == TY_FUNC)
+      error_tok(start, "va_arg of this type is not supported");
+    Node *node = new_unary(ND_VA_ARG, ap, start);
+    node->ty = pointer_to(ty);
+    // Where a struct passed in two registers is put back together
+    node->var = new_lvar("", array_of(ty_long, 2));
+    return new_unary(ND_DEREF, node, start);
+  }
+
+  Node *arg2 = NULL;
+  if (consume(&tok, tok, ","))
+    arg2 = assign(&tok, tok);
+  *rest = skip(tok, ")");
+
+  if (equal(start, "__builtin_va_end"))
+    return new_cast(ap, ty_void);
+
+  if (equal(start, "__builtin_va_copy")) {
+    if (!arg2)
+      error_tok(start, "va_copy needs two arguments");
+    return new_binary(ND_ASSIGN, new_unary(ND_DEREF, ap, start),
+                      new_unary(ND_DEREF, arg2, start), start);
+  }
+
+  // va_start. In C23 the second argument is optional, and it was never
+  // needed here.
+  if (!current_fn || !current_fn->va_area)
+    error_tok(start, "va_start used in a function with fixed arguments");
+  Node *area = new_cast(new_var_node(current_fn->va_area, start), pointer_to(va_elem_ty));
+  return new_binary(ND_ASSIGN, new_unary(ND_DEREF, ap, start),
+                    new_unary(ND_DEREF, area, start), start);
+}
 
 // __has_builtin(name) in the preprocessor
 bool is_known_builtin(char *name) {
@@ -4563,7 +4613,9 @@ bool is_known_builtin(char *name) {
 //         | "_Alignof" unary
 //         | "_Generic" generic-selection
 //         | "__builtin_types_compatible_p" "(" type-name, type-name, ")"
-//         | "__builtin_reg_class" "(" type-name ")"
+//         | "__builtin_va_start" "(" assign ("," assign)? ")"
+//         | ("__builtin_va_end" | "__builtin_va_copy") "(" assign ("," assign)? ")"
+//         | "__builtin_va_arg" "(" assign "," type-name ")"
 //         | "true" | "false" | "nullptr"
 //         | ident
 //         | str
@@ -4633,17 +4685,9 @@ static Node *primary(Token **rest, Token *tok) {
     return new_num(is_compatible(t1, t2), start);
   }
 
-  if (equal(tok, "__builtin_reg_class")) {
-    tok = skip(tok->next, "(");
-    Type *ty = typename(&tok, tok);
-    *rest = skip(tok, ")");
-
-    if (is_integer(ty) || ty->kind == TY_PTR)
-      return new_num(0, start);
-    if (is_flonum(ty))
-      return new_num(1, start);
-    return new_num(2, start);
-  }
+  if (equal(tok, "__builtin_va_start") || equal(tok, "__builtin_va_end") ||
+      equal(tok, "__builtin_va_copy") || equal(tok, "__builtin_va_arg"))
+    return va_builtin(rest, tok);
 
   // C23's unreachable() in <stddef.h>. Reaching it traps (ud2).
   if (equal(tok, "__builtin_unreachable")) {
@@ -5076,7 +5120,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   fn->params = locals;
 
   if (ty->is_variadic)
-    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
+    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 200));
   fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
 
   // A parameter like `int m[r][c]` is a pointer to a variable-length row,
@@ -5237,6 +5281,14 @@ static void declare_builtin_functions(void) {
   ty->params = copy_type(ty_int);
   builtin_alloca = new_gvar("alloca", ty);
   builtin_alloca->is_definition = false;
+
+  // __builtin_va_list, which <stdarg.h> calls va_list: one 24-byte
+  // element (gp_offset, fp_offset, overflow_arg_area, reg_save_area, as
+  // the psABI lays it out). Only the code for va_arg reads the fields.
+  va_elem_ty = struct_type();
+  va_elem_ty->size = 24;
+  va_elem_ty->align = 8;
+  push_scope("__builtin_va_list")->type_def = array_of(va_elem_ty, 1);
 }
 
 // A token the parser sees in place of `at`. Its text lives in a

@@ -177,6 +177,29 @@ Ty6 struct_test26(void);
 Ty20 struct_test27(void);
 Ty21 struct_test28(void);
 
+// See abi_test1 in test/common: calls between gcc's code and mucc's with
+// arguments past the registers.
+typedef struct { double x, y; } Ty30;
+typedef struct { _Alignas(16) long a; long b, c; } Ty31;
+double abi_test1(long a, long b, long c, long d, long e, long f, long g, Ty30 s);
+long double abi_test2(long a, long b, long c, long d, long e, long f, long g, long double h);
+long abi_test3(long a, long b, long c, long d, long e, long f, long g, Ty31 s, long i);
+double abi_call1(double (*fn)(long, long, long, long, long, long, long, Ty30));
+long double abi_call2(long double (*fn)(long, long, long, long, long, long, long, long double));
+long abi_call3(long (*fn)(long, long, long, long, long, long, long, Ty31, long));
+
+double abi_test11(long a, long b, long c, long d, long e, long f, long g, Ty30 s) {
+  return g + s.x * 10 + s.y * 100;
+}
+
+long double abi_test12(long a, long b, long c, long d, long e, long f, long g, long double h) {
+  return g + h * 10;
+}
+
+long abi_test13(long a, long b, long c, long d, long e, long f, long g, Ty31 s, long i) {
+  return g + s.a * 10 + s.b * 100 + s.c * 1000 + i * 10000;
+}
+
 Ty4 struct_test34(void) {
   return (Ty4){10, 20, 30, 40};
 }
@@ -315,6 +338,13 @@ int main() {
   ASSERT(10, ({ Ty6 x={10,20,30}; struct_test6(x, 0); }));
   ASSERT(20, ({ Ty6 x={10,20,30}; struct_test6(x, 1); }));
   ASSERT(30, ({ Ty6 x={10,20,30}; struct_test6(x, 2); }));
+
+  ASSERT(932, abi_test1(1, 2, 3, 4, 5, 6, 7, (Ty30){7.5, 8.5}));
+  ASSERT(32, abi_test2(1, 2, 3, 4, 5, 6, 7, 2.5L));
+  ASSERT(93217, abi_test3(1, 2, 3, 4, 5, 6, 7, (Ty31){1, 2, 3}, 9));
+  ASSERT(932, abi_call1(abi_test11));
+  ASSERT(32, abi_call2(abi_test12));
+  ASSERT(93217, abi_call3(abi_test13));
 
   ASSERT(10, ({ Ty7 x={10,20,30}; struct_test7(x, 0); }));
   ASSERT(20, ({ Ty7 x={10,20,30}; struct_test7(x, 1); }));

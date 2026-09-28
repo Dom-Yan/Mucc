@@ -260,6 +260,7 @@ typedef enum {
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
   ND_UNREACHABLE, // __builtin_unreachable() (C23 unreachable())
+  ND_VA_ARG,    // va_arg(): the next argument's address
 } NodeKind;
 
 // An operand of an asm statement: `[name] "constraint" (expr)`. x86
@@ -310,6 +311,7 @@ struct Node {
   Type *func_ty;
   Node *args;
   bool pass_by_stack;
+  bool stack_pad;     // 8 bytes of padding before it on the stack
   Obj *ret_buffer;
 
   // Goto or labeled statement, or labels-as-values. A goto, break or
