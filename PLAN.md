@@ -198,11 +198,20 @@ Phases 0, 1 and 2 are done and verified (1.8 and 1.10 were dropped as
 not needed). Git and CPython build with mucc and pass their tests as
 with gcc, except CPython's `test_peg_generator` (1.12).
 
-Phase 3 has started: 3.1 (vendor musl) is added and checked locally,
-and is verified once CI passes. Next is 3.2 (musl's assembly in mucc's
-assembler). `mucc -ar`/`-ranlib` (2.4) can archive musl, `asm` with
-operands and register variables (2.3) cover its system calls, and
-`.incbin` (2.5) is ready for Phase 4.
+Phase 3 has started: 3.1 (vendor musl) is done. 3.2 (musl's assembly
+in mucc's assembler, `-fno-as-fallback`) is added; its last check needs
+musl's C to compile, which is 3.3. `mucc -ar`/`-ranlib` (2.4) can
+archive musl, `asm` with operands and register variables (2.3) cover its
+system calls, and `.incbin` (2.5) is ready for Phase 4.
+
+For 3.3, a first try (musl's `configure` and `make` with `CC=mucc`, on
+2026-09-27) found, by number of errors: `__volatile` (musl's
+`syscall_arch.h` says `__asm__ __volatile__`), `__builtin_va_list` and
+`__builtin_va_start`/`_arg`/`_end` (musl's `<stdarg.h>`, with
+`-nostdinc`), `__syscall_cp` undeclared (probably a follow-on error),
+`<complex.h>` (leave out `src/complex/`), and 20 crashes of `mucc
+-cc1`, not yet looked at. The flags `configure` picked are in its
+`config.mak` (`-std=c99 -ffreestanding -Wa,--noexecstack` among them).
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -601,7 +610,7 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 `thirdparty/musl/`, unchanged except for patches listed in
 `thirdparty/README.md`.
 
-- [ ] **3.1 Vendor musl.** Add a pinned musl release to `thirdparty/musl/`
+- [x] **3.1 Vendor musl.** Add a pinned musl release to `thirdparty/musl/`
   with its license. `thirdparty/README.md` records the version, where it came
   from, its checksum, and any local patches.
   - [x] Added: musl 1.2.6, committed unchanged (`c93c57a`), then patched
@@ -611,19 +620,37 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     `thirdparty/` byte for byte and `.gitignore` lets its `.s` files in.
     musl's own `.gitignore` hides `dist/config.mak`, so that one file was
     added with `git add -f`.
-  - [ ] Verified: the files match the release tarball's published checksum.
+  - [x] Verified: the files match the release tarball's published checksum.
     (musl publishes a GPG signature, not a checksum: the tarball's
     signature is good for musl's key `56BCDB593020450F`. The tree from
     `git archive` of `c93c57a` is the tarball's, all 2,660 files and the
     exec bits, and of `11af6d8` the tarball with the two patches, checked
     by the recipe in `thirdparty/README.md`. `make test-all` and `make
-    difftest N=300` pass. Waiting for CI.)
+    difftest N=300` pass. CI passed, `6feee67`.)
 
 - [ ] **3.2 Everything musl's x86-64 code needs is in mucc's assembler,** so
   the system `as` is never used. Add a flag that makes falling back to `as`
   an error, to prove it.
-  - [ ] Added
+  - [x] Added: decided to leave out musl's x86-64 math overrides
+    (`src/math/x86_64/`: x87 `.s` files, and `.c` files whose `asm` needs
+    the `x` and `t` constraints) and build musl's portable C versions
+    instead (see "Not planned"). The other 17 `.s` files needed `/* */`
+    comments, `disp(%base,%index,scale)`, constant sums like
+    `(-1-2)(%rdi)` and `$0x3fff+13`, `.size x, .-x`, `push`/`pop` of
+    memory and immediates, `test $imm`, `hlt`, `cld`, `std`, `movsb`,
+    `movsq`, `stosq`, `fnclex`, `fnstsw`, `fnstenv`, `fldenv`,
+    `stmxcsr` and `ldmxcsr`. Matching GNU as byte for byte also meant:
+    a jump to a global goes through the PLT (`R_X86_64_PLT32`), one to a
+    symbol in the same section is filled in (and may be short if it's
+    hidden), `.init` and `.fini` get code flags by name, and an object
+    with no symbols has no `.symtab`. Three files mucc already assembled
+    (`dlsym.s`, `vfork.s`, `syscall_cp.s`) had differed in these. The
+    flag is `-fno-as-fallback`.
   - [ ] Verified: musl builds with the flag on and no `as` on the `PATH`.
+    (So far: `test/asm.sh` checks all 17 files and `test/asm-forms.s`
+    against GNU as, and `test/driver.sh` the flag; the old mucc fails
+    both. `make test-all` and `make difftest N=300` pass. The C files'
+    `asm` statements can only be checked once musl's C compiles, in 3.3.)
 
 - [ ] **3.3 Build musl with mucc.** `make libc` compiles musl with mucc and
   archives it with `mucc -ar` into `libc.a`, with musl's `crt1.o`, `crti.o`
@@ -692,6 +719,10 @@ These stay out unless a real program needs them:
 
 - `_Complex` and `_BitInt`: large, and rare in real code. musl's
   `src/complex/` is left out of the bundled libc (Phase 3).
+- musl's x86-64 math overrides (`src/math/x86_64/`, decided in 3.2): they
+  need a large part of the x87 instruction set in the assembler and the
+  `x` and `t` asm constraints. musl's portable C versions are used
+  instead; `sqrt` and the like are slower, but correct.
 - `<stdckdint.h>` and `__builtin_add_overflow` and the like (was 1.8):
   none of the baseline projects need them. Code that checks with
   `__has_builtin` or `__GNUC__` (which mucc doesn't define) uses its own
