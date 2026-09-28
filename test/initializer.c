@@ -38,7 +38,26 @@ typedef struct { char a, b[]; } T65;
 T65 g65 = {'f','o','o',0};
 T65 g66 = {'f','o','o','b','a','r',0};
 
+// offsetof as musl's <stddef.h> writes it for compilers other than gcc,
+// and a difference of addresses in one object, in static initializers
+typedef struct { int a; long b[4]; unsigned ts[2]; } OffT;
+#define OFF(t, m) ((unsigned long)((char *)&(((t *)0)->m) - (char *)0))
+static const unsigned long off1[] = {OFF(OffT, b), OFF(OffT, ts[1])};
+static int off_arr[10];
+static const long off2 = &off_arr[7] - &off_arr[2];
+
 int main() {
+  ASSERT(8, off1[0]);
+  ASSERT(44, off1[1]);
+  ASSERT(5, off2);
+
+  // Nested designators, then more members
+  ASSERT(12, ({ struct { struct { int x, y; } a; int c; } s = {.a.x = 1, .c = 2}; s.a.x * 10 + s.c; }));
+  ASSERT(132, ({ struct { struct { int x, y; } a; int c; } s = {.a.x = 1, .a.y = 3, .c = 2}; s.a.x * 100 + s.a.y * 10 + s.c; }));
+  ASSERT(132, ({ struct { struct { int x, y; } a; int c; } s = {.a.x = 1, 3, 2}; s.a.x * 100 + s.a.y * 10 + s.c; }));
+  // A union member initialized with a whole union
+  ASSERT(17, ({ union U { int i; void *p; } u = {.i = 7}; struct { int n; union { struct { int pid; union U v; } a; char pad[32]; } f; } t = {.n = 1, .f.a.v = u}; t.n * 10 + t.f.a.v.i; }));
+
   ASSERT(1, ({ int x[3]={1,2,3}; x[0]; }));
   ASSERT(2, ({ int x[3]={1,2,3}; x[1]; }));
   ASSERT(3, ({ int x[3]={1,2,3}; x[2]; }));

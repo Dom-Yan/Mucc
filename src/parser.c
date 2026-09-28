@@ -176,7 +176,8 @@ static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs);
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 static void array_initializer2(Token **rest, Token *tok, Initializer *init, int i);
-static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem);
+static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem,
+                                bool after_comma);
 static void initializer2(Token **rest, Token *tok, Initializer *init);
 static Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
 static Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
@@ -1989,7 +1990,7 @@ static void designation(Token **rest, Token *tok, Initializer *init) {
     Member *mem = struct_designator(&tok, tok, init->ty);
     designation(&tok, tok, init->children[mem->idx]);
     init->expr = NULL;
-    struct_initializer2(rest, tok, init, init_member(mem->next));
+    struct_initializer2(rest, tok, init, init_member(mem->next), true);
     return;
   }
 
@@ -2129,8 +2130,12 @@ static void struct_initializer1(Token **rest, Token *tok, Initializer *init) {
 }
 
 // struct-initializer2 = initializer ("," initializer)*
-static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem) {
-  bool first = true;
+//
+// For a struct without braces, from its first member, or the members
+// after a designated one (`.a.x = 1, 2`), where a "," comes first.
+static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem,
+                                bool after_comma) {
+  bool first = !after_comma;
 
   for (mem = init_member(mem); mem && !is_end(tok); mem = init_member(mem->next)) {
     Token *start = tok;
@@ -2220,11 +2225,21 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
       return;
     }
 
-    struct_initializer2(rest, tok, init, init->ty->members);
+    struct_initializer2(rest, tok, init, init->ty->members, false);
     return;
   }
 
   if (init->ty->kind == TY_UNION) {
+    // Likewise, a union with another union
+    if (!equal(tok, "{")) {
+      Node *expr = assign(rest, tok);
+      add_type(expr);
+      if (expr->ty->kind == TY_UNION) {
+        check_assign(init->ty, expr, "initialization");
+        init->expr = expr;
+        return;
+      }
+    }
     union_initializer(rest, tok, init);
     return;
   }
@@ -2316,7 +2331,7 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
     return node;
   }
 
-  if (ty->kind == TY_UNION) {
+  if (ty->kind == TY_UNION && !init->expr) {
     Member *mem = init->mem ? init->mem : ty->members;
     InitDesg desg2 = {desg, 0, mem};
     return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
@@ -3312,6 +3327,15 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_ADD:
     return eval2(node->lhs, label) + eval(node->rhs);
   case ND_SUB:
+    // p - q is a number if both point into the same object, or neither
+    // does (as in `(char *)&((T *)0)->m - (char *)0`, an offsetof).
+    if (node->lhs->ty->base && node->rhs->ty->base) {
+      char **l1 = NULL, **l2 = NULL;
+      int64_t val = eval2(node->lhs, &l1) - eval2(node->rhs, &l2);
+      if (l1 != l2)
+        error_tok(node->tok, "not a compile-time constant");
+      return val;
+    }
     return eval2(node->lhs, label) - eval(node->rhs);
   case ND_MUL:
     return eval(node->lhs) * eval(node->rhs);
@@ -3389,12 +3413,19 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_LABEL_VAL:
     *label = &node->unique_label;
     return 0;
-  case ND_MEMBER:
-    if (!label)
-      error_tok(node->tok, "not a compile-time constant");
+  case ND_MEMBER: {
+    // An array member, as an address: of a global (a label is needed)
+    // or at a constant address, as offsetof takes it.
     if (node->ty->kind != TY_ARRAY)
       error_tok(node->tok, "invalid initializer");
-    return eval_rval(node->lhs, label) + node->member->offset;
+    char **l = NULL;
+    int64_t val = eval_rval(node->lhs, &l) + node->member->offset;
+    if (l && !label)
+      error_tok(node->tok, "not a compile-time constant");
+    if (l)
+      *label = l;
+    return val;
+  }
   case ND_VAR:
     if (node->var->is_constexpr)
       return node->var->constexpr_val;
