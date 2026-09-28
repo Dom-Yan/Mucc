@@ -9,16 +9,33 @@ OBJNAMES=$(notdir $(OBJS))
 
 TEST_SRCS=$(wildcard test/*.c)
 
-# `make test LIBC=mucc` builds the tests against the bundled musl (see
-# `make libc`), linked by mucc itself, instead of glibc. They're named
-# test/*.musl.exe, so the two builds don't mix.
+# `make test-all LIBC=mucc` builds the tests, and stages 2 and 3, against
+# the bundled musl (see `make libc`), linked by mucc itself, instead of
+# glibc. Its files are named apart (test/*.musl.exe, stage2-musl/, ...),
+# so the two builds don't mix.
 LIBC=system
 MUSL_BUILD=build/musl
 ifeq ($(LIBC),mucc)
-TESTS=$(TEST_SRCS:.c=.musl.exe)
+X=.musl
+S2=stage2-musl
+S3=stage3-musl
+COMMON=test/common.musl.o
+MUSL_DEP=$(MUSL_BUILD)/lib/libc.a
+# $(call link_test,mucc,obj) links a test program, and link_mucc links
+# a stage's mucc. It finds musl in $(S2)/build, as mucc finds it next to
+# itself.
+link_test=$(1) --libc=mucc -o $@ $(2) $(COMMON)
+link_mucc=ln -sfn ../build $(S2)/build && ./mucc --libc=mucc -o $@ $^
 else
-TESTS=$(TEST_SRCS:.c=.exe)
+X=
+S2=stage2
+S3=stage3
+COMMON=
+MUSL_DEP=
+link_test=$(CC) -pthread -o $@ $(2) -xc test/common
+link_mucc=$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 endif
+TESTS=$(TEST_SRCS:.c=$(X).exe)
 
 # A test program can ask for options with a `// flags: ...` line, like
 # test/c23.c's `-std=c23`. test/link.sh and test/asm.sh read it too.
@@ -40,26 +57,26 @@ mucc: $(OBJS)
 
 $(OBJS): src/mucc.h
 
-test/%.exe: mucc test/%.c
-	./mucc -Iinclude -Itest $(call test_flags,$*) -c -o test/$*.o test/$*.c
-	$(CC) -pthread -o $@ test/$*.o -xc test/common
-
-test/%.musl.exe: mucc test/%.c test/common.musl.o
-	./mucc --libc=mucc -Iinclude -Itest $(call test_flags,$*) -c -o test/$*.musl.o test/$*.c
-	./mucc --libc=mucc -o $@ test/$*.musl.o test/common.musl.o
+test/%$(X).exe: mucc test/%.c $(COMMON)
+	./mucc --libc=$(LIBC) -Iinclude -Itest $(call test_flags,$*) -c -o test/$*$(X).o test/$*.c
+	$(call link_test,./mucc,test/$*$(X).o)
 
 test/common.musl.o: mucc test/common $(MUSL_BUILD)/lib/libc.a
 	./mucc --libc=mucc -c -o $@ -xc test/common
 
+# The scripts get the mucc to test as one argument, `$(1) --libc=...`.
+test_scripts=\
+	test/driver.sh "$(1) --libc=$(LIBC)" && \
+	test/errors.sh "$(1) --libc=$(LIBC)" && \
+	test/asm.sh "$(1) --libc=$(LIBC)" && \
+	test/link.sh "$(1) --libc=$(LIBC)" && \
+	test/attribute-layout.sh "$(1) --libc=$(LIBC)" && \
+	test/libgcc.sh "$(1) --libc=$(LIBC)" && \
+	test/ar.sh $(1)
+
 test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	test/driver.sh "./mucc --libc=$(LIBC)"
-	test/errors.sh "./mucc --libc=$(LIBC)"
-	test/asm.sh "./mucc --libc=$(LIBC)"
-	test/link.sh "./mucc --libc=$(LIBC)"
-	test/attribute-layout.sh "./mucc --libc=$(LIBC)"
-	test/libgcc.sh "./mucc --libc=$(LIBC)"
-	test/ar.sh ./mucc
+	$(call test_scripts,./mucc)
 
 test-all: test test-stage2 selfhost test-libc
 
@@ -75,40 +92,34 @@ difftest: mucc
 # mucc's own source may only use C features that mucc supports, or this
 # stage fails to build.
 
-stage2/mucc: $(OBJNAMES:%=stage2/%)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+$(S2)/mucc: $(OBJNAMES:%=$(S2)/%)
+	$(link_mucc)
 
-stage2/%.o: mucc src/%.c src/mucc.h
-	mkdir -p stage2/test
-	./mucc -Iinclude -c -o $@ src/$*.c
+$(S2)/%.o: mucc src/%.c src/mucc.h $(MUSL_DEP)
+	mkdir -p $(S2)/test
+	./mucc --libc=$(LIBC) -Iinclude -c -o $@ src/$*.c
 
-stage2/test/%.exe: stage2/mucc test/%.c
-	mkdir -p stage2/test
-	./stage2/mucc -Iinclude -Itest $(call test_flags,$*) -c -o stage2/test/$*.o test/$*.c
-	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
+$(S2)/test/%$(X).exe: $(S2)/mucc test/%.c
+	mkdir -p $(S2)/test
+	./$(S2)/mucc --libc=$(LIBC) -Iinclude -Itest $(call test_flags,$*) -c -o $(S2)/test/$*.o test/$*.c
+	$(call link_test,./$(S2)/mucc,$(S2)/test/$*.o)
 
-test-stage2: $(TESTS:test/%=stage2/test/%)
+test-stage2: $(TESTS:test/%=$(S2)/test/%)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	test/driver.sh ./stage2/mucc
-	test/errors.sh ./stage2/mucc
-	test/asm.sh ./stage2/mucc
-	test/link.sh ./stage2/mucc
-	test/attribute-layout.sh ./stage2/mucc
-	test/libgcc.sh ./stage2/mucc
-	test/ar.sh ./stage2/mucc
+	$(call test_scripts,./$(S2)/mucc)
 
 # Stage 3 (mucc compiled by the mucc that was compiled by mucc)
 #
 # If the compiler is truly self-hosting, the stage 2 compiler must produce
 # byte-for-byte the same object files as the stage 1 compiler did.
 
-stage3/%.o: stage2/mucc src/%.c src/mucc.h
-	mkdir -p stage3
-	./stage2/mucc -Iinclude -c -o $@ src/$*.c
+$(S3)/%.o: $(S2)/mucc src/%.c src/mucc.h
+	mkdir -p $(S3)
+	./$(S2)/mucc --libc=$(LIBC) -Iinclude -c -o $@ src/$*.c
 
-selfhost: $(OBJNAMES:%=stage3/%) $(OBJNAMES:%=stage2/%)
-	for i in $(OBJNAMES); do cmp stage2/$$i stage3/$$i || exit 1; done
-	@echo "selfhost: stage2 and stage3 objects are identical"
+selfhost: $(OBJNAMES:%=$(S3)/%) $(OBJNAMES:%=$(S2)/%)
+	for i in $(OBJNAMES); do cmp $(S2)/$$i $(S3)/$$i || exit 1; done
+	@echo "selfhost: $(S2) and $(S3) objects are identical"
 
 # The bundled C library (Phase 3 of PLAN.md)
 #
@@ -167,7 +178,8 @@ uninstall:
 # test/asm-forms.s is a source file (see test/asm.sh); other .s files in
 # test/ are build output.
 clean:
-	rm -rf mucc tmp* $(TESTS) test/*.exe stage2 stage3 difftest-failures build
+	rm -rf mucc tmp* $(TESTS) test/*.exe stage2 stage3 stage2-musl stage3-musl \
+	  difftest-failures build
 	rm -f $(filter-out test/asm-forms.s,$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 

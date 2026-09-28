@@ -172,6 +172,10 @@ static void find_musl(char *argv0) {
     dir = format("%s/../lib/mucc/musl", exe_dir(argv0));
   if (!file_exists(format("%s/lib/libc.a", dir)))
     error("--libc=mucc: the C library isn't built; run `make libc`");
+
+  // Its real path, the same through a symlink (as the Makefile's
+  // stage2-musl/build is), since header paths go into the debug info.
+  dir = realpath(dir, NULL);
   musl_include_dirs[0] = format("%s/include", dir);
   musl_lib_dirs[0] = format("%s/lib", dir);
 }
