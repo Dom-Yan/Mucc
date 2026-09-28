@@ -30,6 +30,30 @@ mailing list:
   per character (a denial of service), and decoded some characters wrong.
   From https://www.openwall.com/lists/musl/2026/04/03/2/1
 
+### What mucc builds, and how it's tested
+
+`make libc` builds musl with mucc (see the Makefile), leaving out
+`src/complex/` (mucc has no `_Complex`) and `src/math/x86_64/` (x87
+assembly and SSE `asm` operands); musl's portable C versions of those
+math functions are built instead.
+
+`test/thirdparty/libc-test.sh` runs musl's own tests (libc-test, from
+https://repo.or.cz/libc-test.git, commit `7b95dfa`) against that musl and
+against the same musl built by gcc, the tests themselves built by gcc
+both times. Of 482 tests, the same 16 fail with both (2026-09-28):
+
+- `functional/dlopen`, `tls_align`, `tls_align_dlopen`,
+  `tls_init_dlopen` and `regression/tls_get_new-dtv`: they load shared
+  libraries, and this musl is static only.
+- `api/main`, `functional/strptime` and `wordexp` (both of the latter
+  twice, static and not): this libc-test is newer than musl 1.2.6; the
+  header test fails on `_PC_TIMESTAMP_RESOLUTION`, which 1.2.6 lacks.
+- `math/fmaf`, `fmal`, `powf` and `powl`: exception flags and results
+  that musl 1.2.6 gets wrong built by either compiler (the same with
+  gcc and nothing left out).
+- `math/exp10l` and `pow10l`: 1.5 to 2 ulp off. They pass with musl's
+  x87 versions, which aren't built; those fail `math/expl` instead.
+
 ### Checking the tree
 
 ```
