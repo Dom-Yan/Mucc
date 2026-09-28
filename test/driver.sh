@@ -260,6 +260,13 @@ echo 'int x;' > $tmp/foo.c
 $mucc -c -x assembler -x none -o $tmp/foo.o $tmp/foo.c
 check '-x none'
 
+# -x applies to the files after it, not to those before it
+echo 'int xmain(void); int main() { return xmain(); }' > $tmp/xmain.c
+$mucc -c -o $tmp/xmain.o $tmp/xmain.c
+echo 'int xmain(void) { return 0; }' > $tmp/xother
+$mucc -o $tmp/xprog $tmp/xmain.o -xc $tmp/xother && $tmp/xprog
+check '-x after an object file'
+
 # -E
 echo foo | $mucc -E - | grep -q foo
 check -E
