@@ -17,6 +17,10 @@ check() {
     fi
 }
 
+# It's a static program itself, so it runs on any x86-64 Linux.
+file $binary | grep -q 'statically linked'
+check 'is statically linked'
+
 mkdir $tmp/alone $tmp/bin
 cp $binary $tmp/alone/mucc
 for t in gcc cc as ld ar; do

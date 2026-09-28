@@ -25,6 +25,13 @@ rm -f $tmp/out
 [ -f $tmp/out ]
 check -o
 
+# Temporary files go in $TMPDIR (or /tmp, or the current directory with
+# no /tmp, as in an empty container)
+echo 'int main() { return 0; }' > $tmp/tmpdir.c
+TMPDIR=$tmp/nothere $mucc -o $tmp/tmpdir $tmp/tmpdir.c 2>&1 |
+    grep -q "cannot create a temporary file $tmp/nothere/mucc-"
+check 'TMPDIR'
+
 # --help
 $mucc --help 2>&1 | grep -q mucc
 check --help

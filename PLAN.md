@@ -215,9 +215,10 @@ purpose, listed in `a0c3b69`'s message.
 3.5 (`--libc=mucc`) and 3.6 (stages 2 and 3 on musl) are added:
 `make test-all` and `make test-all LIBC=mucc` pass in WSL. Not yet
 pushed (GitHub's token had expired), so neither is verified by CI.
-3.7 (the CI job) and 4.1 (`make build/mucc`, the single binary) are
-added too. Next: push, check both CI jobs, verify 3.5 to 3.7 and 4.1,
-then 4.2 (build/mucc as a static musl program).
+3.7 (the CI job), 4.1 (`make build/mucc`, the single binary) and 4.2 (it
+is a static musl program) are added too. Next: push, check both CI
+jobs, verify 3.5 to 3.7, 4.1 and 4.2, then 4.3 (the bundled musl as the
+default).
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -779,7 +780,15 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 
 - [ ] **4.2 mucc is itself a static musl program,** so it runs on any
   x86-64 Linux, including Alpine and systems without glibc.
-  - [ ] Added
+  - [x] Added: `build/mucc`'s objects are compiled by mucc against musl
+    (`build/obj/`) and linked by `mucc --libc=mucc`. Temporary files now
+    go in `$TMPDIR`, or `/tmp`, or the current directory when there's no
+    `/tmp`, as with gcc: in an empty container there's none. The new
+    `test/distros.sh` (by hand, needs Docker) builds and runs a program
+    with it on ubuntu:24.04, fedora:latest, alpine:latest and centos:7
+    (2014), and in a `FROM scratch` image; all passed on 2026-09-28 in
+    WSL. Containers share WSL's kernel, so that checks their files, not
+    their kernels. `test/single.sh` checks it's statically linked.
   - [ ] Verified: the binary runs on Ubuntu, Fedora, Alpine and one old
     distribution, and `file mucc` says statically linked.
 

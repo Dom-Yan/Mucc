@@ -102,8 +102,9 @@ than `gcc -O2`. Its built-in static linker is about 2.5 times faster than `ld`.
 
 ### Requirements
 
-mucc runs on x86-64 Linux with glibc (not musl, so not Alpine), and WSL 2 on
-Windows counts. On Ubuntu or Debian, `build-essential` has everything.
+mucc runs on x86-64 Linux with glibc, and WSL 2 on Windows counts. (The
+single binary below runs on any x86-64 Linux, musl-based Alpine too.) On
+Ubuntu or Debian, `build-essential` has everything.
 
 | For | Needed |
 | --- | --- |
@@ -192,9 +193,12 @@ test suite that way, with stages 2 and 3 (mucc built by mucc) linked
 against musl too, and `make install` installs the musl build.
 
 `make build/mucc` makes a single binary (about 7 MB) with mucc's
-headers and the musl build inside it: copied anywhere on its own, it
-still compiles and links with `--libc=mucc`. Headers from inside it are
-named `<mucc>/...` in messages, and `-M` leaves them out.
+headers and the musl build inside it. It's a static musl program
+itself, so copied on its own to any x86-64 Linux (Alpine, Fedora, an
+old CentOS, even an empty container), it compiles and links with
+`--libc=mucc`. Headers from inside it are named `<mucc>/...` in
+messages, and `-M` leaves them out. `test/distros.sh` checks it on
+several distributions with Docker.
 
 ## Features
 
