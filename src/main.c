@@ -62,7 +62,8 @@ static void usage(int status) {
 
 static bool take_arg(char *arg) {
   char *x[] = {
-    "-o", "-I", "-idirafter", "-include", "-x", "-MF", "-MT", "-Xlinker",
+    "-o", "-I", "-L", "-D", "-U", "-idirafter", "-include", "-x", "-MF",
+    "-MT", "-Xlinker",
   };
 
   for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
@@ -343,8 +344,9 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    // -Idir or -I dir, as -D, -U and -L
     if (!strncmp(argv[i], "-I", 2)) {
-      strarray_push(&include_paths, argv[i] + 2);
+      strarray_push(&include_paths, argv[i][2] ? argv[i] + 2 : argv[++i]);
       continue;
     }
 
@@ -514,7 +516,7 @@ static void parse_args(int argc, char **argv) {
 
     if (!strncmp(argv[i], "-L", 2)) {
       strarray_push(&ld_extra_args, "-L");
-      strarray_push(&ld_extra_args, argv[i] + 2);
+      strarray_push(&ld_extra_args, argv[i][2] ? argv[i] + 2 : argv[++i]);
       continue;
     }
 

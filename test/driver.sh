@@ -484,6 +484,18 @@ echo '' > $tmp/foo.S
 $mucc -c $tmp/foo.S 2>&1 | grep -q 'unsupported file type'
 check 'unsupported file type'
 
+# -I and -L also take their directory as the next argument, as with gcc
+mkdir -p $tmp/incdir
+echo '#define FROM_INCDIR 7' > $tmp/incdir/incdir.h
+printf '#include "incdir.h"\nint seven(void);\nint main() { return seven() == FROM_INCDIR ? 7 : 1; }\n' > $tmp/incdir.c
+echo 'int seven(void) { return 7; }' > $tmp/seven.c
+$mucc -c -o $tmp/incdir/seven.o $tmp/seven.c
+$mucc -ar rcs $tmp/incdir/libseven.a $tmp/incdir/seven.o
+$mucc -I $tmp/incdir -o $tmp/incdir.out $tmp/incdir.c -L $tmp/incdir -lseven
+$tmp/incdir.out
+[ $? = 7 ]
+check '-I dir and -L dir'
+
 # Built-in assembler: a .s file and a C file link together
 printf '  .globl answer\n  .text\nanswer:\n  mov $42, %%eax\n  ret\n' > $tmp/answer.s
 printf 'int answer(void);\nint main(void) { return answer(); }\n' > $tmp/main.c
