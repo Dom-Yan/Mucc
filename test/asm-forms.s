@@ -334,6 +334,23 @@ func:
   stosq
   hlt
 
+  # bit scans, and musl's atomics (arch/x86_64/atomic_arch.h)
+  bsf %rcx, %rax
+  bsr %ecx, %eax
+  bsf (%rdi), %r9
+  bsrq 8(%rsp), %r10
+  bsr %rcx,%rax ; xor $63,%rax
+  lock ; xadd %eax, (%rcx)
+  lock xadd %r8, (%rdi)
+  xadd %al, (%rdx)
+  lock ; decl (%rdi)
+  lock ; incl 4(%rdi)
+  lock ; and %eax, (%rdi)
+  lock ; or %rax, (%rdi)
+  pause
+  imul %rcx, %rax
+  imul (%rdi), %r11d
+
   # atomics and misc
   lock cmpxchg %edx, (%rdi)
   lock cmpxchg %rdx, (%rdi)
