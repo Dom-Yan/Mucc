@@ -43,6 +43,7 @@ static int loc_file;
 static int loc_line;
 
 static void gen_expr(Node *node);
+static void gen_discard(Node *node);
 static void gen_stmt(Node *node);
 
 //---------- Output and stack helpers ----------------------------------------
@@ -304,7 +305,7 @@ static void gen_addr(Node *node) {
     gen_expr(node->lhs);
     return;
   case ND_COMMA:
-    gen_expr(node->lhs);
+    gen_discard(node->lhs);
     gen_addr(node->rhs);
     return;
   case ND_MEMBER:
@@ -415,7 +416,8 @@ static void load(Type *ty) {
 }
 
 // Store the scalar in %rax (or %xmm0, or the x87 stack) to memory
-// operand `addr`, e.g. "(%rdi)".
+// operand `addr`, e.g. "(%rdi)". The value stays where it was, as an
+// assignment's value: a long double is loaded back, since fstpt pops it.
 static void store_to(Type *ty, char *addr) {
   switch (ty->kind) {
   case TY_FLOAT:
@@ -426,6 +428,7 @@ static void store_to(Type *ty, char *addr) {
     return;
   case TY_LDOUBLE:
     println("  fstpt %s", addr);
+    println("  fldt %s", addr);
     return;
   }
 
@@ -453,27 +456,35 @@ static void store(Type *ty) {
   store_to(ty, "(%rdi)");
 }
 
+// Compares the value with 0: afterwards ZF is set if it's zero, as after
+// `cmp $0`. A NaN isn't zero, but compares unordered, which sets ZF too,
+// so for floating point ZF comes from (x != 0 || unordered) in %al.
 static void cmp_zero(Type *ty) {
   switch (ty->kind) {
   case TY_FLOAT:
     println("  xorps %%xmm1, %%xmm1");
     println("  ucomiss %%xmm1, %%xmm0");
-    return;
+    break;
   case TY_DOUBLE:
     println("  xorpd %%xmm1, %%xmm1");
     println("  ucomisd %%xmm1, %%xmm0");
-    return;
+    break;
   case TY_LDOUBLE:
     println("  fldz");
     println("  fucomip");
     println("  fstp %%st(0)");
+    break;
+  default:
+    if (is_integer(ty) && ty->size <= 4)
+      println("  cmp $0, %%eax");
+    else
+      println("  cmp $0, %%rax");
     return;
   }
 
-  if (is_integer(ty) && ty->size <= 4)
-    println("  cmp $0, %%eax");
-  else
-    println("  cmp $0, %%rax");
+  println("  setne %%al");
+  println("  setp %%dl");
+  println("  or %%dl, %%al");
 }
 
 //---------- Type casts ------------------------------------------------------
@@ -585,8 +596,11 @@ static char *cast_table[][11] = {
 };
 
 static void cast(Type *from, Type *to) {
-  if (to->kind == TY_VOID)
+  if (to->kind == TY_VOID) {
+    if (from->kind == TY_LDOUBLE)
+      println("  fstp %%st(0)"); // off the x87 stack
     return;
+  }
 
   if (to->kind == TY_BOOL) {
     cmp_zero(from);
@@ -1246,7 +1260,8 @@ static void gen_branch(Node *cond, bool when, char *label) {
 // statement. Casts, and adding a constant, change nothing else, so they
 // are skipped: `x++;` becomes just `x += 1`, without computing x's old
 // value. (Only for integers and pointers: a long double must still be
-// popped off the x87 stack.)
+// popped off the x87 stack, where every long double expression leaves
+// its value.)
 static void gen_discard(Node *node) {
   for (;;) {
     if (node->kind == ND_CAST && is_int_or_ptr(node->lhs->ty)) {
@@ -1268,6 +1283,8 @@ static void gen_discard(Node *node) {
     return;
   }
   gen_expr(node);
+  if (node->ty && node->ty->kind == TY_LDOUBLE)
+    println("  fstp %%st(0)");
 }
 
 //---------- Expressions -----------------------------------------------------
@@ -1461,7 +1478,7 @@ static void gen_expr(Node *node) {
     }
     return;
   case ND_COMMA:
-    gen_expr(node->lhs);
+    gen_discard(node->lhs);
     gen_expr(node->rhs);
     return;
   case ND_CAST:
@@ -1703,7 +1720,12 @@ static void gen_expr(Node *node) {
     case ND_NE:
     case ND_LT:
     case ND_LE:
-      println("  ucomi%s %%xmm0, %%xmm1", sz);
+      // As gcc does: == and != compare quietly; < and <= raise
+      // "invalid" for a NaN.
+      if (node->kind == ND_EQ || node->kind == ND_NE)
+        println("  ucomi%s %%xmm0, %%xmm1", sz);
+      else
+        println("  comi%s %%xmm0, %%xmm1", sz);
 
       if (node->kind == ND_EQ) {
         println("  sete %%al");
@@ -1727,8 +1749,17 @@ static void gen_expr(Node *node) {
     error_tok(node->tok, "invalid expression");
   }
   case TY_LDOUBLE: {
-    gen_expr(node->lhs);
+    // The right side waits in memory, not on the x87 stack, while the
+    // left side is computed: that stack has only 8 registers, and must
+    // be empty at a call. Then st(0) is the right side, st(1) the left.
     gen_expr(node->rhs);
+    println("  sub $16, %%rsp");
+    println("  fstpt (%%rsp)");
+    depth += 2;
+    gen_expr(node->lhs);
+    println("  fldt (%%rsp)");
+    println("  add $16, %%rsp");
+    depth -= 2;
 
     switch (node->kind) {
     case ND_ADD:
@@ -1747,17 +1778,27 @@ static void gen_expr(Node *node) {
     case ND_NE:
     case ND_LT:
     case ND_LE:
-      println("  fcomip");
+      // As gcc does: == and != compare quietly, and with a NaN (parity
+      // set) are false and true; < and <= raise "invalid" for a NaN.
+      if (node->kind == ND_EQ || node->kind == ND_NE)
+        println("  fucomip");
+      else
+        println("  fcomip");
       println("  fstp %%st(0)");
 
-      if (node->kind == ND_EQ)
+      if (node->kind == ND_EQ) {
         println("  sete %%al");
-      else if (node->kind == ND_NE)
+        println("  setnp %%dl");
+        println("  and %%dl, %%al");
+      } else if (node->kind == ND_NE) {
         println("  setne %%al");
-      else if (node->kind == ND_LT)
+        println("  setp %%dl");
+        println("  or %%dl, %%al");
+      } else if (node->kind == ND_LT) {
         println("  seta %%al");
-      else
+      } else {
         println("  setae %%al");
+      }
 
       println("  movzb %%al, %%rax");
       return;

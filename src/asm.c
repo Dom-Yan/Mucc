@@ -815,6 +815,7 @@ static Insn insns[] = {
   {"subss", SSE, 0x5c, 0, 0xf3}, {"divss", SSE, 0x5e, 0, 0xf3},
   {"cvtsd2ss", SSE, 0x5a, 0, 0xf2}, {"cvtss2sd", SSE, 0x5a, 0, 0xf3},
   {"ucomisd", SSE, 0x2e, 0, 0x66}, {"ucomiss", SSE, 0x2e, 0, 0},
+  {"comisd", SSE, 0x2f, 0, 0x66}, {"comiss", SSE, 0x2f, 0, 0},
   {"xorpd", SSE, 0x57, 0, 0x66}, {"xorps", SSE, 0x57, 0, 0},
   {"pxor", SSE, 0xef, 0, 0x66},
   {"movsd", SSEMOV, 0, 0, 0xf2}, {"movss", SSEMOV, 0, 0, 0xf3},

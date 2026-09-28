@@ -243,6 +243,9 @@ func:
   ucomisd %xmm0, %xmm1
   ucomisd %xmm1, %xmm0
   ucomiss %xmm0, %xmm1
+  comisd %xmm0, %xmm1
+  comiss %xmm2, %xmm9
+  comisd -8(%rbp), %xmm0
   xorpd %xmm1, %xmm0
   xorps %xmm1, %xmm1
   pxor %xmm0, %xmm0
