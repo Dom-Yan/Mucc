@@ -192,7 +192,7 @@ it seems.
     `struct s64` are still an error; `make test-all` and `make difftest
     N=300` pass; git builds and passes its tests (see the baseline table).
 
-## Where we left off (2026-09-27)
+## Where we left off (2026-09-28)
 
 Phases 0, 1 and 2 are done and verified (1.8 and 1.10 were dropped as
 not needed). Git and CPython build with mucc and pass their tests as
@@ -212,14 +212,14 @@ crashes and 26 wrong results. Fixed in `a0c3b69` and `39398e2` (bit-fields,
 freed, and more); 930 pass now. What's left is gcc-only or left out on
 purpose, listed in `a0c3b69`'s message.
 
-3.5 (`--libc=mucc`) and 3.6 (stages 2 and 3 on musl) are added:
-`make test-all` and `make test-all LIBC=mucc` pass in WSL. Not yet
-pushed (GitHub's token had expired), so neither is verified by CI.
-3.7 (the CI job), 4.1 (`make build/mucc`, the single binary), 4.2 (it
-is a static musl program) and 4.3 (its musl is its default) are added
-too, and 4.4 (the release workflow). Next: push, check both CI jobs,
-verify 3.5 to 4.3, then tag a first release (4.4), and 4.5 (docs,
-checked against that release).
+2026-09-28: Phase 3 is done and verified, and so are 4.1 (`make
+build/mucc`, the single binary), 4.2 (a static musl program that runs
+on any x86-64 Linux, even FROM scratch) and 4.3 (its musl is its
+default): both CI jobs passed on `8053d30`. 4.4 (the release workflow)
+is added. Next: tag a first release (verifies 4.4), 4.5 (docs, checked
+against it), then the "Done means" checks still open: SQLite, Lua, zlib
+and mucc built by the single binary on four distributions, and mucc
+rebuilding itself in an empty container.
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -717,7 +717,7 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     The new cases in `test/float.c` fail with the previous mucc. CI
     passed, `e4d320e`.)
 
-- [ ] **3.5 `--libc=mucc`.** Uses musl's headers (after mucc's own
+- [x] **3.5 `--libc=mucc`.** Uses musl's headers (after mucc's own
   `include/`), musl's startup files and `libc.a`, and always links
   statically with mucc's own linker.
   - [x] Added: a second entry in `libcs[]` (`src/main.c`), whose paths
@@ -735,9 +735,12 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     `SHT_X86_64_UNWIND` when `<elf.h>` doesn't (musl's), and
     `test/stdhdr.c` checks a glibc type only with glibc. `test/libc.sh`
     now links its program with `--libc=mucc`, with `ld` still failing.
-  - [ ] Verified: the whole test suite passes with `make test LIBC=mucc`.
+  - [x] Verified: the whole test suite passes with `make test LIBC=mucc`.
+    (All 49 test programs static musl binaries, none linked by `ld`; the
+    new cases fail with the previous mucc. `make test-all` and `make
+    difftest N=300` pass. CI passed, `8053d30` (both jobs).)
 
-- [ ] **3.6 mucc builds itself on musl.** Stage 2 and stage 3 built against
+- [x] **3.6 mucc builds itself on musl.** Stage 2 and stage 3 built against
   musl, byte-identical as today.
   - [x] Added: with `LIBC=mucc`, the Makefile builds `stage2-musl/` and
     `stage3-musl/` (and `test/*.musl.exe`), so the two modes never mix.
@@ -749,16 +752,17 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     `_XOPEN_SOURCE 700` (was `_POSIX_C_SOURCE 200809L`), under which
     musl declares `realpath()`. The musl stage 2 passes the whole test
     suite, and its stage 3 objects are identical.
-  - [ ] Verified: `make test-all LIBC=mucc` passes.
+  - [x] Verified: `make test-all LIBC=mucc` passes. (Stage 2 and 3
+    objects identical, 2026-09-28; the test-musl CI job runs it. CI passed, `8053d30` (both jobs).)
 
-- [ ] **3.7 CI runs both modes.** A second CI job for `LIBC=mucc`.
+- [x] **3.7 CI runs both modes.** A second CI job for `LIBC=mucc`.
   - [x] Added: the `test-musl` job in `.github/workflows/ci.yml` runs
     `make libc` and `make test-all LIBC=mucc`.
-  - [ ] Verified: both jobs pass on GitHub.
+  - [x] Verified: both jobs pass on GitHub. (CI passed, `8053d30` (both jobs).)
 
 ## Phase 4: one binary
 
-- [ ] **4.1 Embed the C library.** mucc's own headers, musl's headers,
+- [x] **4.1 Embed the C library.** mucc's own headers, musl's headers,
   `libc.a` and the startup files go inside the `mucc` binary (using 2.5).
   The preprocessor and linker read them from memory, with no files written
   to disk.
@@ -776,10 +780,11 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     `test/single.sh`, in `make test-all`, copies `build/mucc` alone into
     an empty directory and builds a program with gcc, as, ld and ar
     failing.
-  - [ ] Verified: with no `include/` or library files next to it, mucc still
-    compiles and links a program.
+  - [x] Verified: with no `include/` or library files next to it, mucc still
+    compiles and links a program. (`test/single.sh`, in `make test-all`,
+    with gcc, as, ld and ar failing. CI passed, `8053d30` (both jobs).)
 
-- [ ] **4.2 mucc is itself a static musl program,** so it runs on any
+- [x] **4.2 mucc is itself a static musl program,** so it runs on any
   x86-64 Linux, including Alpine and systems without glibc.
   - [x] Added: `build/mucc`'s objects are compiled by mucc against musl
     (`build/obj/`) and linked by `mucc --libc=mucc`. Temporary files now
@@ -790,10 +795,12 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     (2014), and in a `FROM scratch` image; all passed on 2026-09-28 in
     WSL. Containers share WSL's kernel, so that checks their files, not
     their kernels. `test/single.sh` checks it's statically linked.
-  - [ ] Verified: the binary runs on Ubuntu, Fedora, Alpine and one old
-    distribution, and `file mucc` says statically linked.
+  - [x] Verified: the binary runs on Ubuntu, Fedora, Alpine and one old
+    distribution, and `file mucc` says statically linked. (`test/distros.sh`
+    on ubuntu:24.04, fedora, alpine and centos:7, and FROM scratch,
+    2026-09-28 in WSL; `test/single.sh` checks `file`. CI passed, `8053d30` (both jobs).)
 
-- [ ] **4.3 Bundled libc is the default.** `mucc hello.c` uses the bundled
+- [x] **4.3 Bundled libc is the default.** `mucc hello.c` uses the bundled
   musl; `--libc=system` uses glibc and system libraries as today.
   - [x] Added: decided the default is the C library inside the binary:
     musl for the single binary (`build/mucc`), and glibc for a `mucc`
@@ -804,8 +811,9 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     checks the default, `-lssl`, and `--libc=system -static`;
     `test/distros.sh` now builds with no `--libc`, and its `FROM
     scratch` run is the first "Done means" check, which passes.
-  - [ ] Verified: tests for both modes, and a clear error when a system-only
-    library like `-lssl` is used without `--libc=system`.
+  - [x] Verified: tests for both modes, and a clear error when a system-only
+    library like `-lssl` is used without `--libc=system`. (`test/single.sh`
+    checks the default, `-lssl` and `--libc=system`. CI passed, `8053d30` (both jobs).)
 
 - [ ] **4.4 Releases.** Pushing a version tag makes CI build the single
   binary and attach it to a GitHub Release, with its size and checksum.
