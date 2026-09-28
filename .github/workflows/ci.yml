@@ -27,3 +27,16 @@ jobs:
           name: difftest-failures
           path: difftest-failures/
           if-no-files-found: ignore
+
+  # The same tests with the bundled musl (--libc=mucc), including stages
+  # 2 and 3 built against it
+  test-musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build mucc and musl
+        run: make -j"$(nproc)" mucc && make libc
+
+      - name: Test and self-host on musl
+        run: make test-all LIBC=mucc
