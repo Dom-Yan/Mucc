@@ -90,3 +90,13 @@ check 'a new archive'"'"'s mode'
 
 $mucc -ar rcx $tmp/m.a $tmp/a.o 2>&1 | grep -q "unknown option 'x'"
 check 'unknown option'
+
+# r only replaces members that were there before: two files of the same
+# name in one command both go in (musl has two free.o), and a later r
+# replaces the first
+rm -f $tmp/m.a $tmp/g.a
+mkdir -p $tmp/dup && cp $tmp/b.o $tmp/dup/a.o
+both rc $tmp/a.o $tmp/dup/a.o $tmp/b.o
+check 'r: two files of the same name'
+both r $tmp/dup/a.o
+check 'r: then replacing the first of them'
