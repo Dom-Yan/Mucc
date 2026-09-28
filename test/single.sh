@@ -49,18 +49,26 @@ int main(void) {
   return 0;
 }
 EOF
-mucc --libc=mucc -o $tmp/prog $tmp/prog.c -lm -lpthread &&
+# The bundled musl is its default C library.
+mucc -o $tmp/prog $tmp/prog.c -lm -lpthread &&
     [ "$($tmp/prog)" = "7 1.4142 1 4" ] && [ ! -s $tmp/calls ] &&
     file $tmp/prog | grep -q 'statically linked'
-check 'builds a program with --libc=mucc'
+check 'builds a program with the bundled C library by default'
 
-# Its own headers are inside it too, with the system's C library.
+# A library it doesn't have, like the system's -lssl, is a clear error.
+mucc -o $tmp/prog $tmp/prog.c -lssl 2>&1 |
+    grep -q 'cannot find -lssl: .*--libc=system'
+check '-lssl without --libc=system'
+
+# Its own headers are inside it too, with the system's C library, which
+# it links statically without ld.
 echo '#include <stdbool.h>
 #include <stdio.h>
-bool f(void) { return puts("x") > 0; }' > $tmp/sys.c
-mucc -c -o $tmp/sys.o $tmp/sys.c
-check 'compiles with --libc=system'
+int main(void) { return puts("sys") < 0; }' > $tmp/sys.c
+mucc --libc=system -static -o $tmp/sys $tmp/sys.c && [ "$($tmp/sys)" = sys ] &&
+    [ ! -s $tmp/calls ]
+check '--libc=system'
 
 # Embedded headers are no files make could find, so -M leaves them out.
-[ "$(mucc --libc=mucc -M $tmp/prog.c | grep -c '<mucc>')" = 0 ]
+[ "$(mucc -M $tmp/prog.c | grep -c '<mucc>')" = 0 ]
 check '-M'

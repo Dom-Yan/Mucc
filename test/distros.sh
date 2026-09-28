@@ -21,7 +21,7 @@ EOF
 status=0
 for img in $images; do
     out=$(docker run --rm -v $tmp:/m:ro --tmpfs /work:exec $img sh -c \
-        'cd /work && /m/mucc --libc=mucc -o hello /m/hello.c -lm && ./hello' 2>&1)
+        'cd /work && /m/mucc -o hello /m/hello.c -lm && ./hello' 2>&1)
     if [ "$out" = "hello 1.414" ]; then
         echo "testing $img ... passed"
     else
@@ -31,7 +31,7 @@ for img in $images; do
 done
 
 # An image with nothing but mucc and hello.c: no shell, no /tmp.
-printf 'FROM scratch\nCOPY mucc hello.c /\nRUN ["/mucc", "--libc=mucc", "-o", "/hello", "/hello.c"]\nCMD ["/hello"]\n' \
+printf 'FROM scratch\nCOPY mucc hello.c /\nRUN ["/mucc", "-o", "/hello", "/hello.c"]\nCMD ["/hello"]\n' \
     > $tmp/Dockerfile
 if docker build -q -t mucc-distros-scratch $tmp > /dev/null &&
    [ "$(docker run --rm mucc-distros-scratch)" = "hello 1.414" ]; then
