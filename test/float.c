@@ -1,6 +1,29 @@
 #include "test.h"
 
+// Global initializers are folded at compile time, each step in its own
+// type, and long double ones keep all 64 bits of mantissa.
+static const long double g1 = 0.0416666666666666666136L;
+static const long double g2[] = {1.0L / 3, 0.1L + 0.2L, 1e4000L};
+struct { int i; long double x; } g3 = {1, 3.14159265358979323846264L};
+long double g4 = 18446744073709551615UL;
+float g5 = 16777216.0f + 1.0f;
+float g6 = 0.1f + 0.2f;
+double g7 = 0.1f;
+
 int main() {
+  long double one = 1, three = 3, big = 18446744073709551615UL;
+  float f1 = 0.1f, f2 = 0.2f;
+  ASSERT(1, g1 == 0.0416666666666666666136L);
+  ASSERT(1, g1 != (double)0.0416666666666666666136L);
+  ASSERT(1, g2[0] == one / three);
+  ASSERT(1, g2[1] == 0.1L + 0.2L);
+  ASSERT(1, g2[2] == 1e4000L);
+  ASSERT(1, g3.x == 3.14159265358979323846264L);
+  ASSERT(1, g4 == big);
+  ASSERT(1, g5 == 16777216.0f);
+  ASSERT(1, g6 == f1 + f2);
+  ASSERT(1, g7 == (double)f1);
+
   ASSERT(35, (float)(char)35);
   ASSERT(35, (float)(short)35);
   ASSERT(35, (float)(int)35);
