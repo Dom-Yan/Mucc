@@ -808,7 +808,7 @@ static char *read_file(char *path) {
     // By convention, read from stdin if a given filename is "-".
     fp = stdin;
   } else {
-    fp = fopen(path, "r");
+    fp = open_input_file(path);
     if (!fp)
       return NULL;
   }

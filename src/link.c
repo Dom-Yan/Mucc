@@ -470,7 +470,7 @@ static void load_member(Archive *ar, uint64_t off) {
 }
 
 static unsigned char *read_file(char *path, size_t *size) {
-  FILE *fp = fopen(path, "rb");
+  FILE *fp = open_input_file(path);
   if (!fp)
     error("%s: %s", path, strerror(errno));
   fseek(fp, 0, SEEK_END);

@@ -191,6 +191,11 @@ binutils, so they run on any x86-64 Linux. Shared libraries (`.so`,
 test suite that way, with stages 2 and 3 (mucc built by mucc) linked
 against musl too, and `make install` installs the musl build.
 
+`make build/mucc` makes a single binary (about 7 MB) with mucc's
+headers and the musl build inside it: copied anywhere on its own, it
+still compiles and links with `--libc=mucc`. Headers from inside it are
+named `<mucc>/...` in messages, and `-M` leaves them out.
+
 ## Features
 
 **Self-hosting.** mucc compiles, assembles and links itself. `make CC=mucc`
