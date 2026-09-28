@@ -43,7 +43,7 @@ test: $(TESTS)
 	test/libgcc.sh ./mucc
 	test/ar.sh ./mucc
 
-test-all: test test-stage2 selfhost
+test-all: test test-stage2 selfhost test-libc
 
 # Differential testing: random programs compiled by mucc and gcc must print
 # the same thing. `make difftest N=2000` for more. See test/difftest.sh.
@@ -92,6 +92,35 @@ selfhost: $(OBJNAMES:%=stage3/%) $(OBJNAMES:%=stage2/%)
 	for i in $(OBJNAMES); do cmp stage2/$$i stage3/$$i || exit 1; done
 	@echo "selfhost: stage2 and stage3 objects are identical"
 
+# The bundled C library (Phase 3 of PLAN.md)
+#
+# musl, from thirdparty/musl, built by mucc with musl's own configure and
+# Makefile in build/musl, archived by `mucc -ar`, and with no `as`
+# (-fno-as-fallback). Left out: musl's complex numbers and its x86-64
+# math overrides (x87 assembly and SSE asm operands, which mucc doesn't
+# have); musl's portable C math is built instead. It's built from scratch
+# whenever mucc changes, since musl's Makefile doesn't know its objects
+# depend on the compiler.
+
+MUSL_BUILD=build/musl
+
+libc: $(MUSL_BUILD)/lib/libc.a
+
+test-libc: mucc
+	test/libc.sh
+
+$(MUSL_BUILD)/lib/libc.a: mucc
+	rm -rf $(MUSL_BUILD)
+	mkdir -p $(MUSL_BUILD)
+	cd $(MUSL_BUILD) && $(CURDIR)/thirdparty/musl/configure --target=x86_64 \
+	  --disable-shared CC=$(CURDIR)/mucc > configure.log
+	printf '%s\n' \
+	  'BASE_SRCS = $$(filter-out $$(srcdir)/src/complex/%,$$(sort $$(wildcard $$(BASE_GLOBS))))' \
+	  'ARCH_SRCS = $$(filter-out $$(srcdir)/src/math/x86_64/%,$$(sort $$(wildcard $$(ARCH_GLOBS))))' \
+	  >> $(MUSL_BUILD)/config.mak
+	$(MAKE) -C $(MUSL_BUILD) CFLAGS=-fno-as-fallback AR="$(CURDIR)/mucc -ar" \
+	  RANLIB="$(CURDIR)/mucc -ranlib" lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o
+
 # Install
 
 install: mucc
@@ -110,8 +139,8 @@ uninstall:
 # test/asm-forms.s is a source file (see test/asm.sh); other .s files in
 # test/ are build output.
 clean:
-	rm -rf mucc tmp* $(TESTS) test/*.exe stage2 stage3 difftest-failures
+	rm -rf mucc tmp* $(TESTS) test/*.exe stage2 stage3 difftest-failures build
 	rm -f $(filter-out test/asm-forms.s,$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
-.PHONY: test clean test-stage2 selfhost install uninstall difftest
+.PHONY: test clean test-stage2 selfhost install uninstall difftest libc test-libc
