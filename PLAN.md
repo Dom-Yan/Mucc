@@ -203,7 +203,7 @@ the two parts left out (complex numbers and the x86-64 math overrides),
 with no gcc, `as`, `ld` or `ar`, and a program linked against it (by
 `ld`, for now) runs.
 
-3.4 (libc-test) is added: mucc's musl passes the same tests as gcc's.
+3.4 (libc-test) is done: mucc's musl passes the same tests as gcc's.
 
 Next: 3.5
 (`--libc=mucc`: musl's headers, which `make -C build/musl
@@ -685,7 +685,7 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     right. About 9 seconds. Every commit on the way passes `make
     test-all` on its own. CI passed, `8badd7b`.)
 
-- [ ] **3.4 musl's own tests.** Run the `libc-test` suite against the musl
+- [x] **3.4 musl's own tests.** Run the `libc-test` suite against the musl
   that mucc built, from a script in `test/thirdparty/`.
   - [x] Added: `test/thirdparty/libc-test.sh` builds musl with gcc too,
     with the same options and the same parts left out, and runs
@@ -700,10 +700,11 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     branch, for all floating types; `<float.h>` gave long double the
     limits of double. Comparisons now also raise "invalid" as gcc's do
     (`<` and `<=` for a NaN, not `==`).
-  - [ ] Verified: its pass count matches a gcc-built musl's, and any
+  - [x] Verified: its pass count matches a gcc-built musl's, and any
     difference is explained in `thirdparty/README.md`. (The same 16 of
     482 fail with both, 2026-09-28; `thirdparty/README.md` says why.
-    Waiting for CI on the fixes.)
+    The new cases in `test/float.c` fail with the previous mucc. CI
+    passed, `e4d320e`.)
 
 - [ ] **3.5 `--libc=mucc`.** Uses musl's headers (after mucc's own
   `include/`), musl's startup files and `libc.a`, and always links
