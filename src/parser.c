@@ -159,6 +159,8 @@ static Cleanup *brk_cleanups;
 static Cleanup *cont_cleanups;
 static Cleanup *case_cleanups;
 
+StringArray toplevel_asm; // asm("...") at file scope, in order
+
 static Obj *builtin_alloca;
 static Type *va_elem_ty; // an element of __builtin_va_list
 
@@ -5431,6 +5433,17 @@ static Token *remove_attributes(Token *tok) {
 static Token *top_level_item(Token *tok) {
   if (equal(tok, "_Static_assert"))
     return static_assertion(tok);
+
+  // [GNU] asm("...") at file scope: assembly that goes into the output as
+  // it is, as musl's startup code (_start) is written
+  if (equal(tok, "asm") && equal(tok->next, "(")) {
+    tok = tok->next->next;
+    if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
+      error_tok(tok, "expected string literal");
+    strarray_push(&toplevel_asm, tok->str);
+    tok = skip(tok->next, ")");
+    return skip(tok, ";");
+  }
 
   VarAttr attr = {};
   Type *basety = declspec(&tok, tok, &attr);
