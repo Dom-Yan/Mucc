@@ -186,7 +186,9 @@ static Libc libcs[] = {
    musl_static_libs, NULL, NULL},
 };
 
-static Libc *libc = &libcs[0];
+// --libc=, or by default the one inside the binary (the single binary,
+// build/mucc, has musl), else the system's. See main().
+static Libc *libc;
 
 static void set_libc(char *name) {
   for (int i = 0; i < sizeof(libcs) / sizeof(*libcs); i++) {
@@ -1181,7 +1183,32 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
   return false;
 }
 
+// With musl, which has no shared libraries, -lNAME must be a libNAME.a in
+// a -L directory or musl's own. One that isn't is likely the system's
+// (-lssl, -lz), which only --libc=system links: say so.
+static void check_static_libraries(StringArray *inputs) {
+  StringArray dirs = {};
+  for (int i = 0; i < ld_extra_args.len; i++)
+    if (!strcmp(ld_extra_args.data[i], "-L"))
+      strarray_push(&dirs, ld_extra_args.data[++i]);
+  push_all(&dirs, libc->lib_dirs);
+
+  for (int i = 0; i < inputs->len; i++) {
+    char *name = inputs->data[i];
+    if (strncmp(name, "-l", 2))
+      continue;
+    bool found = false;
+    for (int j = 0; j < dirs.len && !found; j++)
+      found = file_exists(format("%s/lib%s.a", dirs.data[j], name + 2));
+    if (!found)
+      error("cannot find %s: not in -L directories or the bundled C library "
+            "(--libc=system links the system's libraries)", name);
+  }
+}
+
 static void run_linker(StringArray *inputs, char *output) {
+  if (!libc->shared_libs)
+    check_static_libraries(inputs);
   if (run_builtin_linker(inputs, output))
     return;
 
@@ -1285,6 +1312,8 @@ int main(int argc, char **argv) {
   init_macros();
   parse_args(argc, argv);
 
+  if (!libc)
+    libc = find_embedded(EMBED_DIR "/musl/lib/libc.a") ? &libcs[1] : &libcs[0];
   if (libc->include_dirs == musl_include_dirs)
     find_musl(argv[0]);
 

@@ -215,10 +215,10 @@ purpose, listed in `a0c3b69`'s message.
 3.5 (`--libc=mucc`) and 3.6 (stages 2 and 3 on musl) are added:
 `make test-all` and `make test-all LIBC=mucc` pass in WSL. Not yet
 pushed (GitHub's token had expired), so neither is verified by CI.
-3.7 (the CI job), 4.1 (`make build/mucc`, the single binary) and 4.2 (it
-is a static musl program) are added too. Next: push, check both CI
-jobs, verify 3.5 to 3.7, 4.1 and 4.2, then 4.3 (the bundled musl as the
-default).
+3.7 (the CI job), 4.1 (`make build/mucc`, the single binary), 4.2 (it
+is a static musl program) and 4.3 (its musl is its default) are added
+too. Next: push, check both CI jobs, verify 3.5 to 4.3, then 4.4
+(releases) and 4.5 (docs).
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -794,7 +794,15 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 
 - [ ] **4.3 Bundled libc is the default.** `mucc hello.c` uses the bundled
   musl; `--libc=system` uses glibc and system libraries as today.
-  - [ ] Added
+  - [x] Added: decided the default is the C library inside the binary:
+    musl for the single binary (`build/mucc`), and glibc for a `mucc`
+    built from source, which has none, so a fresh checkout's `./mucc`
+    and the tests don't need `make libc`. With musl, a `-l` library not
+    in `-L` directories or musl's own is an error that names
+    `--libc=system` (`check_static_libraries()`). `test/single.sh`
+    checks the default, `-lssl`, and `--libc=system -static`;
+    `test/distros.sh` now builds with no `--libc`, and its `FROM
+    scratch` run is the first "Done means" check, which passes.
   - [ ] Verified: tests for both modes, and a clear error when a system-only
     library like `-lssl` is used without `--libc=system`.
 

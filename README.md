@@ -183,8 +183,8 @@ same, byte for byte, as GNU `ar`'s), and `mucc -ranlib libfoo.a` rewrites
 an archive's symbol index.
 
 `--libc=` picks the C library to compile and link against.
-`--libc=system`, the default, is the system's (glibc, with gcc's startup
-files). `--libc=mucc` is the musl in `thirdparty/musl`, which `make libc`
+`--libc=system` is the system's (glibc, with gcc's startup files), the
+default for a mucc built from source. `--libc=mucc` is the musl in `thirdparty/musl`, which `make libc`
 builds with mucc alone: programs get musl's headers and are always
 linked statically by mucc's own linker, with nothing from glibc, gcc or
 binutils, so they run on any x86-64 Linux. Shared libraries (`.so`,
@@ -195,8 +195,10 @@ against musl too, and `make install` installs the musl build.
 `make build/mucc` makes a single binary (about 7 MB) with mucc's
 headers and the musl build inside it. It's a static musl program
 itself, so copied on its own to any x86-64 Linux (Alpine, Fedora, an
-old CentOS, even an empty container), it compiles and links with
-`--libc=mucc`. Headers from inside it are named `<mucc>/...` in
+old CentOS, even an empty container), `build/mucc -o hello hello.c`
+just works. Its default C library is the musl inside it; `--libc=system`
+uses the system's as above, and a system library like `-lssl` without
+it is a clear error. Headers from inside it are named `<mucc>/...` in
 messages, and `-M` leaves them out. `test/distros.sh` checks it on
 several distributions with Docker.
 
