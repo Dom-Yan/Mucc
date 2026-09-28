@@ -21,7 +21,7 @@ bool opt_fcommon = true;
 bool opt_fpic;
 int opt_std = 2017; // -std=: 1989, 1999, 2011, 2017 or 2023 (C17 by default, as gcc 14)
 
-static FileType opt_x;
+static FileType opt_x; // the last -x, for the inputs after it
 static StringArray opt_include;
 static bool opt_E;
 static bool opt_P;
@@ -50,6 +50,7 @@ char *base_file;
 static char *output_file;
 
 static StringArray input_paths;
+static FileType *input_types; // the -x in effect for each input, as gcc does
 static StringArray tmpfiles;
 static HashMap object_sources; // temporary object file -> its C file
 
@@ -226,6 +227,13 @@ static void define(char *str) {
     define_macro(strndup(str, eq - str), eq + 1);
   else
     define_macro(str, "1");
+}
+
+// Adds an input file (or -l, -Wl,), with the -x given before it.
+static void add_input(char *path) {
+  strarray_push(&input_paths, path);
+  input_types = realloc(input_types, sizeof(FileType) * input_paths.len);
+  input_types[input_paths.len - 1] = opt_x;
 }
 
 static FileType parse_opt_x(char *s) {
@@ -409,7 +417,7 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strncmp(argv[i], "-l", 2) || !strncmp(argv[i], "-Wl,", 4)) {
-      strarray_push(&input_paths, argv[i]);
+      add_input(argv[i]);
       continue;
     }
 
@@ -574,7 +582,7 @@ static void parse_args(int argc, char **argv) {
     if (argv[i][0] == '-' && argv[i][1] != '\0')
       error("unknown argument: %s", argv[i]);
 
-    strarray_push(&input_paths, argv[i]);
+    add_input(argv[i]);
   }
 
   for (int i = 0; i < idirafter.len; i++)
@@ -582,10 +590,6 @@ static void parse_args(int argc, char **argv) {
 
   if (input_paths.len == 0)
     error("no input files");
-
-  // -E implies that the input is the C macro language.
-  if (opt_E)
-    opt_x = FILE_C;
 }
 
 //---------- Output and temporary files --------------------------------------
@@ -1177,9 +1181,13 @@ static void run_linker(StringArray *inputs, char *output) {
 
 //---------- main ------------------------------------------------------------
 
-static FileType get_file_type(char *filename) {
-  if (opt_x != FILE_NONE)
-    return opt_x;
+// The type of input `filename`, given `x`, the -x in effect for it.
+static FileType get_file_type(char *filename, FileType x) {
+  // -E implies that the input is the C macro language.
+  if (opt_E)
+    return FILE_C;
+  if (x != FILE_NONE)
+    return x;
 
   if (endswith(filename, ".a"))
     return FILE_AR;
@@ -1266,7 +1274,7 @@ int main(int argc, char **argv) {
     else
       output = replace_extn(input, ".o");
 
-    FileType type = get_file_type(input);
+    FileType type = get_file_type(input, input_types[i]);
 
     // Handle .o, .a or .so
     if (type == FILE_DSO && !libc->shared_libs)
