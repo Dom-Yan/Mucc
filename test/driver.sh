@@ -1,6 +1,11 @@
 #!/bin/bash
 mucc=$1
 
+# With --libc=mucc, programs are only linked statically: shared libraries
+# are an error.
+musl=
+[[ $mucc == *--libc=mucc* ]] && musl=1
+
 tmp=`mktemp -d /tmp/mucc-test-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
 echo > $tmp/empty.c
@@ -272,7 +277,12 @@ echo 'void foo() {}' | cc -fPIC -c -xc -o $tmp/foo.o -
 echo 'void bar() {}' | cc -fPIC -c -xc -o $tmp/bar.o -
 cc -shared -o $tmp/foo.so $tmp/foo.o $tmp/bar.o
 echo 'void foo(); void bar(); int main() { foo(); bar(); }' > $tmp/main.c
-$mucc -o $tmp/foo $tmp/main.c $tmp/foo.so
+if [ $musl ]; then
+    $mucc -o $tmp/foo $tmp/main.c $tmp/foo.so 2>&1 |
+        grep -q 'foo.so: a shared library needs --libc=system'
+else
+    $mucc -o $tmp/foo $tmp/main.c $tmp/foo.so
+fi
 check '.so'
 
 $mucc -hashmap-test
@@ -326,7 +336,11 @@ check '-MD with -o in another directory'
 echo 'extern int bar; int foo() { return bar; }' | $mucc -fPIC -xc -c -o $tmp/foo.o -
 cc -shared -o $tmp/foo.so $tmp/foo.o
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/main.c
-$mucc -o $tmp/foo $tmp/main.c $tmp/foo.so
+if [ $musl ]; then
+    $mucc -o $tmp/foo $tmp/main.c $tmp/foo.o
+else
+    $mucc -o $tmp/foo $tmp/main.c $tmp/foo.so
+fi
 check -fPIC
 
 # #include_next
@@ -337,6 +351,16 @@ echo '#include_next "file2.h"' > $tmp/next2/file1.h
 echo 'foo' > $tmp/next3/file2.h
 $mucc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/file.c | grep -q foo
 check '#include_next'
+
+# __has_include_next: a wrapper header that only includes a next one if
+# there is one, as mucc's <sys/cdefs.h> does
+mkdir -p $tmp/hin1 $tmp/hin2
+printf '#if __has_include_next(<hin.h>)\n#include_next <hin.h>\n#else\nnone\n#endif\n' > $tmp/hin1/hin.h
+echo 'wrapped' > $tmp/hin2/hin.h
+echo '#include <hin.h>' > $tmp/hin.c
+$mucc -I$tmp/hin1 -I$tmp/hin2 -E $tmp/hin.c | grep -q wrapped &&
+    $mucc -I$tmp/hin1 -E $tmp/hin.c | grep -q none
+check '__has_include_next'
 
 # #include_next continues after the directory the current file was found
 # in, even when the header was found earlier and another #include ran since.
@@ -361,8 +385,9 @@ check '-I of a default include directory'
 # As with gcc, -I of a system directory doesn't move it before mucc's own
 # headers. (CPython passes -I/usr/include/x86_64-linux-gnu; glibc's
 # <sys/cdefs.h> then came first and dropped the packed from epoll_event.)
-# Only for a mucc with its include/ next to it, as stage2/mucc has none.
-if [ -d "$(dirname $mucc)/include" ]; then
+# Only for a mucc with its include/ next to it, as stage2/mucc has none,
+# and with glibc.
+if [ -d "$(dirname ${mucc%% *})/include" ] && [ ! $musl ]; then
   printf '#include <sys/epoll.h>\n_Static_assert(sizeof(struct epoll_event) == 12, "");\n' > $tmp/sysdir.c
   $mucc -I/usr/include/x86_64-linux-gnu -I/usr/include -c -o $tmp/sysdir.o $tmp/sysdir.c
   check '-I of a system directory'
@@ -379,12 +404,21 @@ check -static
 # -shared
 echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c
-$mucc -fPIC -shared -o $tmp/foo.so $tmp/foo.c $tmp/bar.c
+if [ $musl ]; then
+    $mucc -fPIC -shared -o $tmp/foo.so $tmp/foo.c $tmp/bar.c 2>&1 |
+        grep -q 'error: -shared needs --libc=system'
+else
+    $mucc -fPIC -shared -o $tmp/foo.so $tmp/foo.c $tmp/bar.c
+fi
 check -shared
 
 # -L
 echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c
-$mucc -fPIC -shared -o $tmp/libfoobar.so $tmp/foo.c
+if [ $musl ]; then
+    $mucc -c -o $tmp/foo.o $tmp/foo.c && ar rcs $tmp/libfoobar.a $tmp/foo.o
+else
+    $mucc -fPIC -shared -o $tmp/libfoobar.so $tmp/foo.c
+fi
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c
 $mucc -o $tmp/foo $tmp/bar.c -L$tmp -lfoobar
 check -L
@@ -490,7 +524,7 @@ echo '#define FROM_INCDIR 7' > $tmp/incdir/incdir.h
 printf '#include "incdir.h"\nint seven(void);\nint main() { return seven() == FROM_INCDIR ? 7 : 1; }\n' > $tmp/incdir.c
 echo 'int seven(void) { return 7; }' > $tmp/seven.c
 $mucc -c -o $tmp/incdir/seven.o $tmp/seven.c
-$mucc -ar rcs $tmp/incdir/libseven.a $tmp/incdir/seven.o
+${mucc%% *} -ar rcs $tmp/incdir/libseven.a $tmp/incdir/seven.o
 $mucc -I $tmp/incdir -o $tmp/incdir.out $tmp/incdir.c -L $tmp/incdir -lseven
 $tmp/incdir.out
 [ $? = 7 ]

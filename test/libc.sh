@@ -1,8 +1,8 @@
 #!/bin/bash
 # Builds the bundled C library (make libc) with gcc, as, ld and ar
 # replaced by commands that fail: mucc compiles, assembles and archives
-# all of musl itself. Then checks that a program built against it runs.
-# (It is linked by ld until mucc does that itself; see PLAN.md, 3.5.)
+# all of musl itself. Then checks that a program built against it with
+# --libc=mucc, still with no ld, runs.
 
 tmp=`mktemp -d /tmp/mucc-libc-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
@@ -24,8 +24,6 @@ done
 PATH=$tmp/bin:$PATH make -s libc > $tmp/log 2>&1 && [ ! -s $tmp/calls ]
 check 'make libc with no gcc, as, ld or ar'
 
-B=build/musl
-make -s -C $B install-headers DESTDIR= includedir=$PWD/$B/include > /dev/null
 cat > $tmp/prog.c <<'EOF'
 #include <math.h>
 #include <pthread.h>
@@ -57,7 +55,7 @@ int main(void) {
   return 0;
 }
 EOF
-./mucc -I$B/include -c -o $tmp/prog.o $tmp/prog.c &&
-    ld -static -o $tmp/prog $B/lib/crt1.o $B/lib/crti.o $tmp/prog.o $B/lib/libc.a $B/lib/crtn.o &&
+PATH=$tmp/bin:$PATH ./mucc --libc=mucc -o $tmp/prog $tmp/prog.c -lm -lpthread &&
+    [ ! -s $tmp/calls ] && file $tmp/prog | grep -q 'statically linked' &&
     [ "$($tmp/prog)" = "13579 1.414 1.5 8 3 2.71828" ]
 check 'a program built against it runs'

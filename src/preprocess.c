@@ -58,7 +58,7 @@ static HashMap found_in; // header path -> 1 + index in include_paths
 static Token *preprocess2(Token *tok);
 static Macro *find_macro(Token *tok);
 static char *join_tokens(Token *tok, Token *end);
-static bool find_include(char *filename);
+static bool find_include(char *filename, int from);
 static int has_embed(Token **rest, Token *tok);
 
 //---------- Token helpers and hidesets --------------------------------------
@@ -286,16 +286,21 @@ static Token *read_const_expr(Token **rest, Token *tok) {
     }
 
     // C23: "__has_include(<foo.h>)" or "__has_include("foo.h")" becomes
-    // "1" if #include would find the header. Otherwise "0".
-    if (equal(tok, "__has_include")) {
+    // "1" if #include would find the header. Otherwise "0". [GNU]
+    // __has_include_next does the same for #include_next, so a wrapper
+    // header can check that there is a next one.
+    if (equal(tok, "__has_include") || equal(tok, "__has_include_next")) {
       Token *start = tok;
+      bool next = equal(tok, "__has_include_next");
+      int from = next ? (intptr_t)hashmap_get(&found_in, start->file->name) : 0;
       tok = skip(tok->next, "(");
 
       bool found;
       if (tok->kind == TK_STR) {
         char *name = strndup(tok->loc + 1, tok->len - 2);
         char *dir = dirname(strdup(start->file->name));
-        found = file_exists(format("%s/%s", dir, name)) || find_include(name);
+        found = (!next && file_exists(format("%s/%s", dir, name))) ||
+                find_include(name, from);
         tok = tok->next;
       } else {
         Token *lt = tok;
@@ -305,7 +310,7 @@ static Token *read_const_expr(Token **rest, Token *tok) {
             error_tok(lt, "expected '>'");
           tok = tok->next;
         }
-        found = find_include(join_tokens(lt->next, tok));
+        found = find_include(join_tokens(lt->next, tok), from);
         tok = tok->next;
       }
 
@@ -868,13 +873,13 @@ char *search_include_paths(char *filename) {
   return NULL;
 }
 
-// Would #include <filename> find a file? Unlike search_include_paths(),
-// this doesn't cache or record where the file was found.
-// Used by __has_include.
-static bool find_include(char *filename) {
+// Would #include <filename> find a file in the include paths from index
+// `from` on? Unlike search_include_paths(), this doesn't cache or record
+// where the file was found. Used by __has_include and __has_include_next.
+static bool find_include(char *filename, int from) {
   if (filename[0] == '/')
     return file_exists(filename);
-  for (int i = 0; i < include_paths.len; i++)
+  for (int i = from; i < include_paths.len; i++)
     if (file_exists(format("%s/%s", include_paths.data[i], filename)))
       return true;
   return false;
@@ -1594,6 +1599,7 @@ void init_macros(void) {
   // Lets `#if defined(__has_include)` etc. work. The operators themselves
   // are handled in read_const_expr().
   define_macro("__has_include", "__has_include");
+  define_macro("__has_include_next", "__has_include_next");
   define_macro("__has_embed", "__has_embed");
   define_macro("__has_c_attribute", "__has_c_attribute");
   define_macro("__has_attribute", "__has_attribute");

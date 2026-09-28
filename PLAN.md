@@ -205,10 +205,17 @@ with no gcc, `as`, `ld` or `ar`, and a program linked against it (by
 
 3.4 (libc-test) is done: mucc's musl passes the same tests as gcc's.
 
-Next: 3.5
-(`--libc=mucc`: musl's headers, which `make -C build/musl
-install-headers` installs, `crt1.o` and `libc.a`, linked by mucc's
-own linker). `test/libc.sh` shows the pieces 3.5 will put together.
+2026-09-28: gcc's torture tests (`gcc.c-torture/execute`, 1,669
+programs, run in WSL from a gcc checkout in `~/torture`) found 3
+crashes and 26 wrong results. Fixed in `a0c3b69` and `39398e2` (bit-fields,
+`_Bool` `x++`, `(int)` casts in constants, empty structs, VLAs never
+freed, and more); 930 pass now. What's left is gcc-only or left out on
+purpose, listed in `a0c3b69`'s message.
+
+3.5 (`--libc=mucc`) is added: `make test LIBC=mucc` and `make test-all`
+pass in WSL. Next: CI for 3.5, then 3.6 (stage 2 and 3 on musl; the
+stage 2 mucc in `stage2/` doesn't find `build/musl` next to it, so
+that needs a way to point it there).
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -709,7 +716,21 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 - [ ] **3.5 `--libc=mucc`.** Uses musl's headers (after mucc's own
   `include/`), musl's startup files and `libc.a`, and always links
   statically with mucc's own linker.
-  - [ ] Added
+  - [x] Added: a second entry in `libcs[]` (`src/main.c`), whose paths
+    `find_musl()` fills in: `build/musl` next to the binary, or
+    `../lib/mucc/musl` after `make install`. `make libc` now also
+    installs musl's headers in `build/musl/include` and builds musl's
+    empty `libm.a`, `libpthread.a` and the like, so `-lm` works. Nothing
+    from gcc is linked (no `crtbegin.o`, no libgcc), `-static` is
+    implied, and a `.so` or `-shared` is an error that names
+    `--libc=system`. `make test LIBC=mucc` builds the test programs as
+    `test/*.musl.exe` (compiled and linked by mucc against musl) and
+    passes the scripts `./mucc --libc=mucc`. What that took: mucc's
+    `<sys/cdefs.h>` wrapper now checks for a next one with
+    `__has_include_next` (new; musl has none), `src/link.c` defines
+    `SHT_X86_64_UNWIND` when `<elf.h>` doesn't (musl's), and
+    `test/stdhdr.c` checks a glibc type only with glibc. `test/libc.sh`
+    now links its program with `--libc=mucc`, with `ld` still failing.
   - [ ] Verified: the whole test suite passes with `make test LIBC=mucc`.
 
 - [ ] **3.6 mucc builds itself on musl.** Stage 2 and stage 3 built against

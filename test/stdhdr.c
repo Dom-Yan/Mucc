@@ -18,7 +18,9 @@
 int main() {
   ASSERT(12, sizeof(struct epoll_event));
   ASSERT(4, offsetof(struct epoll_event, data));
+#ifdef __GLIBC__
   ASSERT(16, _Alignof(__pthread_unwind_buf_t));
+#endif
   ASSERT(0, ({ regex_t re; regmatch_t m[1]; regcomp(&re, "b+", REG_EXTENDED);
                int r = regexec(&re, "abbc", 1, m, 0); regfree(&re); r; }));
   ASSERT(1, ({ regex_t re; regmatch_t m[1]; regcomp(&re, "b+", REG_EXTENDED);

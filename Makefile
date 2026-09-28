@@ -8,14 +8,25 @@ OBJS=$(SRCS:.c=.o)
 OBJNAMES=$(notdir $(OBJS))
 
 TEST_SRCS=$(wildcard test/*.c)
+
+# `make test LIBC=mucc` builds the tests against the bundled musl (see
+# `make libc`), linked by mucc itself, instead of glibc. They're named
+# test/*.musl.exe, so the two builds don't mix.
+LIBC=system
+MUSL_BUILD=build/musl
+ifeq ($(LIBC),mucc)
+TESTS=$(TEST_SRCS:.c=.musl.exe)
+else
 TESTS=$(TEST_SRCS:.c=.exe)
+endif
 
 # A test program can ask for options with a `// flags: ...` line, like
 # test/c23.c's `-std=c23`. test/link.sh and test/asm.sh read it too.
 test_flags=$(shell sed -n 's|^// flags: ||p' test/$(1).c)
 
 # `make install` puts mucc in $(PREFIX)/bin and its headers in
-# $(PREFIX)/lib/mucc/include, where mucc looks for them.
+# $(PREFIX)/lib/mucc/include, where mucc looks for them, and musl, if
+# `make libc` built it, in $(PREFIX)/lib/mucc/musl.
 PREFIX=/usr/local
 
 # Stage 1 (mucc compiled by $(CC), normally gcc)
@@ -33,14 +44,21 @@ test/%.exe: mucc test/%.c
 	./mucc -Iinclude -Itest $(call test_flags,$*) -c -o test/$*.o test/$*.c
 	$(CC) -pthread -o $@ test/$*.o -xc test/common
 
+test/%.musl.exe: mucc test/%.c test/common.musl.o
+	./mucc --libc=mucc -Iinclude -Itest $(call test_flags,$*) -c -o test/$*.musl.o test/$*.c
+	./mucc --libc=mucc -o $@ test/$*.musl.o test/common.musl.o
+
+test/common.musl.o: mucc test/common $(MUSL_BUILD)/lib/libc.a
+	./mucc --libc=mucc -c -o $@ -xc test/common
+
 test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	test/driver.sh ./mucc
-	test/errors.sh ./mucc
-	test/asm.sh ./mucc
-	test/link.sh ./mucc
-	test/attribute-layout.sh ./mucc
-	test/libgcc.sh ./mucc
+	test/driver.sh "./mucc --libc=$(LIBC)"
+	test/errors.sh "./mucc --libc=$(LIBC)"
+	test/asm.sh "./mucc --libc=$(LIBC)"
+	test/link.sh "./mucc --libc=$(LIBC)"
+	test/attribute-layout.sh "./mucc --libc=$(LIBC)"
+	test/libgcc.sh "./mucc --libc=$(LIBC)"
 	test/ar.sh ./mucc
 
 test-all: test test-stage2 selfhost test-libc
@@ -100,9 +118,10 @@ selfhost: $(OBJNAMES:%=stage3/%) $(OBJNAMES:%=stage2/%)
 # math overrides (x87 assembly and SSE asm operands, which mucc doesn't
 # have); musl's portable C math is built instead. It's built from scratch
 # whenever mucc changes, since musl's Makefile doesn't know its objects
-# depend on the compiler.
-
-MUSL_BUILD=build/musl
+# depend on the compiler. MUSL_BUILD is set at the top. Its headers go in
+# $(MUSL_BUILD)/include and the rest in $(MUSL_BUILD)/lib, where
+# --libc=mucc finds them, with musl's empty libm.a, libpthread.a, ... so
+# -lm and -lpthread work as with glibc.
 
 libc: $(MUSL_BUILD)/lib/libc.a
 
@@ -119,7 +138,10 @@ $(MUSL_BUILD)/lib/libc.a: mucc
 	  'ARCH_SRCS = $$(filter-out $$(srcdir)/src/math/x86_64/%,$$(sort $$(wildcard $$(ARCH_GLOBS))))' \
 	  >> $(MUSL_BUILD)/config.mak
 	$(MAKE) -C $(MUSL_BUILD) CFLAGS=-fno-as-fallback AR="$(CURDIR)/mucc -ar" \
-	  RANLIB="$(CURDIR)/mucc -ranlib" lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o
+	  RANLIB="$(CURDIR)/mucc -ranlib" lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o \
+	  $(patsubst %,lib/lib%.a,m rt pthread crypt util xnet resolv dl)
+	$(MAKE) -C $(MUSL_BUILD) install-headers DESTDIR= \
+	  includedir=$(CURDIR)/$(MUSL_BUILD)/include > /dev/null
 
 # Install
 
@@ -129,6 +151,12 @@ install: mucc
 	install -m 644 include/*.h $(DESTDIR)$(PREFIX)/lib/mucc/include
 	install -d $(DESTDIR)$(PREFIX)/lib/mucc/include/sys
 	install -m 644 include/sys/*.h $(DESTDIR)$(PREFIX)/lib/mucc/include/sys
+	if [ -f $(MUSL_BUILD)/lib/libc.a ]; then \
+	  install -d $(DESTDIR)$(PREFIX)/lib/mucc/musl/lib && \
+	  install -m 644 $(MUSL_BUILD)/lib/*.a $(MUSL_BUILD)/lib/*.o \
+	    $(DESTDIR)$(PREFIX)/lib/mucc/musl/lib && \
+	  cp -R $(MUSL_BUILD)/include $(DESTDIR)$(PREFIX)/lib/mucc/musl/; \
+	fi
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/mucc
