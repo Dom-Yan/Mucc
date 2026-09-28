@@ -217,8 +217,9 @@ purpose, listed in `a0c3b69`'s message.
 pushed (GitHub's token had expired), so neither is verified by CI.
 3.7 (the CI job), 4.1 (`make build/mucc`, the single binary), 4.2 (it
 is a static musl program) and 4.3 (its musl is its default) are added
-too. Next: push, check both CI jobs, verify 3.5 to 4.3, then 4.4
-(releases) and 4.5 (docs).
+too, and 4.4 (the release workflow). Next: push, check both CI jobs,
+verify 3.5 to 4.3, then tag a first release (4.4), and 4.5 (docs,
+checked against that release).
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -808,7 +809,14 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 
 - [ ] **4.4 Releases.** Pushing a version tag makes CI build the single
   binary and attach it to a GitHub Release, with its size and checksum.
-  - [ ] Added
+  - [x] Added: `.github/workflows/release.yml`, on a `v*` tag: builds
+    `build/mucc`, runs `test/single.sh` and `test/distros.sh` (Docker is
+    on GitHub's runners), strips it (7.0 MB; the stripped binary passes
+    `test/single.sh` too), and makes the release with
+    `mucc-x86_64-linux` and its `.sha256`, the size and checksum in the
+    notes. The release step was dry-run in WSL with a stand-in `gh`.
+    Not run on GitHub yet: that takes pushing a tag, which makes a
+    public release.
   - [ ] Verified: the released binary, downloaded onto a clean machine,
     passes the "Done means" checks at the top of this file.
 
