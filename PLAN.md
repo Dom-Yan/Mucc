@@ -198,20 +198,16 @@ Phases 0, 1 and 2 are done and verified (1.8 and 1.10 were dropped as
 not needed). Git and CPython build with mucc and pass their tests as
 with gcc, except CPython's `test_peg_generator` (1.12).
 
-Phase 3 has started: 3.1 (vendor musl) is done. 3.2 (musl's assembly
-in mucc's assembler, `-fno-as-fallback`) is added; its last check needs
-musl's C to compile, which is 3.3. `mucc -ar`/`-ranlib` (2.4) can
-archive musl, `asm` with operands and register variables (2.3) cover its
-system calls, and `.incbin` (2.5) is ready for Phase 4.
+Phase 3: 3.1 (vendor musl) is done; 3.2 (musl's assembly in mucc's
+assembler, `-fno-as-fallback`) and 3.3 (`make libc`) are added and
+checked locally, and are verified once CI passes. mucc builds all of
+musl but the two parts left out, with no gcc, `as`, `ld` or `ar`, and a
+program linked against it (by `ld`, for now) runs.
 
-For 3.3, a first try (musl's `configure` and `make` with `CC=mucc`, on
-2026-09-27) found, by number of errors: `__volatile` (musl's
-`syscall_arch.h` says `__asm__ __volatile__`), `__builtin_va_list` and
-`__builtin_va_start`/`_arg`/`_end` (musl's `<stdarg.h>`, with
-`-nostdinc`), `__syscall_cp` undeclared (probably a follow-on error),
-`<complex.h>` (leave out `src/complex/`), and 20 crashes of `mucc
--cc1`, not yet looked at. The flags `configure` picked are in its
-`config.mak` (`-std=c99 -ffreestanding -Wa,--noexecstack` among them).
+Next: 3.4 (musl's `libc-test` against this `libc.a`), then 3.5
+(`--libc=mucc`: musl's headers, which `make -C build/musl
+install-headers` installs, `crt1.o` and `libc.a`, linked by mucc's
+own linker). `test/libc.sh` shows the pieces 3.5 will put together.
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -645,19 +641,47 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     hidden), `.init` and `.fini` get code flags by name, and an object
     with no symbols has no `.symtab`. Three files mucc already assembled
     (`dlsym.s`, `vfork.s`, `syscall_cp.s`) had differed in these. The
-    flag is `-fno-as-fallback`.
+    flag is `-fno-as-fallback`. musl's C then needed `bsf`, `bsr`,
+    `xadd` and `pause` in `asm` statements (its atomics), `asm` at file
+    scope (`_start` in `crt_arch.h`) and `.type sym,%function`.
   - [ ] Verified: musl builds with the flag on and no `as` on the `PATH`.
-    (So far: `test/asm.sh` checks all 17 files and `test/asm-forms.s`
-    against GNU as, and `test/driver.sh` the flag; the old mucc fails
-    both. `make test-all` and `make difftest N=300` pass. The C files'
-    `asm` statements can only be checked once musl's C compiles, in 3.3.)
+    (`test/asm.sh` checks all 17 files and `test/asm-forms.s` against
+    GNU as, and `test/driver.sh` the flag; the old mucc fails both.
+    `test/libc.sh` builds all of musl with `-fno-as-fallback` and an `as`
+    that fails. `make test-all` and `make difftest N=300` pass. Waiting
+    for CI.)
 
 - [ ] **3.3 Build musl with mucc.** `make libc` compiles musl with mucc and
   archives it with `mucc -ar` into `libc.a`, with musl's `crt1.o`, `crti.o`
   and `crtn.o`.
-  - [ ] Added
+  - [x] Added: `make libc` runs musl's own `configure` and Makefile in
+    `build/musl` (so `thirdparty/musl` stays as released), with mucc as
+    the compiler and `mucc -ar` as the archiver, and leaves out
+    `src/complex/` and `src/math/x86_64/` by filtering musl's source
+    lists in the `config.mak` `configure` writes. It rebuilds musl from
+    scratch whenever mucc changes. All 1,284 other files compile. What
+    that took, besides 3.2, all bugs any program could hit: unnamed
+    bit-fields crashed mucc in initializers and member lookups, and
+    zeroed a global's later members; global `long double` constants
+    were an internal error, and float constants were folded in double;
+    `int f(void), g(void);` was an error; `va_list` wasn't laid out as
+    the psABI says (a `va_list` passed to glibc's `vprintf` gave wrong
+    doubles), so `va_arg` is now built in, with gcc's `__builtin_va_*`;
+    two calling convention bugs against gcc's code (a struct in XMM
+    registers after the general-purpose ones ran out; 16-byte aligned
+    arguments on the stack); nested designators followed by more items;
+    a union initialized with a union; `p - q` and musl's `offsetof` in
+    static initializers; `(T){...}.m` and `(T[]){...}[i]`; `&(T){x}` in
+    a register; `-I dir`; `__typeof`, `__inline`, `__extension__` and
+    `__volatile`; and `mucc -ar r` dropped one of two members of the same
+    name (musl has two `free.o`), unlike GNU ar.
   - [ ] Verified: builds with no gcc, `as`, `ld` or `ar` used (checked by
-    running the build with them removed from the `PATH`).
+    running the build with them removed from the `PATH`). (`test/libc.sh`,
+    in `make test-all`: `make libc` with gcc, `cc`, `as`, `ld`, `ar` and
+    `ranlib` replaced by commands that fail, none of them called; then a
+    program using `qsort`, `malloc`, `snprintf` of doubles and long
+    doubles, `sqrt`, `exp`, threads and `longjmp`, linked by `ld`, runs
+    right. About 9 seconds. Waiting for CI.)
 
 - [ ] **3.4 musl's own tests.** Run the `libc-test` suite against the musl
   that mucc built, from a script in `test/thirdparty/`.
