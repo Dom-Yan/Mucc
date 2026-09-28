@@ -723,6 +723,7 @@ typedef enum {
   UNARY,    // not neg mul div idiv (F6/F7): op is the /digit
   INCDEC,   // inc dec (FE/FF): op is the /digit
   IMUL,     // imul, one or two operands
+  REG_RM,   // bsf, bsr (and imul's two-operand form): 0F op, into a register
   MOV,
   MOVX,     // movsbl, movzwl, ...: op is the second opcode byte
   MOVXX,    // movzb, movzx, movsx: size from the operands; op for byte source
@@ -742,7 +743,7 @@ typedef enum {
   MOVQ,
   X87,      // x87 or MXCSR memory operand: opcode op (1 or 2 bytes), /digit ext
   FSTP,     // fstp %st(i)
-  CMPXCHG,
+  CMPXCHG,  // cmpxchg, xadd: 0F op (byte) or op + 1, from a register
   XCHG,
 } InsnKind;
 
@@ -764,7 +765,8 @@ static Insn insns[] = {
   {"not", UNARY, 2}, {"neg", UNARY, 3}, {"mul", UNARY, 4},
   {"div", UNARY, 6}, {"idiv", UNARY, 7},
   {"inc", INCDEC, 0}, {"dec", INCDEC, 1},
-  {"imul", IMUL},
+  {"imul", IMUL, 0xaf},
+  {"bsf", REG_RM, 0xbc}, {"bsr", REG_RM, 0xbd},
   {"mov", MOV},
   {"movsbw", MOVX, 0xbe, 2}, {"movsbl", MOVX, 0xbe, 4}, {"movsbq", MOVX, 0xbe, 8},
   {"movswl", MOVX, 0xbf, 4}, {"movswq", MOVX, 0xbf, 8},
@@ -794,6 +796,7 @@ static Insn insns[] = {
   {"cld", FIXED, 1, .bytes = {0xfc}},
   {"std", FIXED, 1, .bytes = {0xfd}},
   {"hlt", FIXED, 1, .bytes = {0xf4}},
+  {"pause", FIXED, 2, .bytes = {0xf3, 0x90}},
   {"fnclex", FIXED, 2, .bytes = {0xdb, 0xe2}},
   {"faddp", FIXED, 2, .bytes = {0xde, 0xc1}},
   {"fmulp", FIXED, 2, .bytes = {0xde, 0xc9}},
@@ -838,7 +841,7 @@ static Insn insns[] = {
   {"fnstsw", X87, 0xdd, .ext = 7},
   {"ldmxcsr", X87, 0x0fae, .ext = 2}, {"stmxcsr", X87, 0x0fae, .ext = 3},
   {"fstp", FSTP},
-  {"cmpxchg", CMPXCHG},
+  {"cmpxchg", CMPXCHG, 0xb0}, {"xadd", CMPXCHG, 0xc0},
   {"xchg", XCHG},
 };
 
@@ -886,7 +889,7 @@ static Insn *find_insn(char *name, int len) {
     return NULL;
   switch (insn->kind) {
   case ALU: case SHIFT: case UNARY: case INCDEC: case IMUL: case MOV:
-  case LEA: case PUSH: case TEST: case CMPXCHG: case XCHG: {
+  case LEA: case PUSH: case TEST: case CMPXCHG: case XCHG: case REG_RM: {
     Insn *sized = calloc(1, sizeof(Insn));
     *sized = *insn;
     sized->size = 1 << (s - suffix);
@@ -1190,14 +1193,18 @@ static void instruction(char *name, int len) {
       encode_unary(insn, ops, n, 0xf6, 5);
       return;
     }
+    // fallthrough
+  case REG_RM: {
     if (n != 2 || !is_gp(&ops[1]))
       fail("unsupported operands");
-    operand_prefixes(ops, n, op_size(insn, ops, n));
-    rex(op_size(insn, ops, n) == 8, ops[1].reg->num, &ops[0], false);
+    int size = op_size(insn, ops, n);
+    operand_prefixes(ops, n, size);
+    rex(size == 8, ops[1].reg->num, &ops[0], false);
     out(0x0f);
-    out(0xaf);
+    out(insn->op);
     modrm(ops[1].reg->num, &ops[0], 0);
     return;
+  }
   case MOV:
     encode_mov(insn, ops, n);
     return;
@@ -1383,7 +1390,7 @@ static void instruction(char *name, int len) {
     operand_prefixes(ops, n, size);
     rex(size == 8, ops[0].reg->num, &ops[1], needs_rex(&ops[0]));
     out(0x0f);
-    out(size == 1 ? 0xb0 : 0xb1);
+    out(size == 1 ? insn->op : insn->op + 1);
     modrm(ops[0].reg->num, &ops[1], 0);
     return;
   }
