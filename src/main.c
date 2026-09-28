@@ -1133,13 +1133,19 @@ static void push_gcc_file(StringArray *arr, char *gcc_libpath, char *name) {
     strarray_push(arr, format("%s/%s", gcc_libpath, name));
 }
 
+static bool is_export_dynamic(char *arg) {
+  return !strcmp(arg, "-E") || !strcmp(arg, "--export-dynamic");
+}
+
 // Links with mucc's own linker (link.c), which makes static executables.
 // Returns false if it can't do this link, and `ld` must.
 static bool run_builtin_linker(StringArray *inputs, char *output) {
   if (!opt_static || opt_shared || opt_system_ld)
     return false;
 
-  // Only -L, -s and -static; with other linker flags, use `ld`.
+  // Only -L, -s, -static and -E (--export-dynamic, which does nothing
+  // without dynamic linking, as with ld -static: Lua passes it); with
+  // other linker flags, use `ld`.
   StringArray lib_paths = {};
   bool strip = false;
   for (int i = 0; i < ld_extra_args.len; i++) {
@@ -1152,7 +1158,8 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
       return false;
   }
   for (int i = 0; i < inputs->len; i++)
-    if (inputs->data[i][0] == '-' && strncmp(inputs->data[i], "-l", 2))
+    if (inputs->data[i][0] == '-' && strncmp(inputs->data[i], "-l", 2) &&
+        !is_export_dynamic(inputs->data[i]))
       return false;
 
   char *libpath = find_libpath();
@@ -1167,6 +1174,8 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
   while (names.len < files.len)
     strarray_push(&names, NULL);
   for (int i = 0; i < inputs->len; i++) {
+    if (is_export_dynamic(inputs->data[i]))
+      continue;
     strarray_push(&files, inputs->data[i]);
     strarray_push(&names, hashmap_get(&object_sources, inputs->data[i]));
   }

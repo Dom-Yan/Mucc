@@ -57,6 +57,12 @@ EOF
 static_link -o $tmp/tls $tmp/tls.c -lpthread && $tmp/tls
 check 'thread-local variables in threads'
 
+# -Wl,-E (export symbols for dynamic loading, as Lua links) does nothing
+# in a static program, so it needs no `ld`.
+echo 'int main(void) { return 0; }' > $tmp/export.c
+static_link -Wl,-E -o $tmp/export $tmp/export.c && $tmp/export
+check '-Wl,-E'
+
 # An archive of our own, found with -L/-l; only needed members are used.
 printf 'int counter;\nint bump(void) { return ++counter; }\n' > $tmp/a1.c
 printf 'int twice(int x) { return 2 * x; }\n' > $tmp/a2.c

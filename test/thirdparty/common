@@ -1,5 +1,7 @@
 make="make -j$(nproc)"
-mucc=`pwd`/mucc
+# The mucc to test: ./mucc, or $MUCC (as MUCC=$PWD/build/mucc for the
+# single binary).
+mucc=${MUCC:-`pwd`/mucc}
 
 dir=$(basename -s .git $repo)
 
