@@ -1507,6 +1507,7 @@ void init_macros(void) {
   define_macro("__typeof__", "typeof");
   define_macro("__unix", "1");
   define_macro("__unix__", "1");
+  define_macro("__volatile", "volatile");
   define_macro("__volatile__", "volatile");
   define_macro("__x86_64", "1");
   define_macro("__x86_64__", "1");

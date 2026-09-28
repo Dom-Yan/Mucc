@@ -5048,6 +5048,14 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   if (consume(&tok, tok, ";"))
     return tok;
 
+  // `int f(void), g(void), x;`: more declarators follow a prototype.
+  if (equal(tok, ",")) {
+    tok = tok->next;
+    if (is_function(tok))
+      return function(tok, basety, attr);
+    return global_variable(tok, basety, attr);
+  }
+
   // gcc's `extern inline` (gnu_inline): the body is only for inlining,
   // which mucc doesn't do, so calls go to the definition elsewhere. It's
   // still parsed and checked.
@@ -5119,8 +5127,12 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
-    if (!first)
+    if (!first) {
       tok = skip_decl_comma(tok);
+      // `int x, f(void);`: the rest starts with a function declaration.
+      if (is_function(tok))
+        return function(tok, basety, attr);
+    }
     first = false;
 
     Attrs all = attr->gnu;
