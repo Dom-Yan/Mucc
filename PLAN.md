@@ -198,11 +198,10 @@ Phases 0, 1 and 2 are done and verified (1.8 and 1.10 were dropped as
 not needed). Git and CPython build with mucc and pass their tests as
 with gcc, except CPython's `test_peg_generator` (1.12).
 
-Phase 3: 3.1 (vendor musl) is done; 3.2 (musl's assembly in mucc's
-assembler, `-fno-as-fallback`) and 3.3 (`make libc`) are added and
-checked locally, and are verified once CI passes. mucc builds all of
-musl but the two parts left out, with no gcc, `as`, `ld` or `ar`, and a
-program linked against it (by `ld`, for now) runs.
+Phase 3: 3.1 to 3.3 are done and verified. mucc builds all of musl but
+the two parts left out (complex numbers and the x86-64 math overrides),
+with no gcc, `as`, `ld` or `ar`, and a program linked against it (by
+`ld`, for now) runs.
 
 Next: 3.4 (musl's `libc-test` against this `libc.a`), then 3.5
 (`--libc=mucc`: musl's headers, which `make -C build/musl
@@ -624,7 +623,7 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     by the recipe in `thirdparty/README.md`. `make test-all` and `make
     difftest N=300` pass. CI passed, `6feee67`.)
 
-- [ ] **3.2 Everything musl's x86-64 code needs is in mucc's assembler,** so
+- [x] **3.2 Everything musl's x86-64 code needs is in mucc's assembler,** so
   the system `as` is never used. Add a flag that makes falling back to `as`
   an error, to prove it.
   - [x] Added: decided to leave out musl's x86-64 math overrides
@@ -644,14 +643,14 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     flag is `-fno-as-fallback`. musl's C then needed `bsf`, `bsr`,
     `xadd` and `pause` in `asm` statements (its atomics), `asm` at file
     scope (`_start` in `crt_arch.h`) and `.type sym,%function`.
-  - [ ] Verified: musl builds with the flag on and no `as` on the `PATH`.
+  - [x] Verified: musl builds with the flag on and no `as` on the `PATH`.
     (`test/asm.sh` checks all 17 files and `test/asm-forms.s` against
     GNU as, and `test/driver.sh` the flag; the old mucc fails both.
     `test/libc.sh` builds all of musl with `-fno-as-fallback` and an `as`
-    that fails. `make test-all` and `make difftest N=300` pass. Waiting
-    for CI.)
+    that fails. `make test-all` and `make difftest N=300` pass. CI
+    passed, `8badd7b`.)
 
-- [ ] **3.3 Build musl with mucc.** `make libc` compiles musl with mucc and
+- [x] **3.3 Build musl with mucc.** `make libc` compiles musl with mucc and
   archives it with `mucc -ar` into `libc.a`, with musl's `crt1.o`, `crti.o`
   and `crtn.o`.
   - [x] Added: `make libc` runs musl's own `configure` and Makefile in
@@ -675,13 +674,14 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
     a register; `-I dir`; `__typeof`, `__inline`, `__extension__` and
     `__volatile`; and `mucc -ar r` dropped one of two members of the same
     name (musl has two `free.o`), unlike GNU ar.
-  - [ ] Verified: builds with no gcc, `as`, `ld` or `ar` used (checked by
+  - [x] Verified: builds with no gcc, `as`, `ld` or `ar` used (checked by
     running the build with them removed from the `PATH`). (`test/libc.sh`,
     in `make test-all`: `make libc` with gcc, `cc`, `as`, `ld`, `ar` and
     `ranlib` replaced by commands that fail, none of them called; then a
     program using `qsort`, `malloc`, `snprintf` of doubles and long
     doubles, `sqrt`, `exp`, threads and `longjmp`, linked by `ld`, runs
-    right. About 9 seconds. Waiting for CI.)
+    right. About 9 seconds. Every commit on the way passes `make
+    test-all` on its own. CI passed, `8badd7b`.)
 
 - [ ] **3.4 musl's own tests.** Run the `libc-test` suite against the musl
   that mucc built, from a script in `test/thirdparty/`.
