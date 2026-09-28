@@ -2206,6 +2206,17 @@ static void gen_stmt(Node *node) {
   case ND_EXPR_STMT:
     gen_discard(node->lhs);
     return;
+  case ND_VLA_FREE:
+    // With no temporaries on the stack, %rsp is the stack bottom, and
+    // both go back up to where they were before the VLAs were
+    // allocated. With some, in a statement expression, the VLAs stay
+    // until the function returns (moving the temporaries isn't worth it).
+    if (depth)
+      return;
+    gen_expr(node->lhs);
+    println("  mov %%rax, %d(%%rbp)", current_fn->alloca_bottom->offset);
+    println("  mov %%rax, %%rsp");
+    return;
   case ND_ASM:
     has_inline_asm = true;
     if (node->asm_extended)

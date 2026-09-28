@@ -148,6 +148,10 @@ static Node *current_switch;
 // Local variables with __attribute__((cleanup(fn))) in scope, innermost
 // first, and those in scope where break, continue and the current
 // switch's cases jump to. Leaving a variable's scope calls fn(&var).
+//
+// A variable-length array is one too, with no `fn`: `var` holds the
+// stack bottom from before it was allocated, and leaving its scope
+// frees it back to there, so a VLA in a loop doesn't use up the stack.
 struct Cleanup {
   Cleanup *next;
   Obj *var;
@@ -1585,8 +1589,11 @@ static void peek_constexpr_value(Obj *var, Token *tok) {
 
 //---------- Cleanup variables -----------------------------------------------
 
-// `fn(&var)`, for the cleanup of `var`.
+// `fn(&var)`, for the cleanup of `var`, or freeing a VLA.
 static Node *cleanup_call(Cleanup *c, Token *tok) {
+  if (!c->fn)
+    return new_unary(ND_VLA_FREE, new_var_node(c->var, tok), tok);
+
   Node *fn = new_var_node(c->fn, tok);
   Node *arg = new_unary(ND_ADDR, new_var_node(c->var, tok), tok);
   add_type(fn);
@@ -1612,10 +1619,27 @@ static Node *cleanup_calls(Cleanup *from, Cleanup *to, Token *tok) {
   return node;
 }
 
+// Do the cleanups of the variables in `from` but not in `to` call a
+// function, and not only free VLAs?
+static bool runs_cleanup_fn(Cleanup *from, Cleanup *to) {
+  for (Cleanup *c = from; c != to; c = c->next)
+    if (c->fn)
+      return true;
+  return false;
+}
+
+// A jump into the scope of `c`, the innermost variable in scope at the
+// jump's target, is an error: it would skip the variable's
+// initialization or allocation.
+static void jump_into_scope(Cleanup *c, Token *tok) {
+  error_tok(tok, "jump into the scope of %s",
+            c->fn ? "a variable with a cleanup" : "a variable-length array");
+}
+
 // `return` in the scope of cleanup variables: the value is computed
 // first, as it may use them, then the cleanups run, as with gcc.
 static Node *return_with_cleanups(Node *ret) {
-  if (!cleanups)
+  if (!runs_cleanup_fn(cleanups, NULL)) // returning frees VLAs anyway
     return ret;
 
   Token *tok = ret->tok;
@@ -1712,6 +1736,21 @@ static Node *new_alloca(Node *sz) {
   node->args = sz;
   add_type(sz);
   return node;
+}
+
+// Allocates `var`, a VLA of `size` bytes, saving the stack bottom first
+// so leaving its scope can free it.
+static Node *push_vla(Obj *var, Obj *size, Token *tok) {
+  Cleanup *c = arena_alloc(sizeof(Cleanup));
+  c->var = new_lvar("", pointer_to(ty_char));
+  c->next = cleanups;
+  cleanups = c;
+
+  Node *save = new_binary(ND_ASSIGN, new_var_node(c->var, tok),
+                          new_var_node(current_fn->alloca_bottom, tok), tok);
+  Node *alloc = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
+                           new_alloca(new_var_node(size, tok)), tok);
+  return new_binary(ND_COMMA, save, alloc, tok);
 }
 
 // declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
@@ -1824,10 +1863,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       var->tok = ty->name;
       var->is_used = is_unused;
       Token *tok = ty->name;
-      Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
-                              new_alloca(new_var_node(ty->vla_size, tok)),
-                              tok);
-
+      Node *expr = push_vla(var, ty->vla_size, tok);
       cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);
       continue;
     }
@@ -2999,7 +3035,7 @@ static Node *stmt(Token **rest, Token *tok) {
     if (!current_switch)
       error_tok(tok, "stray case");
     if (cleanups != case_cleanups)
-      error_tok(tok, "jump into the scope of a variable with a cleanup");
+      jump_into_scope(cleanups, tok);
 
     Node *node = new_node(ND_CASE, tok);
     Type *ty = current_switch->cond->ty;
@@ -3030,7 +3066,7 @@ static Node *stmt(Token **rest, Token *tok) {
     if (!current_switch)
       error_tok(tok, "stray default");
     if (cleanups != case_cleanups)
-      error_tok(tok, "jump into the scope of a variable with a cleanup");
+      jump_into_scope(cleanups, tok);
 
     Node *node = new_node(ND_CASE, tok);
     tok = skip(tok->next, ":");
@@ -3142,7 +3178,7 @@ static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "goto")) {
     if (equal(tok->next, "*")) {
       // [GNU] `goto *ptr` jumps to the address specified by `ptr`.
-      if (cleanups)
+      if (runs_cleanup_fn(cleanups, NULL)) // VLAs are just not freed
         error_tok(tok, "'goto *' in the scope of a variable with a cleanup is not supported");
       Node *node = new_node(ND_GOTO_EXPR, tok);
       node->lhs = expr(&tok, tok->next->next);
@@ -3296,10 +3332,11 @@ static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr) {
 
   node->body = head.next;
   if (cleanups != outer) {
-    if (is_stmt_expr)
+    // A statement expression's VLAs are freed when the function returns.
+    if (is_stmt_expr && runs_cleanup_fn(cleanups, outer))
       error_tok(tok, "a variable with a cleanup at the end of a statement "
                 "expression is not supported");
-    if (falls_through(node))
+    if (falls_through(node) && !is_stmt_expr)
       cur->next = cleanup_calls(cleanups, outer, tok);
     cleanups = outer;
   }
@@ -5074,10 +5111,10 @@ static void resolve_goto_labels(void) {
     for (Node *y = labels; y; y = y->goto_next) {
       if (!strcmp(x->label, y->label)) {
         x->unique_label = y->unique_label;
-        // Leaving the scope of cleanup variables runs their cleanups.
-        // Entering one would skip the variable's initialization.
+        // Leaving the scope of cleanup variables and VLAs runs their
+        // cleanups. Entering one is an error.
         if (!is_scope_of(y->cleanups, x->cleanups))
-          error_tok(x->tok, "jump into the scope of a variable with a cleanup");
+          jump_into_scope(y->cleanups, x->tok);
         if (x->cleanups != y->cleanups)
           x->lhs = cleanup_calls(x->cleanups, y->cleanups, x->tok);
         break;

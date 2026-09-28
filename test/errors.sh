@@ -662,6 +662,27 @@ int main(int argc, char **argv) {
 }
 EOF
 
+# The same for a variable-length array: a jump into its scope would
+# skip its allocation.
+expect_error "2:3: error: jump into the scope of a variable-length array" <<'EOF'
+void f(int n) {
+  goto l;
+  int a[n];
+l:
+  a[0] = 0;
+}
+EOF
+
+expect_error "4:3: error: jump into the scope of a variable-length array" <<'EOF'
+void f(int n) {
+  switch (n) {
+    int a[n];
+  case 1:
+    a[0] = 1;
+  }
+}
+EOF
+
 # GNU extensions mucc leaves out, which used to miscompile
 expect_error "1:30: error: nested functions are not supported" <<'EOF'
 int main(void) { int f(void) { return 1; } return f(); }
