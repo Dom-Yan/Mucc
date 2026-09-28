@@ -99,8 +99,9 @@ static bool in_include_paths(char *dir) {
 
 // A C library mucc compiles and links against: where its headers,
 // startup files and libraries are, and what else to link. This is the
-// only place with system paths. --libc=system, the only one yet, is
-// glibc as installed, with gcc's startup files and runtime library.
+// only place with system paths. --libc=system is glibc as installed,
+// with gcc's startup files and runtime library. --libc=mucc is the musl
+// `make libc` builds, always linked statically, with nothing from gcc.
 typedef struct {
   char *name;          // as in --libc=
   char **include_dirs; // its headers, searched after mucc's own
@@ -134,10 +135,18 @@ static char *system_shared_libs[] = {
   "-lc", "-lgcc", "--as-needed", "-lgcc_s", "--no-as-needed", NULL,
 };
 
+// Filled in by find_musl(), next to the mucc binary.
+static char *musl_include_dirs[2];
+static char *musl_lib_dirs[2];
+static char *no_dirs[] = {NULL};
+static char *musl_static_libs[] = {"-lc", NULL};
+
 static Libc libcs[] = {
   {"system", system_include_dirs, system_crt_dirs, system_gcc_dirs,
    system_lib_dirs, system_static_libs, system_shared_libs,
    "/lib64/ld-linux-x86-64.so.2"},
+  {"mucc", musl_include_dirs, musl_lib_dirs, no_dirs, musl_lib_dirs,
+   musl_static_libs, NULL, NULL},
 };
 
 static Libc *libc = &libcs[0];
@@ -150,6 +159,20 @@ static void set_libc(char *name) {
     }
   }
   error("unknown C library: --libc=%s", name);
+}
+
+// musl, as `make libc` builds it: in build/musl next to the binary when
+// run from the source tree, or in ../lib/mucc/musl after `make install`,
+// with its headers in include/ and crt1.o, crti.o, crtn.o and libc.a in
+// lib/.
+static void find_musl(char *argv0) {
+  char *dir = format("%s/build/musl", exe_dir(argv0));
+  if (!file_exists(format("%s/lib/libc.a", dir)))
+    dir = format("%s/../lib/mucc/musl", exe_dir(argv0));
+  if (!file_exists(format("%s/lib/libc.a", dir)))
+    error("--libc=mucc: the C library isn't built; run `make libc`");
+  musl_include_dirs[0] = format("%s/include", dir);
+  musl_lib_dirs[0] = format("%s/lib", dir);
 }
 
 static void add_default_include_paths(char *argv0) {
@@ -1010,8 +1033,11 @@ static char *find_libpath(void) {
   error("library path is not found");
 }
 
-// Where gcc's crtbegin.o, crtend.o and libgcc are (the latest version).
+// Where gcc's crtbegin.o, crtend.o and libgcc are (the latest version),
+// or NULL for a C library that uses nothing from gcc.
 static char *find_gcc_libpath(void) {
+  if (!libc->gcc_dirs[0])
+    return NULL;
   for (char **dir = libc->gcc_dirs; *dir; dir++) {
     char *path = find_file(format("%s/crtbegin.o", *dir));
     if (path)
@@ -1022,7 +1048,8 @@ static char *find_gcc_libpath(void) {
 
 // Where libraries (libc.a, libgcc.a, ...) are searched, after -L dirs.
 static void add_library_paths(StringArray *arr, char *gcc_libpath) {
-  strarray_push(arr, gcc_libpath);
+  if (gcc_libpath)
+    strarray_push(arr, gcc_libpath);
   for (char **dir = libc->lib_dirs; *dir; dir++)
     strarray_push(arr, *dir);
 }
@@ -1031,6 +1058,12 @@ static void add_library_paths(StringArray *arr, char *gcc_libpath) {
 static void push_all(StringArray *arr, char **strs) {
   for (; *strs; strs++)
     strarray_push(arr, *strs);
+}
+
+// Appends gcc's startup file `name`, if the C library uses gcc's.
+static void push_gcc_file(StringArray *arr, char *gcc_libpath, char *name) {
+  if (gcc_libpath)
+    strarray_push(arr, format("%s/%s", gcc_libpath, name));
 }
 
 // Links with mucc's own linker (link.c), which makes static executables.
@@ -1063,15 +1096,15 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
   StringArray files = {}, names = {};
   strarray_push(&files, format("%s/crt1.o", libpath));
   strarray_push(&files, format("%s/crti.o", libpath));
-  strarray_push(&files, format("%s/crtbegin.o", gcc_libpath));
-  for (int i = 0; i < 3; i++)
+  push_gcc_file(&files, gcc_libpath, "crtbegin.o");
+  while (names.len < files.len)
     strarray_push(&names, NULL);
   for (int i = 0; i < inputs->len; i++) {
     strarray_push(&files, inputs->data[i]);
     strarray_push(&names, hashmap_get(&object_sources, inputs->data[i]));
   }
   push_all(&files, libc->static_libs);
-  strarray_push(&files, format("%s/crtend.o", gcc_libpath));
+  push_gcc_file(&files, gcc_libpath, "crtend.o");
   strarray_push(&files, format("%s/crtn.o", libpath));
   while (names.len < files.len)
     strarray_push(&names, NULL);
@@ -1100,11 +1133,11 @@ static void run_linker(StringArray *inputs, char *output) {
 
   if (opt_shared) {
     strarray_push(&arr, format("%s/crti.o", libpath));
-    strarray_push(&arr, format("%s/crtbeginS.o", gcc_libpath));
+    push_gcc_file(&arr, gcc_libpath, "crtbeginS.o");
   } else {
     strarray_push(&arr, format("%s/crt1.o", libpath));
     strarray_push(&arr, format("%s/crti.o", libpath));
-    strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
+    push_gcc_file(&arr, gcc_libpath, "crtbegin.o");
   }
 
   StringArray lib_paths = {};
@@ -1132,9 +1165,9 @@ static void run_linker(StringArray *inputs, char *output) {
   }
 
   if (opt_shared)
-    strarray_push(&arr, format("%s/crtendS.o", gcc_libpath));
+    push_gcc_file(&arr, gcc_libpath, "crtendS.o");
   else
-    strarray_push(&arr, format("%s/crtend.o", gcc_libpath));
+    push_gcc_file(&arr, gcc_libpath, "crtend.o");
 
   strarray_push(&arr, format("%s/crtn.o", libpath));
   strarray_push(&arr, NULL);
@@ -1183,6 +1216,19 @@ int main(int argc, char **argv) {
   init_macros();
   parse_args(argc, argv);
 
+  if (libc->include_dirs == musl_include_dirs)
+    find_musl(argv[0]);
+
+  // A C library with no shared libraries (musl) is always linked
+  // statically.
+  if (!libc->shared_libs) {
+    if (opt_shared)
+      error("-shared needs --libc=system");
+    if (!opt_static)
+      strarray_push(&ld_extra_args, "-static");
+    opt_static = true;
+  }
+
   if (opt_cc1) {
     add_default_include_paths(argv[0]);
     cc1();
@@ -1222,7 +1268,9 @@ int main(int argc, char **argv) {
 
     FileType type = get_file_type(input);
 
-    // Handle .o or .a
+    // Handle .o, .a or .so
+    if (type == FILE_DSO && !libc->shared_libs)
+      error("%s: a shared library needs --libc=system", input);
     if (type == FILE_OBJ || type == FILE_AR || type == FILE_DSO) {
       strarray_push(&ld_args, input);
       continue;

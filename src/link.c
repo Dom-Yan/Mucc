@@ -22,6 +22,11 @@
 #include "mucc.h"
 #include <elf.h>
 
+// glibc's <elf.h> has this and musl's doesn't (.eh_frame's section type).
+#ifndef SHT_X86_64_UNWIND
+#define SHT_X86_64_UNWIND 0x70000001
+#endif
+
 //---------- Input files, sections and symbols -------------------------------
 
 typedef struct ObjFile ObjFile;

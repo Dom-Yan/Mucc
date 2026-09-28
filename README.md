@@ -179,9 +179,16 @@ again, reports errors and debug info against the original files; `-P`
 leaves them out. `mucc -ar rcs libfoo.a a.o b.o` is an archiver for
 static libraries (operations `r`, `q`, `d` and `t`; its archives are the
 same, byte for byte, as GNU `ar`'s), and `mucc -ranlib libfoo.a` rewrites
-an archive's symbol index. `--libc=system` picks the C library to compile and link
-against; the system's (glibc, with gcc's startup files) is the only one
-so far, and the default.
+an archive's symbol index.
+
+`--libc=` picks the C library to compile and link against.
+`--libc=system`, the default, is the system's (glibc, with gcc's startup
+files). `--libc=mucc` is the musl in `thirdparty/musl`, which `make libc`
+builds with mucc alone: programs get musl's headers and are always
+linked statically by mucc's own linker, with nothing from glibc, gcc or
+binutils, so they run on any x86-64 Linux. Shared libraries (`.so`,
+`-shared`) need `--libc=system`. `make test LIBC=mucc` runs the test
+suite that way, and `make install` installs the musl build too.
 
 ## Features
 
