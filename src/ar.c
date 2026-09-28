@@ -75,8 +75,9 @@ static void read_members(char *path) {
   }
 }
 
-static int find_member(char *name) {
-  for (int i = 0; i < nmembers; i++)
+// The first of members[0..n-1] named `name`, or -1.
+static int find_member(char *name, int n) {
+  for (int i = 0; i < n; i++)
     if (!strcmp(members[i].name, name))
       return i;
   return -1;
@@ -270,10 +271,14 @@ int run_ar(int argc, char **argv) {
     return 0;
   }
 
+  // As with GNU ar, r only replaces members that were there before, so
+  // two files of the same name, like musl's src/malloc/free.o and
+  // src/malloc/mallocng/free.o, both go in.
+  int nold = nmembers;
   for (int i = 2; i < argc; i++) {
     char *name = base_name(argv[i]);
     if (op == 'd') {
-      int j = find_member(name);
+      int j = find_member(name, nmembers);
       if (j < 0)
         error("%s: no member named %s", path, name);
       memmove(members + j, members + j + 1, sizeof(ArMember) * (nmembers - j - 1));
@@ -283,7 +288,7 @@ int run_ar(int argc, char **argv) {
 
     size_t size;
     unsigned char *data = read_whole(argv[i], &size);
-    int j = (op == 'r') ? find_member(name) : -1;
+    int j = (op == 'r') ? find_member(name, nold) : -1;
     if (j >= 0)
       members[j] = (ArMember){name, data, size};
     else
