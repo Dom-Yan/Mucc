@@ -2689,6 +2689,12 @@ void codegen(Obj *prog, FILE *out) {
   emit_aliases(prog);
   emit_weak_refs(prog);
 
+  // asm("...") at file scope, as it is
+  for (int i = 0; i < toplevel_asm.len; i++) {
+    has_inline_asm = true;
+    println("%s", toplevel_asm.data[i]);
+  }
+
   // Mark the stack as not executable, as gcc does. The built-in assembler
   // would add this anyway, but GNU `as` (used for asm() it can't handle)
   // needs to be told, or ld warns that the stack is executable.

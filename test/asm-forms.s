@@ -379,6 +379,7 @@ local_func:
   .globl global_func
   .weak weak_func
   .type sized_func, @function
+  .type global_func,%function
 sized_func:
   jmp hidden_near
   jz hidden_near

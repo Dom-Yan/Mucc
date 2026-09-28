@@ -1532,8 +1532,11 @@ static void directive(char *name, int len) {
     while (*p) // column etc., ignored
       p++;
   } else if (IS(".type")) {
+    // .type sym, @function (or %function, as GNU as also takes)
     Sym *sym = read_sym();
     expect_comma();
+    if (*p == '%')
+      *p = '@';
     if (!strncmp(p, "@function", 9))
       sym->type = STT_FUNC;
     else if (!strncmp(p, "@object", 7))
