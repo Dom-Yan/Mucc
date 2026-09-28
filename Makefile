@@ -78,7 +78,7 @@ test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	$(call test_scripts,./mucc)
 
-test-all: test test-stage2 selfhost test-libc
+test-all: test test-stage2 selfhost test-libc test-single
 
 # Differential testing: random programs compiled by mucc and gcc must print
 # the same thing. `make difftest N=2000` for more. See test/difftest.sh.
@@ -154,6 +154,45 @@ $(MUSL_BUILD)/lib/libc.a: mucc
 	$(MAKE) -C $(MUSL_BUILD) install-headers DESTDIR= \
 	  includedir=$(CURDIR)/$(MUSL_BUILD)/include > /dev/null
 
+# The single binary (Phase 4 of PLAN.md)
+#
+# build/mucc is mucc with its own headers, musl's headers and musl's
+# libraries and startup files inside it, read from memory, so it needs no
+# files next to it. build/files.s lists them for mucc_files[] in
+# src/main.c: a {path, data, size} entry each, with the bytes put in by
+# .incbin (see src/asm.c), under the path "<mucc>/include/..." or
+# "<mucc>/musl/...".
+
+build/files.s: $(MUSL_BUILD)/lib/libc.a $(wildcard include/*.h include/sys/*.h)
+	( find include -type f -name '*.h' -printf '%p %s\n' | \
+	    sed 's|^\([^ ]*\) .*|& <mucc>/\1|'; \
+	  find $(MUSL_BUILD)/include $(MUSL_BUILD)/lib -type f -printf '%p %s\n' | \
+	    sed 's|^$(MUSL_BUILD)/\([^ ]*\) .*|& <mucc>/musl/\1|' ) | sort | awk '\
+	  BEGIN { for (c = 1; c < 128; c++) ord[sprintf("%c", c)] = c } \
+	  { src[NR] = $$1; size[NR] = $$2; path[NR] = $$3 } \
+	  END { \
+	    print "  .data"; print "  .align 8"; print "  .globl mucc_files"; \
+	    print "mucc_files:"; \
+	    for (i = 1; i <= NR; i++) \
+	      printf "  .quad .Lpath%d\n  .quad .Ldata%d\n  .quad %d\n", i, i, size[i]; \
+	    print "  .quad 0\n  .quad 0\n  .quad 0"; print "  .section .rodata"; \
+	    for (i = 1; i <= NR; i++) { \
+	      printf ".Lpath%d:\n", i; \
+	      for (j = 1; j <= length(path[i]); j++) \
+	        printf "  .byte %d\n", ord[substr(path[i], j, 1)]; \
+	      printf "  .byte 0\n.Ldata%d:\n  .incbin \"%s\"\n", i, src[i]; \
+	    } \
+	  }' > $@
+
+build/files.o: mucc build/files.s
+	./mucc -c -o $@ build/files.s
+
+build/mucc: $(OBJS) build/files.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+test-single: build/mucc
+	test/single.sh build/mucc
+
 # Install
 
 install: mucc
@@ -183,4 +222,4 @@ clean:
 	rm -f $(filter-out test/asm-forms.s,$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
-.PHONY: test clean test-stage2 selfhost install uninstall difftest libc test-libc
+.PHONY: test clean test-stage2 selfhost install uninstall difftest libc test-libc test-single

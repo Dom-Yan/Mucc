@@ -215,8 +215,9 @@ purpose, listed in `a0c3b69`'s message.
 3.5 (`--libc=mucc`) and 3.6 (stages 2 and 3 on musl) are added:
 `make test-all` and `make test-all LIBC=mucc` pass in WSL. Not yet
 pushed (GitHub's token had expired), so neither is verified by CI.
-3.7 (the CI job) is added too. Next: push, check both CI jobs, and
-verify 3.5 to 3.7.
+3.7 (the CI job) and 4.1 (`make build/mucc`, the single binary) are
+added too. Next: push, check both CI jobs, verify 3.5 to 3.7 and 4.1,
+then 4.2 (build/mucc as a static musl program).
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -759,7 +760,20 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
   `libc.a` and the startup files go inside the `mucc` binary (using 2.5).
   The preprocessor and linker read them from memory, with no files written
   to disk.
-  - [ ] Added
+  - [x] Added: `make build/mucc` (about 7.4 MB). The Makefile generates
+    `build/files.s`, a table `mucc_files[]` of {path, data, size} with
+    each file's bytes put in by `.incbin`, assembled by mucc (so the
+    table's strings are `.byte`s and one value per `.quad`: mucc's
+    assembler has no `.asciz`). `src/main.c` has a weak empty table, so
+    the plain `mucc` builds as before. Embedded paths start with
+    `<mucc>/` (`<mucc>/musl/include/stdio.h`): no real file, clear in
+    messages, and the same wherever the binary is. `file_exists()` and
+    `open_input_file()` (an `fmemopen()` for an embedded file), used by
+    the tokenizer and the linker, look there first, and when the binary
+    has them they win over files on disk. `-M` leaves them out.
+    `test/single.sh`, in `make test-all`, copies `build/mucc` alone into
+    an empty directory and builds a program with gcc, as, ld and ar
+    failing.
   - [ ] Verified: with no `include/` or library files next to it, mucc still
     compiles and links a program.
 

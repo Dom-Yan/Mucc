@@ -532,6 +532,7 @@ void hashmap_test(void);
 //---------- main.c: driver --------------------------------------------------
 
 bool file_exists(char *path);
+FILE *open_input_file(char *path);
 bool in_system_header(Token *tok);
 
 extern StringArray include_paths;
