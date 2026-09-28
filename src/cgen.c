@@ -2200,10 +2200,16 @@ static void scan_uses(Node *node, int weight) {
   case ND_VAR:
     node->var->uses += weight;
     return;
-  case ND_ADDR:
-    if (node->lhs->kind == ND_VAR)
-      node->lhs->var->is_addr_taken = true;
+  case ND_ADDR: {
+    // The variable gen_addr() finds, as in &x, &s.m and &(int){0} (a
+    // compound literal is `(init, var)`)
+    Node *n = node->lhs;
+    while (n->kind == ND_COMMA || n->kind == ND_MEMBER)
+      n = n->kind == ND_COMMA ? n->rhs : n->lhs;
+    if (n->kind == ND_VAR)
+      n->var->is_addr_taken = true;
     break;
+  }
   case ND_ASM:
     no_register_vars = true;
     return;

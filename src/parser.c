@@ -4386,8 +4386,7 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
                   node->ty);
 }
 
-// postfix = "(" type-name ")" "{" initializer-list "}"
-//         = ident "(" func-args ")" postfix-tail*
+// postfix = "(" type-name ")" "{" initializer-list "}" postfix-tail*
 //         | primary postfix-tail*
 //
 // postfix-tail = "[" expr "]"
@@ -4397,6 +4396,8 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
 //              | "++"
 //              | "--"
 static Node *postfix(Token **rest, Token *tok) {
+  Node *node;
+
   if (equal(tok, "(") && is_typename(tok->next)) {
     // Compound literal
     Token *start = tok;
@@ -4405,17 +4406,16 @@ static Node *postfix(Token **rest, Token *tok) {
 
     if (scope->next == NULL) {
       Obj *var = new_anon_gvar(ty);
-      gvar_initializer(rest, tok, var);
-      return new_var_node(var, start);
+      gvar_initializer(&tok, tok, var);
+      node = new_var_node(var, start);
+    } else {
+      Obj *var = new_lvar("", ty);
+      Node *lhs = lvar_initializer(&tok, tok, var);
+      node = new_binary(ND_COMMA, lhs, new_var_node(var, tok), start);
     }
-
-    Obj *var = new_lvar("", ty);
-    Node *lhs = lvar_initializer(rest, tok, var);
-    Node *rhs = new_var_node(var, tok);
-    return new_binary(ND_COMMA, lhs, rhs, start);
+  } else {
+    node = primary(&tok, tok);
   }
-
-  Node *node = primary(&tok, tok);
 
   for (;;) {
     if (equal(tok, "(")) {
