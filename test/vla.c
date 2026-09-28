@@ -22,7 +22,69 @@ long vla_param_diff(int r, int c, int m[r][c]) { return (char *)(m + 2) - (char 
 long vla_param_expr(int n, char (*p)[n * 2 + 1]) { return sizeof(*p); }
 long vla_param_sizeof(int n, char (*p)[sizeof(n)]) { return sizeof(*p); }
 
+// Leaving a VLA's scope frees it, so a VLA in a loop gets the same
+// memory on every pass instead of using up the stack. Each returns 1.
+int vla_free_loop(int n) {
+  char *first = 0;
+  for (int i = 0; i < 10; i++) {
+    char a[n];
+    if (!first)
+      first = a;
+    if (a != first)
+      return 0;
+    if (i % 2)
+      continue;
+  }
+  return 1;
+}
+
+int vla_free_goto(int n) {
+  char *first = 0;
+  int i = 0;
+again:;
+  char a[n];
+  if (!first)
+    first = a;
+  if (a != first)
+    return 0;
+  if (++i < 10)
+    goto again;
+  return 1;
+}
+
+int vla_free_block(int n) {
+  char *p;
+  { char a[n]; p = a; }
+  char b[n];
+  return b == p;
+}
+
+int vla_free_break(int n) {
+  char *p;
+  for (;;) { char a[n]; p = a; break; }
+  char b[n];
+  return b == p;
+}
+
+// Sizes that change on every pass, a million times: 2 GB if never freed.
+int vla_free_many(void) {
+  void *volatile p;
+  for (int i = 0; i < 1000000; i++) {
+    int x[i % 1000 + 1];
+    x[i % 1000] = i;
+    p = x;
+  }
+  return 1;
+}
+
 int main() {
+  ASSERT(1, vla_free_loop(1000));
+  ASSERT(1, vla_free_goto(1000));
+  ASSERT(1, vla_free_block(1000));
+  ASSERT(1, vla_free_break(1000));
+  ASSERT(1, vla_free_many());
+  ASSERT(5, ({ int n = 3; int a[n]; a[2] = 5; a[2]; }));
+
   ASSERT(10, ({ int a[] = {1, 2, 3, 4}; vla_param_sum(4, a); }));
   ASSERT(7, ({ int m[3][4] = {{0}, {0, 0, 7}}; vla_param_at(3, 4, m, 1, 2); }));
   ASSERT(11, ({ int m[2][5] = {{0}, {0, 0, 0, 0, 11}}; vla_param_at(2, 5, m, 1, 4); }));

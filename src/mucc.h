@@ -261,6 +261,7 @@ typedef enum {
   ND_EXCH,      // Atomic exchange
   ND_UNREACHABLE, // __builtin_unreachable() (C23 unreachable())
   ND_VA_ARG,    // va_arg(): the next argument's address
+  ND_VLA_FREE,  // Free VLAs back to the stack bottom in lhs
 } NodeKind;
 
 // An operand of an asm statement: `[name] "constraint" (expr)`. x86
