@@ -187,8 +187,9 @@ files). `--libc=mucc` is the musl in `thirdparty/musl`, which `make libc`
 builds with mucc alone: programs get musl's headers and are always
 linked statically by mucc's own linker, with nothing from glibc, gcc or
 binutils, so they run on any x86-64 Linux. Shared libraries (`.so`,
-`-shared`) need `--libc=system`. `make test LIBC=mucc` runs the test
-suite that way, and `make install` installs the musl build too.
+`-shared`) need `--libc=system`. `make test-all LIBC=mucc` runs the
+test suite that way, with stages 2 and 3 (mucc built by mucc) linked
+against musl too, and `make install` installs the musl build.
 
 ## Features
 

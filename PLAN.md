@@ -212,10 +212,10 @@ crashes and 26 wrong results. Fixed in `a0c3b69` and `39398e2` (bit-fields,
 freed, and more); 930 pass now. What's left is gcc-only or left out on
 purpose, listed in `a0c3b69`'s message.
 
-3.5 (`--libc=mucc`) is added: `make test LIBC=mucc` and `make test-all`
-pass in WSL. Next: CI for 3.5, then 3.6 (stage 2 and 3 on musl; the
-stage 2 mucc in `stage2/` doesn't find `build/musl` next to it, so
-that needs a way to point it there).
+3.5 (`--libc=mucc`) and 3.6 (stages 2 and 3 on musl) are added:
+`make test-all` and `make test-all LIBC=mucc` pass in WSL. Not yet
+pushed (GitHub's token had expired), so neither is verified by CI.
+Next: push, check CI, then 3.7 (a CI job for `LIBC=mucc`).
 
 The musl tarball, its signature, `musl.pub` and the two patches are in
 `~/musl-dl` in WSL. musl.libc.org is very slow from here (plain requests
@@ -735,7 +735,16 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 
 - [ ] **3.6 mucc builds itself on musl.** Stage 2 and stage 3 built against
   musl, byte-identical as today.
-  - [ ] Added
+  - [x] Added: with `LIBC=mucc`, the Makefile builds `stage2-musl/` and
+    `stage3-musl/` (and `test/*.musl.exe`), so the two modes never mix.
+    `stage2-musl/mucc` is linked by mucc against musl, a static binary,
+    and finds musl through a `stage2-musl/build` symlink, as a mucc
+    finds it next to itself. `find_musl()` takes the directory's real
+    path: through the symlink, header paths in the debug info differed,
+    and stage 2 and 3 with them. `src/mucc.h` asks for
+    `_XOPEN_SOURCE 700` (was `_POSIX_C_SOURCE 200809L`), under which
+    musl declares `realpath()`. The musl stage 2 passes the whole test
+    suite, and its stage 3 objects are identical.
   - [ ] Verified: `make test-all LIBC=mucc` passes.
 
 - [ ] **3.7 CI runs both modes.** A second CI job for `LIBC=mucc`.

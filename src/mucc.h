@@ -8,7 +8,8 @@
 
 //---------- System headers and small utilities ------------------------------
 
-#define _POSIX_C_SOURCE 200809L
+// POSIX 2008 with its XSI part, which has realpath() (with musl, only then)
+#define _XOPEN_SOURCE 700
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
