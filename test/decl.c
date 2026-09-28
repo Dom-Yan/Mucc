@@ -5,6 +5,7 @@
 int decl_f1(void), decl_f2(int), decl_v1 = 5, decl_f3(int, int), *decl_v2 = &decl_v1;
 __attribute__((visibility("hidden"))) long decl_h1(long), decl_h2(long);
 int decl_v3 = 7, decl_f4(void);
+static __inline int decl_inline(void) { return 4; }
 
 int main() {
   ASSERT(1, decl_f1());
@@ -15,6 +16,9 @@ int main() {
   ASSERT(22, decl_h2(20));
   ASSERT(11, decl_f4() + decl_v3);
   ASSERT(4, ({ __volatile int x = 4; x; })); // musl writes `__asm__ __volatile__`
+  ASSERT(8, ({ __typeof(decl_v1) *p = 0; sizeof(*p) + sizeof(p) - 4; }));
+  ASSERT(3, ({ __extension__ int x = 3; x; }));
+  ASSERT(4, decl_inline());
 
   ASSERT(1, ({ char x; sizeof(x); }));
   ASSERT(2, ({ short int x; sizeof(x); }));

@@ -1499,11 +1499,14 @@ void init_macros(void) {
   define_macro("__amd64__", "1");
   define_macro("__mucc__", "1");
   define_macro("__const__", "const");
+  define_macro("__extension__", ""); // only quiets gcc's -pedantic
   define_macro("__gnu_linux__", "1");
+  define_macro("__inline", "inline");
   define_macro("__inline__", "inline");
   define_macro("__linux", "1");
   define_macro("__linux__", "1");
   define_macro("__signed__", "signed");
+  define_macro("__typeof", "typeof");
   define_macro("__typeof__", "typeof");
   define_macro("__unix", "1");
   define_macro("__unix__", "1");
