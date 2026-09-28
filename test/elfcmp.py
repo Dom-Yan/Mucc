@@ -28,7 +28,8 @@ def read(path):
         secs[i] = dict(name=name, type=typ, flags=flags, size=size, align=align,
                        data=contents, link=sh[6], info=sh[7], off=off)
 
-    symtab = next(s for s in secs.values() if s['type'] == 2)
+    # An object with no symbols may have no .symtab at all.
+    symtab = next((s for s in secs.values() if s['type'] == 2), dict(data=b'', link=0))
     strtab = secs[symtab['link']]
     syms = []
     for i in range(len(symtab['data']) // 24):
