@@ -12,4 +12,5 @@
 /stage2
 hello.c
 /stage3
+/build
 /difftest-failures
