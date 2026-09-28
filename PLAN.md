@@ -203,7 +203,9 @@ the two parts left out (complex numbers and the x86-64 math overrides),
 with no gcc, `as`, `ld` or `ar`, and a program linked against it (by
 `ld`, for now) runs.
 
-Next: 3.4 (musl's `libc-test` against this `libc.a`), then 3.5
+3.4 (libc-test) is added: mucc's musl passes the same tests as gcc's.
+
+Next: 3.5
 (`--libc=mucc`: musl's headers, which `make -C build/musl
 install-headers` installs, `crt1.o` and `libc.a`, linked by mucc's
 own linker). `test/libc.sh` shows the pieces 3.5 will put together.
@@ -685,9 +687,23 @@ musl is a small, MIT-licensed C library built for static linking. It goes in
 
 - [ ] **3.4 musl's own tests.** Run the `libc-test` suite against the musl
   that mucc built, from a script in `test/thirdparty/`.
-  - [ ] Added
+  - [x] Added: `test/thirdparty/libc-test.sh` builds musl with gcc too,
+    with the same options and the same parts left out, and runs
+    libc-test against both, the tests built by gcc, through a specs
+    file (like musl-gcc's, but static). At first mucc's musl failed 22
+    more of the 482 tests (`strtod`, `strtold`, most long double math,
+    `%La` of a NaN), all from four mucc bugs, fixed: an expression
+    nested more than 8 deep overflowed the x87 stack (a NaN), and a
+    long double was kept there across calls; a long double assignment
+    had no value (it was popped), and unused long doubles were never
+    popped; `x != x` was false for a NaN, and `if (NaN)` took the else
+    branch, for all floating types; `<float.h>` gave long double the
+    limits of double. Comparisons now also raise "invalid" as gcc's do
+    (`<` and `<=` for a NaN, not `==`).
   - [ ] Verified: its pass count matches a gcc-built musl's, and any
-    difference is explained in `thirdparty/README.md`.
+    difference is explained in `thirdparty/README.md`. (The same 16 of
+    482 fail with both, 2026-09-28; `thirdparty/README.md` says why.
+    Waiting for CI on the fixes.)
 
 - [ ] **3.5 `--libc=mucc`.** Uses musl's headers (after mucc's own
   `include/`), musl's startup files and `libc.a`, and always links
