@@ -1,0 +1,46 @@
+name: Release
+
+# Pushing a version tag (git tag v1.0 && git push origin v1.0) builds the
+# single binary, build/mucc, checks it, and attaches it to a GitHub
+# Release with its size and SHA-256 checksum.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the single binary
+        run: make -j"$(nproc)" mucc && make libc && make build/mucc
+
+      - name: Test it alone, and on other distributions
+        run: test/single.sh build/mucc && test/distros.sh build/mucc
+
+      - name: Strip it and write its checksum
+        run: |
+          cp build/mucc mucc-x86_64-linux
+          strip mucc-x86_64-linux
+          test/single.sh mucc-x86_64-linux
+          sha256sum mucc-x86_64-linux > mucc-x86_64-linux.sha256
+
+      - name: Make the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          size=$(stat -c %s mucc-x86_64-linux)
+          sum=$(cut -d' ' -f1 mucc-x86_64-linux.sha256)
+          notes="mucc $GITHUB_REF_NAME as one static binary for x86-64 Linux,
+          with its headers and C library (musl) inside it. Download it,
+          \`chmod +x\` it, and \`./mucc-x86_64-linux -o hello hello.c\`.
+
+          Size: $size bytes. SHA-256: \`$sum\`"
+          gh release create "$GITHUB_REF_NAME" mucc-x86_64-linux \
+            mucc-x86_64-linux.sha256 --title "mucc $GITHUB_REF_NAME" \
+            --notes "$notes"
