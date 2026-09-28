@@ -6,6 +6,13 @@ struct {
   int c : 10;
 } g45 = {1, 2, 3}, g46={};
 
+// Unnamed bit-fields are padding: initializers skip them, and a global's
+// members after a bit-field with no initializer keep their values. musl's
+// struct timespec pads this way.
+struct ts { long sec; int :0; long nsec; int :0; };
+struct ts g47 = {5, 6};
+struct { int a:3; int :5; int b:4; int :0; int c; } g48 = {1, 2, 3}, g49 = {.c = 9};
+
 int main() {
   ASSERT(4, sizeof(struct {int x:1; }));
   ASSERT(8, sizeof(struct {long x:1; }));
@@ -58,6 +65,16 @@ int main() {
   ASSERT(-7, ({ struct {unsigned x:5;} s = {3}; s.x - 10; }));
   ASSERT(0, ({ struct {unsigned x:32;} s = {3}; s.x > -1; }));
   ASSERT(31, ({ struct {unsigned x:5;} s = {31}; s.x; }));
+
+  ASSERT(6, g47.nsec);
+  ASSERT(3, g48.b + g48.a);
+  ASSERT(3, g48.c);
+  ASSERT(9, g49.c);
+  ASSERT(4, ({ struct ts t = {3, 4}; t.nsec; }));
+  ASSERT(2, ({ struct ts t = {.sec = 1, .nsec = 2}; t.nsec; }));
+  ASSERT(12, ({ struct ts t = {.nsec = 2}; t.nsec += 10; t.nsec; }));
+  ASSERT(6, ({ struct { int a:3; int :5; int b:4; int :0; int c; } s = {.b = 5, 6}; s.c; }));
+  ASSERT(8, ({ struct { int x; union { int u; float f; }; int y; } s = {.u = 7, 8}; s.y; }));
 
   printf("OK\n");
   return 0;

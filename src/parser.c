@@ -1932,6 +1932,14 @@ static void array_designator(Token **rest, Token *tok, Type *ty, int *begin, int
   *rest = skip(tok, "]");
 }
 
+// The first member from `mem` on that an initializer sets: unnamed
+// bit-fields are padding, which initializers skip.
+static Member *init_member(Member *mem) {
+  while (mem && mem->is_bitfield && !mem->name)
+    mem = mem->next;
+  return mem;
+}
+
 // struct-designator = "." ident
 static Member *struct_designator(Token **rest, Token *tok, Type *ty) {
   Token *start = tok;
@@ -1940,9 +1948,9 @@ static Member *struct_designator(Token **rest, Token *tok, Type *ty) {
     error_tok(tok, "expected a field designator");
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    // Anonymous struct member
-    if (mem->ty->kind == TY_STRUCT && !mem->name) {
-      if (get_struct_member(mem->ty, tok)) {
+    // Anonymous struct or union member, or an unnamed bit-field
+    if (!mem->name) {
+      if (!mem->is_bitfield && get_struct_member(mem->ty, tok)) {
         *rest = start;
         return mem;
       }
@@ -1979,7 +1987,7 @@ static void designation(Token **rest, Token *tok, Initializer *init) {
     Member *mem = struct_designator(&tok, tok, init->ty);
     designation(&tok, tok, init->children[mem->idx]);
     init->expr = NULL;
-    struct_initializer2(rest, tok, init, mem->next);
+    struct_initializer2(rest, tok, init, init_member(mem->next));
     return;
   }
 
@@ -2094,7 +2102,7 @@ static void array_initializer2(Token **rest, Token *tok, Initializer *init, int 
 static void struct_initializer1(Token **rest, Token *tok, Initializer *init) {
   tok = skip(tok, "{");
 
-  Member *mem = init->ty->members;
+  Member *mem = init_member(init->ty->members);
   bool first = true;
 
   while (!consume_end(rest, tok)) {
@@ -2105,13 +2113,13 @@ static void struct_initializer1(Token **rest, Token *tok, Initializer *init) {
     if (equal(tok, ".")) {
       mem = struct_designator(&tok, tok, init->ty);
       designation(&tok, tok, init->children[mem->idx]);
-      mem = mem->next;
+      mem = init_member(mem->next);
       continue;
     }
 
     if (mem) {
       initializer2(&tok, tok, init->children[mem->idx]);
-      mem = mem->next;
+      mem = init_member(mem->next);
     } else {
       tok = skip_excess_element(tok);
     }
@@ -2122,7 +2130,7 @@ static void struct_initializer1(Token **rest, Token *tok, Initializer *init) {
 static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem) {
   bool first = true;
 
-  for (; mem && !is_end(tok); mem = mem->next) {
+  for (mem = init_member(mem); mem && !is_end(tok); mem = init_member(mem->next)) {
     Token *start = tok;
 
     if (!first)
@@ -2389,7 +2397,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
       if (mem->is_bitfield) {
         Node *expr = init->children[mem->idx]->expr;
         if (!expr)
-          break;
+          continue;
 
         char *loc = buf + offset + mem->offset;
         uint64_t oldval = read_buf(loc, mem->ty->size);
@@ -4261,10 +4269,9 @@ static Type *union_decl(Token **rest, Token *tok) {
 // Find a struct member by name.
 static Member *get_struct_member(Type *ty, Token *tok) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    // Anonymous struct member
-    if ((mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION) &&
-        !mem->name) {
-      if (get_struct_member(mem->ty, tok))
+    // Anonymous struct or union member, or an unnamed bit-field
+    if (!mem->name) {
+      if (!mem->is_bitfield && get_struct_member(mem->ty, tok))
         return mem;
       continue;
     }
