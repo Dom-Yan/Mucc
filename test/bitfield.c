@@ -66,6 +66,35 @@ int main() {
   ASSERT(0, ({ struct {unsigned x:32;} s = {3}; s.x > -1; }));
   ASSERT(31, ({ struct {unsigned x:5;} s = {31}; s.x; }));
 
+  // So does a long one narrower than 32 bits, and one of 32 bits is
+  // (unsigned) int, as with gcc and clang.
+  ASSERT(1, ({ struct {unsigned long x:5;} s = {0}; s.x - 1 < 0; }));
+  ASSERT(1, ({ struct {unsigned long x:32;} s = {0}; s.x - 1 == 0xffffffff; }));
+  ASSERT(-1, ({ struct {long x:32;} s = {-1}; s.x; }));
+
+  // A field in the upper half of a long long's unit, loaded and stored
+  // as the whole unit.
+  ASSERT(1, ({ struct {unsigned long long a:8, b:32;} s = {12}; s.b = 0xcdef1234; s.b == 0xcdef1234; }));
+  ASSERT(12, ({ struct {unsigned long long a:8, b:32;} s = {12}; s.b = 0xcdef1234; s.a; }));
+  ASSERT(-3, ({ struct {long long a:40; long long b:5;} s = {0, 0}; s.b = -3; s.b; }));
+
+  // A _Bool bit-field holds 0 or 1.
+  ASSERT(1, ({ struct {_Bool b:1;} s = {1}; s.b; }));
+  ASSERT(1, ({ struct {_Bool b:1;} s; s.b = 1; }));
+
+  // An assignment's value is what the field holds after it.
+  ASSERT(-967, ({ struct {int m:11;} s; s.m = 1081; }));
+  ASSERT(1, ({ struct {unsigned m:3;} s; s.m = 9; }));
+
+  // x++ and x-- give the old value, also when the new one wraps.
+  ASSERT(1, ({ struct {unsigned a:1;} s = {1}; s.a++; }));
+  ASSERT(0, ({ struct {unsigned a:1;} s = {1}; s.a++; s.a; }));
+  ASSERT(3, ({ struct {int a:3;} s = {3}; s.a++; }));
+  ASSERT(-4, ({ struct {int a:3;} s = {3}; s.a++; s.a; }));
+  ASSERT(0, ({ struct {unsigned a:1;} s = {0}; s.a--; }));
+  ASSERT(1, ({ int b = 0; struct {unsigned a:1;} s = {1}; while (s.a-- > 0) b++; b; }));
+  ASSERT(1, ({ struct {unsigned a:3;} s[2] = {{1}, {5}}; int i = 0; s[i++].a++; i; }));
+
   ASSERT(6, g47.nsec);
   ASSERT(3, g48.b + g48.a);
   ASSERT(3, g48.c);

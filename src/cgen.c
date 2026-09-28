@@ -846,7 +846,9 @@ static void struct_regs(Type *ty, int *ngp, int *nfp) {
 // matter. The caller and the callee must both decide this the same way,
 // so both use this function.
 static bool struct_in_regs(Type *ty, int gp, int fp) {
-  if (ty->size > 16)
+  // An empty struct (GNU) takes no register, and no stack either (its
+  // size rounds up to 0 bytes there).
+  if (ty->size > 16 || ty->size == 0)
     return false;
   int ngp, nfp;
   struct_regs(ty, &ngp, &nfp);
@@ -1051,6 +1053,9 @@ static void copy_ret_buffer(Obj *var) {
   Type *ty = var->ty;
   int gp = 0, fp = 0;
 
+  if (!ty->size) // an empty struct (GNU) comes back in no register
+    return;
+
   if (has_flonum1(ty)) {
     assert(ty->size == 4 || 8 <= ty->size);
     if (ty->size == 4)
@@ -1087,6 +1092,9 @@ static void copy_ret_buffer(Obj *var) {
 static void copy_struct_reg(void) {
   Type *ty = current_fn->ty->return_ty;
   int gp = 0, fp = 0;
+
+  if (!ty->size) // an empty struct (GNU) goes back in no register
+    return;
 
   println("  mov %%rax, %%rdi");
 
@@ -1409,12 +1417,13 @@ static void gen_expr(Node *node) {
         gen_addr(base);
         snprintf(addr, sizeof(addr), "%d(%%rax)", mem->offset);
       }
-      load_from(node->ty, addr);
+      // A bit-field's whole unit, not its promoted type (see add_type())
+      load_from(mem->is_bitfield ? mem->ty : node->ty, addr);
     }
 
     if (mem->is_bitfield) {
       println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
-      if (mem->ty->is_unsigned)
+      if (mem->ty->is_unsigned || mem->ty->kind == TY_BOOL) // a _Bool is 0 or 1
         println("  shr $%d, %%rax", 64 - mem->bit_width);
       else
         println("  sar $%d, %%rax", 64 - mem->bit_width);
@@ -1460,8 +1469,16 @@ static void gen_expr(Node *node) {
       println("  mov $%ld, %%r9", ~mask);
       println("  and %%r9, %%rax");
       println("  or %%rdi, %%rax");
-      store(node->ty);
+      store(mem->ty); // the whole unit loaded, not the promoted type
+
+      // The assignment's value is what the field now holds: the new
+      // value cut to its width, sign- or zero-extended.
       println("  mov %%r8, %%rax");
+      println("  shl $%d, %%rax", 64 - mem->bit_width);
+      if (mem->ty->is_unsigned || mem->ty->kind == TY_BOOL)
+        println("  shr $%d, %%rax", 64 - mem->bit_width);
+      else
+        println("  sar $%d, %%rax", 64 - mem->bit_width);
       return;
     }
 

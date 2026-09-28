@@ -36,6 +36,16 @@ int main() {
   ASSERT(1, (_Bool)2);
   ASSERT(0, (_Bool)(char)256);
 
+  // x++ and x-- give a _Bool's old value, not the new one minus 1.
+  ASSERT(1, ({ _Bool x=1; x++; }));
+  ASSERT(0, ({ _Bool x=0; x--; }));
+  ASSERT(1, ({ _Bool x=0; x--; x; }));
+
+  // Function declarations and variables in one local declaration
+  ASSERT(8, ({ int x = 3, decl_f1(void); x + decl_f1() + 4; }));
+  ASSERT(6, ({ int decl_f2(int), y = 3; decl_f2(y); }));
+  ASSERT(9, ({ int decl_f1(void), decl_f2(int), y = 4; decl_f2(y) + decl_f1(); }));
+
   printf("OK\n");
   return 0;
 }

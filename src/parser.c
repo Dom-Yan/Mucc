@@ -1729,8 +1729,21 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
   int i = 0;
 
   while (!equal(tok, ";")) {
-    if (i++ > 0)
+    if (i++ > 0) {
       tok = skip_decl_comma(tok);
+
+      // `int x, f(void);`: a function declaration among the variables
+      // (see function())
+      if (is_function(tok)) {
+        tok = function(tok, basety, attr ? attr : &(VarAttr){});
+        if (equal(tok, ","))
+          continue;
+        Node *node = new_node(ND_BLOCK, tok);
+        node->body = head.next;
+        *rest = tok;
+        return node;
+      }
+    }
 
     Attrs da = {};
     Type *ty = declarator(&tok, tok, basety, &da);
@@ -2170,6 +2183,12 @@ static void union_initializer(Token **rest, Token *tok, Initializer *init) {
 
   init->mem = init->ty->members;
 
+  // {} (C23) leaves it all zero; it's all an empty union (GNU) can have.
+  if (equal(tok, "{") && consume(rest, tok->next, "}"))
+    return;
+  if (!init->mem)
+    error_tok(tok, "an empty union takes no value");
+
   if (equal(tok, "{")) {
     initializer2(&tok, tok->next, init->children[0]);
     consume(&tok, tok, ",");
@@ -2335,6 +2354,8 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
 
   if (ty->kind == TY_UNION && !init->expr) {
     Member *mem = init->mem ? init->mem : ty->members;
+    if (!mem) // an empty union (GNU)
+      return new_node(ND_NULL_EXPR, tok);
     InitDesg desg2 = {desg, 0, mem};
     return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
   }
@@ -2888,7 +2909,7 @@ static Node *asm_stmt(Token **rest, Token *tok) {
 static int64_t case_value(Type *ty, int64_t val) {
   if (ty->size == 8)
     return val;
-  return (ty->is_unsigned && ty->size == 4) ? (uint32_t)val : (int32_t)val;
+  return (ty->is_unsigned && ty->size == 4) ? (int64_t)(uint32_t)val : (int32_t)val;
 }
 
 // stmt = "return" expr? ";"
@@ -3199,9 +3220,14 @@ static Node *block_item(Token **rest, Token *tok) {
     return NULL;
   }
 
-  if (is_function(tok)) {
-    *rest = function(tok, basety, &attr);
-    return NULL;
+  // Function declarations, maybe followed by variables: `int f(void), x;`
+  while (is_function(tok)) {
+    tok = function(tok, basety, &attr);
+    if (!equal(tok, ",")) {
+      *rest = tok;
+      return NULL;
+    }
+    tok = tok->next;
   }
 
   if (attr.is_extern) {
@@ -3405,7 +3431,11 @@ static int64_t eval2(Node *node, char ***label) {
       switch (node->ty->size) {
       case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
       case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
-      case 4: return node->ty->is_unsigned ? (uint32_t)val : (int32_t)val;
+      case 4:
+        // Not with `?:`, which would make both arms unsigned int.
+        if (node->ty->is_unsigned)
+          return (uint32_t)val;
+        return (int32_t)val;
       }
     }
     return val;
@@ -4170,6 +4200,9 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       Member *mem = arena_alloc(sizeof(Member));
       Attrs all = attr.gnu;
       mem->ty = declarator(&tok, tok, basety, &all);
+      if (mem->ty->kind == TY_VLA)
+        error_tok(mem->ty->name ? mem->ty->name : tok,
+                  "a variable length array in a struct is not supported");
       mem->name = mem->ty->name;
       mem->idx = idx++;
 
@@ -4383,9 +4416,36 @@ static Node *struct_ref(Node *node, Token *tok) {
 // Convert A++ to `(typeof A)((A += 1) - 1)`
 static Node *new_inc_dec(Node *node, Token *tok, int addend) {
   add_type(node);
-  return new_cast(new_add(to_assign(new_add(node, new_num(addend, tok), tok)),
-                          new_num(-addend, tok), tok),
-                  node->ty);
+  bool is_bitfield = node->kind == ND_MEMBER && node->member->is_bitfield;
+  if (!is_bitfield && (node->ty->kind != TY_BOOL || node->ty->is_atomic))
+    return new_cast(new_add(to_assign(new_add(node, new_num(addend, tok), tok)),
+                            new_num(-addend, tok), tok),
+                    node->ty);
+
+  // What a bool or a bit-field holds after `+ 1` may not be old + 1 (it's
+  // cut to 0 or 1, or wraps), so keep the old value instead:
+  // `(p = &A, old = *p, *p = old + 1, old)`, with (*p).x for a bit-field A.x.
+  check_modifiable(node);
+  Node *base = is_bitfield ? node->lhs : node;
+  Obj *p = new_lvar("", pointer_to(base->ty));
+  Obj *old = new_lvar("", node->ty);
+  Node *place[2];
+  for (int i = 0; i < 2; i++) {
+    place[i] = new_unary(ND_DEREF, new_var_node(p, tok), tok);
+    if (is_bitfield) {
+      place[i] = new_unary(ND_MEMBER, place[i], tok);
+      place[i]->member = node->member;
+    }
+  }
+  Node *expr = new_binary(ND_ASSIGN, new_var_node(p, tok),
+                          new_unary(ND_ADDR, base, tok), tok);
+  Node *get = new_binary(ND_ASSIGN, new_var_node(old, tok), place[0], tok);
+  Node *set = new_binary(ND_ASSIGN, place[1],
+                         new_add(new_var_node(old, tok), new_num(addend, tok), tok),
+                         tok);
+  expr = new_binary(ND_COMMA, expr, get, tok);
+  expr = new_binary(ND_COMMA, expr, set, tok);
+  return new_binary(ND_COMMA, expr, new_var_node(old, tok), tok);
 }
 
 // postfix = "(" type-name ")" "{" initializer-list "}" postfix-tail*
@@ -5123,6 +5183,14 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
                 fn->is_ctor || fn->is_dtor;
 
   if (consume(&tok, tok, ";"))
+    return tok;
+
+  // Inside a function, a definition (a GNU nested function) isn't
+  // supported, and more declarators after a prototype are local
+  // variables, left to block_item() (unless it's all extern).
+  if (scope->next && equal(tok, "{"))
+    error_tok(tok, "nested functions are not supported");
+  if (scope->next && equal(tok, ",") && !attr->is_extern)
     return tok;
 
   // `int f(void), g(void), x;`: more declarators follow a prototype.

@@ -437,6 +437,52 @@ static Macro *add_macro(char *name, bool is_objlike, Token *body) {
   return m;
 }
 
+// Definitions #pragma push_macro saved, the latest first. `m` is NULL if
+// the name wasn't defined.
+typedef struct SavedMacro SavedMacro;
+struct SavedMacro {
+  SavedMacro *next;
+  char *name;
+  Macro *m;
+};
+
+static SavedMacro *saved_macros;
+
+// #pragma push_macro("name") saves name's definition (or that it has
+// none), and pop_macro("name") brings back the last one saved, as gcc
+// does. `tok` is push_macro or pop_macro.
+static Token *push_pop_macro(Token *tok) {
+  bool push = equal(tok, "push_macro");
+  Token *start = tok;
+  tok = skip(tok->next, "(");
+  if (tok->kind != TK_STR)
+    error_tok(tok, "expected a macro name in a string");
+  char *name = tok->str;
+  tok = skip(tok->next, ")");
+  if (!tok->at_bol)
+    error_tok(tok, "extra token");
+
+  if (push) {
+    SavedMacro *s = arena_alloc(sizeof(SavedMacro));
+    *s = (SavedMacro){saved_macros, name, hashmap_get(&macros, name)};
+    saved_macros = s;
+    return tok;
+  }
+
+  for (SavedMacro **p = &saved_macros; *p; p = &(*p)->next) {
+    if (strcmp((*p)->name, name))
+      continue;
+    if ((*p)->m)
+      hashmap_put(&macros, name, (*p)->m);
+    else
+      hashmap_delete(&macros, name);
+    *p = (*p)->next;
+    return tok;
+  }
+  warn_tok(start, "pop_macro(\"%s\") without a push_macro", name);
+  return tok;
+}
+
 static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_name) {
   MacroParam head = {};
   MacroParam *cur = &head;
@@ -1369,6 +1415,12 @@ static Token *preprocess2(Token *tok) {
     if (equal(tok, "pragma") && equal(tok->next, "once")) {
       hashmap_put(&pragma_once, tok->file->name, (void *)1);
       tok = skip_line(tok->next->next);
+      continue;
+    }
+
+    if (equal(tok, "pragma") &&
+        (equal(tok->next, "push_macro") || equal(tok->next, "pop_macro"))) {
+      tok = push_pop_macro(tok->next);
       continue;
     }
 
