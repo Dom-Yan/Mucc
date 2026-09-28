@@ -34,6 +34,7 @@ static bool opt_c;
 static bool opt_cc1;
 static bool opt_cc1_obj;               // cc1 writes an object, not assembly
 static bool opt_integrated_as = true;  // -fno-integrated-as: run `as`
+static bool opt_as_fallback = true;    // -fno-as-fallback: never run `as`
 static bool opt_system_ld;             // -fuse-ld=...: always run `ld`
 static bool opt_hash_hash_hash;
 static bool opt_static;
@@ -468,6 +469,16 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    if (!strcmp(argv[i], "-fas-fallback")) {
+      opt_as_fallback = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-fno-as-fallback")) {
+      opt_as_fallback = false;
+      continue;
+    }
+
     if (!strncmp(argv[i], "-fuse-ld=", 9)) {
       opt_system_ld = true;
       continue;
@@ -821,6 +832,8 @@ static void print_dependencies(void) {
 //---------- Assembling: built in (asm.c), or with `as` ----------------------
 
 static void run_as(char *input, char *output) {
+  if (!opt_as_fallback)
+    error("-fno-as-fallback and -fno-integrated-as can't be used together");
   char *cmd[] = {"as", "-c", input, "-o", output, NULL};
   run_subprocess(cmd);
 }
@@ -850,7 +863,7 @@ static char *read_whole_file(char *path, size_t *len) {
 
 // Assembles a .s file given on the command line. It may use anything,
 // so if the built-in assembler doesn't know something, say so and use
-// `as`.
+// `as` (or stop, with -fno-as-fallback).
 static void assemble_file(char *input, char *output) {
   if (!opt_integrated_as) {
     run_as(input, output);
@@ -863,6 +876,8 @@ static void assemble_file(char *input, char *output) {
   char *why;
   if (assemble_text(text, output, &why))
     return;
+  if (!opt_as_fallback)
+    error("%s: the built-in assembler can't assemble this: %s", input, why);
   fprintf(stderr, "mucc: note: %s: using the system assembler (%s)\n", input, why);
 
   // The input may have been stdin, which is used up now.
@@ -949,7 +964,8 @@ static void cc1(void) {
 
   // Assemble it right here. The built-in assembler knows everything
   // cgen.c writes, so a failure is a bug, unless it's an instruction in
-  // an asm("...") statement; then fall back to `as`.
+  // an asm("...") statement; then fall back to `as` (or stop, with
+  // -fno-as-fallback).
   char *copy = has_inline_asm ? strndup(buf, buflen) : NULL;
   char *why;
   if (assemble_text(buf, output_file, &why))
@@ -957,6 +973,9 @@ static void cc1(void) {
   if (!has_inline_asm)
     error("internal error in the built-in assembler: %s "
           "(-fno-integrated-as uses the system assembler instead)", why);
+  if (!opt_as_fallback)
+    error("%s: the built-in assembler can't assemble an asm statement: %s",
+          base_file, why);
 
   char *tmp = create_tmpfile();
   write_file(tmp, copy, buflen);
