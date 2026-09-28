@@ -117,3 +117,42 @@ Ty20 struct_test27(void) {
 Ty21 struct_test28(void) {
   return (Ty21){1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20};
 }
+
+// Arguments after the general-purpose registers run out, called from
+// code mucc built and calling it (test/function.c): a struct of two
+// doubles still goes in XMM registers, and a long double or a struct
+// aligned to 16 is 16-byte aligned on the stack.
+typedef struct { double x, y; } Ty30;
+typedef struct { _Alignas(16) long a; long b, c; } Ty31;
+
+double abi_test1(long a, long b, long c, long d, long e, long f, long g, Ty30 s) {
+  return g + s.x * 10 + s.y * 100;
+}
+
+long double abi_test2(long a, long b, long c, long d, long e, long f, long g, long double h) {
+  return g + h * 10;
+}
+
+long abi_test3(long a, long b, long c, long d, long e, long f, long g, Ty31 s, long i) {
+  return g + s.a * 10 + s.b * 100 + s.c * 1000 + i * 10000;
+}
+
+double abi_call1(double (*fn)(long, long, long, long, long, long, long, Ty30)) {
+  return fn(1, 2, 3, 4, 5, 6, 7, (Ty30){7.5, 8.5});
+}
+
+long double abi_call2(long double (*fn)(long, long, long, long, long, long, long, long double)) {
+  return fn(1, 2, 3, 4, 5, 6, 7, 2.5L);
+}
+
+long abi_call3(long (*fn)(long, long, long, long, long, long, long, Ty31, long)) {
+  return fn(1, 2, 3, 4, 5, 6, 7, (Ty31){1, 2, 3}, 9);
+}
+
+// Calls va_kinds() in test/varargs.c, a variadic function mucc built.
+double call_va_kinds(double (*fn)(int, ...)) {
+  struct { double x, y; } sd = {7.5, 8.5};
+  struct { long a, b; } s16 = {3, 4};
+  return fn(12, 1, 1.0, 1, 2.0, 1, 3.0, 1, 4.0, 6, sd, 6, sd, 6, sd, 4, s16,
+            1, 5.0, 4, s16, 0, 7, 2, 2.5L);
+}
