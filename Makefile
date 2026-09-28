@@ -187,8 +187,14 @@ build/files.s: $(MUSL_BUILD)/lib/libc.a $(wildcard include/*.h include/sys/*.h)
 build/files.o: mucc build/files.s
 	./mucc -c -o $@ build/files.s
 
-build/mucc: $(OBJS) build/files.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+# It's compiled by mucc and linked against musl too, a static program
+# that runs on any x86-64 Linux.
+build/mucc: $(OBJNAMES:%=build/obj/%) build/files.o
+	./mucc --libc=mucc -o $@ $^
+
+build/obj/%.o: mucc src/%.c src/mucc.h $(MUSL_BUILD)/lib/libc.a
+	mkdir -p build/obj
+	./mucc --libc=mucc -Iinclude -c -o $@ src/$*.c
 
 test-single: build/mucc
 	test/single.sh build/mucc

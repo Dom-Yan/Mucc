@@ -673,11 +673,17 @@ static void cleanup(void) {
     unlink(tmpfiles.data[i]);
 }
 
+// A new temporary file, removed when mucc exits. It goes in $TMPDIR, or
+// /tmp, or where mucc runs if there's no /tmp (as in an empty container),
+// as with gcc.
 static char *create_tmpfile(void) {
-  char *path = strdup("/tmp/mucc-XXXXXX");
+  char *dir = getenv("TMPDIR");
+  if (!dir || !*dir)
+    dir = file_exists("/tmp") ? "/tmp" : ".";
+  char *path = format("%s/mucc-XXXXXX", dir);
   int fd = mkstemp(path);
   if (fd == -1)
-    error("mkstemp failed: %s", strerror(errno));
+    error("cannot create a temporary file %s: %s", path, strerror(errno));
   close(fd);
 
   strarray_push(&tmpfiles, path);
