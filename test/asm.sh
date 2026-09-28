@@ -35,6 +35,21 @@ check() {
 check test/asm-forms.s asm-forms.s
 echo "testing asm asm-forms.s ... passed"
 
+# musl's x86-64 assembly, which the bundled C library needs (its math
+# overrides are left out; mucc builds musl's C versions instead).
+n=0
+for s in thirdparty/musl/crt/x86_64/*.s thirdparty/musl/src/*/x86_64/*.s; do
+    case $s in */math/*) continue;; esac
+    check $s $s
+    n=$((n+1))
+done
+# crtn.s has no symbols, so, as with GNU as, no .symtab either.
+$mucc -c -o $tmp/crtn.o thirdparty/musl/crt/x86_64/crtn.s
+if readelf -S $tmp/crtn.o | grep -q symtab; then
+    echo "testing asm: crtn.s has a .symtab ... failed"; exit 1
+fi
+echo "testing asm: $n musl files assemble the same as with GNU as ... passed"
+
 n=0
 for f in test/*.c; do
     for pic in "" -fPIC; do

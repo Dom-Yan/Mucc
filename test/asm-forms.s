@@ -276,6 +276,64 @@ func:
   fchs
   fldz
 
+  # FPU and SSE control
+  fnstsw %ax
+  fnstsw -2(%rsp)
+  fnclex
+  fnstenv (%rdi)
+  fldenv -1(%rdi)
+  stmxcsr -8(%rsp)
+  ldmxcsr 27(%rdi)
+  ldmxcsr (%r8)
+
+  # addressing: base, index and scale
+  mov (%rdx,%rcx,8), %rax
+  add (%rdx,%rcx,8), %rax
+  mov %sil, -1(%rdi,%rdx)
+  lea -1(%rsi,%rdx), %rsi
+  mov %rax, 8(%rsp,%rax,2)
+  mov %rax, (%rbp,%r8,4)
+  mov %rax, (%r13,%r9)
+  mov %r10, 1000(%r12,%r15,1)
+  mov %eax, (,%rcx,4)
+  mov %eax, 16(,%r11,8)
+
+  # constant expressions, and C comments
+  mov %ax, (-1-2)(%rdi,%rdx)
+  mov %rbx, 72+8(%rdi)
+  cmp $0x3fff+13, %ax
+  cmp $0x3fff-64, %ax
+  /* a comment */ nop /* and another */
+  /* one that
+     spans lines */
+
+  # push, pop and test with memory and immediates
+  pushq 64(%rbx)
+  popq 64(%rdi)
+  push (%r12)
+  popq 8(%r9,%rax,8)
+  pushq $1
+  pushq $-128
+  pushq $0x1f80
+  push $-129
+  test $7, %edi
+  test $7, %eax
+  test $1, %al
+  test $0x80, %cl
+  test $0x1000, %r9
+  test $0x1000, %ax
+  testq $1, (%rdi)
+  testb $1, 1(%rsp)
+
+  # string instructions
+  cld; std
+  rep movsb
+  rep
+  movsq
+  movsb
+  stosq
+  hlt
+
   # atomics and misc
   lock cmpxchg %edx, (%rdi)
   lock cmpxchg %rdx, (%rdi)
@@ -293,6 +351,32 @@ func:
 local_func:
 .Llabel:
   ret
+
+  # Jumps to symbols: to a hidden one in this section they may be short;
+  # to any (not weak) one in this section they're filled in here; others
+  # go through the PLT. And a size up to here.
+  .globl hidden_near
+  .hidden hidden_near
+  .globl hidden_far
+  .hidden hidden_far
+  .globl global_func
+  .weak weak_func
+  .type sized_func, @function
+sized_func:
+  jmp hidden_near
+  jz hidden_near
+  jmp hidden_far
+  jmp global_func
+  jmp weak_func
+  jne undefined_func
+  jmp undefined_func@PLT
+hidden_near:
+  .zero 200
+hidden_far:
+global_func:
+weak_func:
+  ret
+  .size sized_func, .-sized_func
 
   # data
   .globl global_var
@@ -355,3 +439,9 @@ v2:
   .section .rodata
   .incbin "test/asm-forms.s"
   .incbin "test/asm-forms.s", 4, 16
+
+  # .init and .fini, named alone, hold code (musl's crti.s and crtn.s)
+  .section .init
+  ret
+  .section .fini
+  ret

@@ -49,6 +49,7 @@ typedef struct Sym {
   int index;          // its index in .symtab
   int visibility;     // STV_DEFAULT, or STV_HIDDEN and so on (.hidden)
   struct Sym *alias_of; // .set sym, target: the target
+  struct Sym *size_from, *size_to; // .size sym, .-start: from start to here
 } Sym;
 
 // A jump to a label. It's short (2 bytes) or long (5 or 6); layout()
@@ -344,11 +345,14 @@ typedef enum { NO_SUFFIX, AT_PLT, AT_GOTPCREL, AT_TLSGD, AT_TPOFF } Suffix;
 
 typedef enum { OP_REG, OP_IMM, OP_MEM, OP_SYM } OpKind;
 
-// An operand: %reg, $imm, disp(%base), %fs:disp, or a label/symbol.
+// An operand: %reg, $imm, disp(%base,%index,scale), %fs:disp, or a
+// label/symbol.
 typedef struct {
   OpKind kind;
   bool indirect;      // `*%rax`, as in `jmp *%rax`
-  Reg *reg;           // OP_REG; for OP_MEM, the base (NULL: absolute)
+  Reg *reg;           // OP_REG; for OP_MEM, the base (NULL: none)
+  Reg *index;         // OP_MEM: the index register, or NULL
+  int scale;          // OP_MEM: 1, 2, 4 or 8, with an index
   int64_t val;        // immediate or displacement
   Sym *sym;           // symbol in the immediate or displacement
   Suffix suffix;
@@ -419,9 +423,44 @@ static Sym *read_sym(void) {
   return find_sym(start, p - start);
 }
 
-// Reads `123`, `sym`, `sym+8`, `sym@SUFFIX` or `1f` into op.
+static int64_t read_sum(int64_t val);
+
+// A number, a negated one, or a parenthesized sum.
+static int64_t read_term(void) {
+  if (*p == '-') {
+    p++;
+    return (int64_t)(0 - (uint64_t)read_term());
+  }
+  if (*p == '(') {
+    p++;
+    int64_t val = read_sum(read_term());
+    if (*p != ')')
+      fail("expected ')'");
+    p++;
+    return val;
+  }
+  char *end;
+  int64_t val = parse_number(&end, p);
+  if (end == p)
+    fail("expected a number");
+  p = end;
+  return val;
+}
+
+// Adds or subtracts the terms that follow to `val`, as in `72+8` or
+// `(-1-2)`. Wraps around as GNU as does.
+static int64_t read_sum(int64_t val) {
+  while (*p == '+' || *p == '-') {
+    bool minus = *p++ == '-';
+    uint64_t t = read_term();
+    val = minus ? (uint64_t)val - t : (uint64_t)val + t;
+  }
+  return val;
+}
+
+// Reads `123`, `1+2`, `sym`, `sym+8`, `sym@SUFFIX` or `1f` into op.
 static void read_value(Operand *op) {
-  if (isdigit((unsigned char)*p) || *p == '-') {
+  if (isdigit((unsigned char)*p) || *p == '-' || *p == '(') {
     // `1f` and `1b` are numeric labels, not numbers.
     char *q = p;
     while (isdigit((unsigned char)*q))
@@ -430,13 +469,12 @@ static void read_value(Operand *op) {
       op->sym = read_sym();
       return;
     }
-    op->val = parse_number(&p, p);
+    op->val = read_sum(read_term());
     return;
   }
 
   op->sym = read_sym();
-  if (*p == '+' || *p == '-')
-    op->val = strtoll(p, &p, 0);
+  op->val = read_sum(0);
 
   if (*p == '@') {
     p++;
@@ -490,7 +528,8 @@ static void read_operand(Operand *op) {
     p++;
   }
 
-  if (*p != '(')
+  // A displacement, unless the `(` starts the registers: `(1+2)(%rdi)`.
+  if (*p != '(' || (p[1] != '%' && p[1] != ','))
     read_value(op);
 
   if (*p != '(') {
@@ -498,17 +537,34 @@ static void read_operand(Operand *op) {
     return;
   }
 
+  // (%base), (%base,%index), (%base,%index,scale) or (,%index,scale)
   p++;
   op->kind = OP_MEM;
-  op->reg = read_reg();
+  if (*p == '%')
+    op->reg = read_reg();
+  if (*p == ',') {
+    p++;
+    op->index = read_reg();
+    op->scale = 1;
+    if (*p == ',') {
+      p++;
+      op->scale = strtol(p, &p, 10);
+    }
+    if (op->index->kind != GP || op->index->size != 8 || op->index->num == 4)
+      fail("bad index register");
+    if (op->scale != 1 && op->scale != 2 && op->scale != 4 && op->scale != 8)
+      fail("bad scale");
+  }
   if (*p != ')')
     fail("unsupported addressing mode");
   p++;
-  if (op->reg->kind != GP && op->reg->kind != RIP)
+  if (!op->reg && !op->index)
+    fail("expected a register");
+  if (op->reg && op->reg->kind != GP && (op->reg->kind != RIP || op->index))
     fail("bad base register");
-  if (op->reg->kind == GP && op->reg->size != 8)
+  if (op->reg && op->reg->kind == GP && op->reg->size != 8)
     fail("32-bit addressing is not supported");
-  if (op->sym && op->reg->kind != RIP)
+  if (op->sym && (!op->reg || op->reg->kind != RIP))
     fail("a symbol needs %%rip as base");
 }
 
@@ -528,10 +584,12 @@ static bool needs_rex(Operand *op) {
 }
 
 // The REX prefix, when needed: for 64-bit operands (w), for r8-r15 in the
-// ModRM reg field or rm/base, or to reach %sil, %dil, %spl and %bpl.
+// ModRM reg field, index or rm/base, or to reach %sil, %dil, %spl and
+// %bpl.
 static void rex(bool w, int reg, Operand *rm, bool force) {
   int rm_reg = rm ? rm_num(rm) : 0;
-  int byte = 0x40 | w << 3 | (reg & 8) >> 1 | (rm_reg & 8) >> 3;
+  int index = rm && rm->kind == OP_MEM && rm->index ? rm->index->num : 0;
+  int byte = 0x40 | w << 3 | (reg & 8) >> 1 | (index & 8) >> 2 | (rm_reg & 8) >> 3;
   wrote_rex = byte != 0x40 || force;
   if (wrote_rex)
     out(byte);
@@ -553,6 +611,23 @@ static void modrm(int reg, Operand *rm, int imm_size) {
   }
   if (rm->kind != OP_MEM)
     fail("expected a register or memory operand");
+
+  // disp(%base,%index,scale): a SIB byte. With no base, base 5 and mod 0
+  // mean a 32-bit displacement; %rbp and %r13 as base need mod 1 or 2.
+  if (rm->index) {
+    int base = rm->reg ? rm->reg->num & 7 : 5;
+    int64_t disp = rm->val;
+    int mod = !rm->reg || (disp == 0 && base != 5) ? 0 :
+              (disp >= -128 && disp <= 127) ? 1 : 2;
+    int ss = rm->scale == 8 ? 3 : rm->scale == 4 ? 2 : rm->scale == 2 ? 1 : 0;
+    out(mod << 6 | reg | 4);
+    out(ss << 6 | (rm->index->num & 7) << 3 | base);
+    if (mod == 1)
+      out(disp & 0xff);
+    else if (mod == 2 || !rm->reg)
+      out_n(4, disp);
+    return;
+  }
 
   // Absolute, like %fs:0: SIB with no base and no index.
   if (!rm->reg) {
@@ -665,7 +740,7 @@ typedef enum {
   CVTSI,    // cvtsi2sd, cvtsi2ss (GP -> XMM)
   CVTTSI,   // cvttsd2si, cvttss2si (XMM -> GP)
   MOVQ,
-  X87,      // x87 memory operand: opcode op, /digit ext
+  X87,      // x87 or MXCSR memory operand: opcode op (1 or 2 bytes), /digit ext
   FSTP,     // fstp %st(i)
   CMPXCHG,
   XCHG,
@@ -713,6 +788,13 @@ static Insn insns[] = {
   {"ud2", FIXED, 2, .bytes = {0x0f, 0x0b}},
   {"syscall", FIXED, 2, .bytes = {0x0f, 0x05}},
   {"stosb", FIXED, 1, .bytes = {0xaa}},
+  {"stosq", FIXED, 2, .bytes = {0x48, 0xab}},
+  {"movsb", FIXED, 1, .bytes = {0xa4}},
+  {"movsq", FIXED, 2, .bytes = {0x48, 0xa5}},
+  {"cld", FIXED, 1, .bytes = {0xfc}},
+  {"std", FIXED, 1, .bytes = {0xfd}},
+  {"hlt", FIXED, 1, .bytes = {0xf4}},
+  {"fnclex", FIXED, 2, .bytes = {0xdb, 0xe2}},
   {"faddp", FIXED, 2, .bytes = {0xde, 0xc1}},
   {"fmulp", FIXED, 2, .bytes = {0xde, 0xc9}},
   {"fsubrp", FIXED, 2, .bytes = {0xde, 0xe9}},
@@ -752,6 +834,9 @@ static Insn insns[] = {
   {"fistps", X87, 0xdf, .ext = 3}, {"fistpl", X87, 0xdb, .ext = 3},
   {"fistpll", X87, 0xdf, .ext = 7}, {"fistpq", X87, 0xdf, .ext = 7},
   {"fldcw", X87, 0xd9, .ext = 5}, {"fnstcw", X87, 0xd9, .ext = 7},
+  {"fldenv", X87, 0xd9, .ext = 4}, {"fnstenv", X87, 0xd9, .ext = 6},
+  {"fnstsw", X87, 0xdd, .ext = 7},
+  {"ldmxcsr", X87, 0x0fae, .ext = 2}, {"stmxcsr", X87, 0x0fae, .ext = 3},
   {"fstp", FSTP},
   {"cmpxchg", CMPXCHG},
   {"xchg", XCHG},
@@ -1148,17 +1233,56 @@ static void instruction(char *name, int len) {
     modrm(ops[1].reg->num, &ops[0], 0);
     return;
   case PUSH:
-    if (n != 1 || !is_gp(&ops[0]) || ops[0].reg->size != 8)
+    if (n != 1 || (insn->size && insn->size != 8))
       fail("unsupported operand");
-    if (ops[0].reg->num >= 8)
-      out(0x41);
-    out(insn->op + (ops[0].reg->num & 7));
-    return;
+    if (is_gp(&ops[0]) && ops[0].reg->size == 8) {
+      if (ops[0].reg->num >= 8)
+        out(0x41);
+      out(insn->op + (ops[0].reg->num & 7));
+      return;
+    }
+    if (ops[0].kind == OP_MEM) {
+      operand_prefixes(ops, n, 8);
+      rex(false, 0, &ops[0], false);
+      out(insn->op == 0x50 ? 0xff : 0x8f);
+      modrm(insn->op == 0x50 ? 6 : 0, &ops[0], 0);
+      return;
+    }
+    if (ops[0].kind == OP_IMM && insn->op == 0x50) {
+      if (!ops[0].sym && is_int8(ops[0].val)) {
+        out(0x6a);
+        out(ops[0].val & 0xff);
+        return;
+      }
+      if (!ops[0].sym)
+        imm_value(&ops[0], 8); // range check
+      out(0x68);
+      out_imm(&ops[0], 4);
+      return;
+    }
+    fail("unsupported operand");
   case TEST: {
-    if (n != 2 || !is_gp(&ops[0]))
-      fail("unsupported operands");
+    if (n != 2)
+      fail("expected 2 operands");
     int size = op_size(insn, ops, n);
     operand_prefixes(ops, n, size);
+    if (ops[0].kind == OP_IMM) {
+      Operand *dst = &ops[1];
+      if (is_gp(dst) && dst->reg->num == 0 && !dst->reg->is_high) {
+        rex(size == 8, 0, NULL, false);
+        out(size == 1 ? 0xa8 : 0xa9);
+      } else {
+        rex(size == 8, 0, dst, needs_rex(dst));
+        out(size == 1 ? 0xf6 : 0xf7);
+        modrm(0, dst, imm_bytes(size));
+      }
+      if (!ops[0].sym)
+        imm_value(&ops[0], size); // range check
+      out_imm(&ops[0], imm_bytes(size));
+      return;
+    }
+    if (!is_gp(&ops[0]))
+      fail("unsupported operands");
     rex(size == 8, ops[0].reg->num, &ops[1], needs_rex(&ops[0]) || needs_rex(&ops[1]));
     out(size == 1 ? 0x84 : 0x85);
     modrm(ops[0].reg->num, &ops[1], 0);
@@ -1231,10 +1355,19 @@ static void instruction(char *name, int len) {
     encode_mov(&(Insn){"movq", MOV, 0, 8}, ops, n);
     return;
   case X87:
+    // fnstsw also stores to %ax, with its own opcode.
+    if (n == 1 && !strcmp(insn->name, "fnstsw") && is_gp(&ops[0]) &&
+        ops[0].reg->num == 0 && ops[0].reg->size == 2) {
+      out(0xdf);
+      out(0xe0);
+      return;
+    }
     if (n != 1 || ops[0].kind != OP_MEM)
       fail("expected a memory operand");
     rex(false, 0, &ops[0], false);
-    out(insn->op);
+    if (insn->op > 0xff)
+      out(insn->op >> 8);
+    out(insn->op & 0xff);
     modrm(insn->ext, &ops[0], 0);
     return;
   case FSTP:
@@ -1286,12 +1419,7 @@ static void expect_comma(void) {
 
 static int64_t read_int(void) {
   skip_space();
-  char *end;
-  int64_t val = parse_number(&end, p);
-  if (end == p)
-    fail("expected a number");
-  p = end;
-  return val;
+  return read_sum(read_term());
 }
 
 // Reads a double-quoted string (without escapes).
@@ -1361,7 +1489,8 @@ static void section_directive(void) {
     }
   } else {
     // Without flags, a well-known name gets the ones GNU as gives it.
-    if (!strncmp(name, ".text", 5))
+    if (!strncmp(name, ".text", 5) || !strcmp(name, ".init") ||
+        !strcmp(name, ".fini"))
       flags = SHF_ALLOC | SHF_EXECINSTR;
     else if (!strncmp(name, ".rodata", 7))
       flags = SHF_ALLOC;
@@ -1427,9 +1556,19 @@ static void directive(char *name, int len) {
   } else if (IS(".align") || IS(".balign")) {
     align_to_n(read_int());
   } else if (IS(".size")) {
+    // .size sym, N or .size sym, .-start (from start to here, known
+    // after layout)
     Sym *sym = read_sym();
     expect_comma();
-    sym->size = read_int();
+    if (p[0] == '.' && p[1] == '-') {
+      p += 2;
+      sym->size_from = read_sym();
+      char *name = format(".Lsize.%d", nsyms);
+      sym->size_to = find_sym(name, strlen(name));
+      define_sym(sym->size_to);
+    } else {
+      sym->size = read_int();
+    }
   } else if (IS(".data")) {
     cur = find_section(".data");
   } else if (IS(".text")) {
@@ -1569,7 +1708,7 @@ static void statement(char *s) {
 }
 
 // Splits the text into statements: one per line, or several separated
-// by ';'. Comments (#) are dropped. Works in place.
+// by ';'. Comments (# and /* */) are dropped. Works in place.
 static void read_input(char *text) {
   char *s = text;       // start of the current statement
   bool in_string = false;
@@ -1577,6 +1716,17 @@ static void read_input(char *text) {
   for (char *q = text;; q++) {
     if (*q == '"')
       in_string = !in_string;
+
+    // A /* */ comment becomes spaces; the newlines in it still end
+    // statements.
+    if (!in_string && q[0] == '/' && q[1] == '*') {
+      char *end = strstr(q + 2, "*/");
+      if (!end)
+        fail("unterminated comment");
+      for (char *c = q; c < end + 2; c++)
+        if (*c != '\n')
+          *c = ' ';
+    }
 
     if (!in_string && *q == '#') {
       *q = '\0';
@@ -1606,10 +1756,12 @@ static int jump_size(Jump *j) {
   return j->cc < 0 ? 5 : 6;
 }
 
-// Can `j` be a short jump? Only to a local label in the same section,
-// where the distance is known now.
+// Can `j` be a short jump? Only to a label in the same section, where the
+// distance is known now, that is local or hidden (so no other definition
+// can take its place).
 static bool is_near(Jump *j, Section *sec) {
-  return j->target->sec == sec && !j->target->is_global;
+  Sym *t = j->target;
+  return t->sec == sec && (!t->is_global || t->visibility != STV_DEFAULT);
 }
 
 static uint64_t sym_addr(Sym *sym) {
@@ -1746,9 +1898,21 @@ static void place_jumps(Section *sec) {
   free(sec->bytes.data);
   sec->bytes = out;
 
-  for (int i = 0; i < sec->njumps; i++)
-    if (sec->jumps[i].is_long)
-      fill_hole(sec, sec->jumps[i].field, R_X86_64_PC32, sec->jumps[i].target, -4);
+  // A long jump within the section is filled in here, even to a global
+  // (not weak) symbol; one elsewhere is a relocation, through the PLT for
+  // a global target. As GNU as does.
+  for (int i = 0; i < sec->njumps; i++) {
+    Jump *j = &sec->jumps[i];
+    if (!j->is_long)
+      continue;
+    if (j->target->sec == sec && !j->target->is_weak) {
+      int64_t val = (int64_t)sym_addr(j->target) - (int64_t)(j->field + 4);
+      patch(&sec->bytes, j->field, 4, val);
+      continue;
+    }
+    bool is_local = j->target->sec && !j->target->is_global;
+    fill_hole(sec, j->field, is_local ? R_X86_64_PC32 : R_X86_64_PLT32, j->target, -4);
+  }
 }
 
 //---------- DWARF line numbers ----------------------------------------------
@@ -1929,16 +2093,16 @@ static void add_elf_sym(Bytes *symtab, Bytes *strtab, char *name, int bind,
 
 static void write_elf(char *path) {
   // Section indices: each section, then its .rela section if it has
-  // relocations. Then .symtab, .strtab and .shstrtab.
+  // relocations. Then .symtab and .strtab, unless there are no symbols
+  // (see below), and .shstrtab.
   int nsh = 1;
   for (int i = 0; i < nsections; i++) {
     sections[i]->index = nsh++;
     if (sections[i]->nrelocs)
       nsh++;
   }
-  int symtab_idx = nsh++;
-  int strtab_idx = nsh++;
-  int shstrtab_idx = nsh++;
+  int symtab_idx = nsh;
+  int strtab_idx = nsh + 1;
 
   // Symbols: the null one, the file, section symbols and other local
   // symbols, then the global ones.
@@ -1985,6 +2149,13 @@ static void write_elf(char *path) {
       ((Elf64_Sym *)(symtab.data + symtab.len))[-1].st_other = sym->visibility;
     }
   }
+
+  // With nothing but the null symbol, GNU as writes no .symtab or
+  // .strtab (crtn.s, for one, has no symbols).
+  bool has_symtab = symtab.len > sizeof(Elf64_Sym);
+  if (has_symtab)
+    nsh += 2;
+  int shstrtab_idx = nsh++;
 
   // Lay out the file: header, section contents, section headers.
   Bytes f = {0};
@@ -2036,28 +2207,31 @@ static void write_elf(char *path) {
     r->sh_size = f.len - r->sh_offset;
   }
 
-  Elf64_Shdr *s = &sh[symtab_idx];
-  s->sh_name = shstrtab.len;
-  put_str(&shstrtab, ".symtab");
-  s->sh_type = SHT_SYMTAB;
-  s->sh_link = strtab_idx;
-  s->sh_info = first_global;
-  s->sh_addralign = 8;
-  s->sh_entsize = sizeof(Elf64_Sym);
-  while (f.len % 8)
-    put(&f, 0);
-  s->sh_offset = f.len;
-  s->sh_size = symtab.len;
-  put_raw(&f, symtab.data, symtab.len);
+  Elf64_Shdr *s;
+  if (has_symtab) {
+    s = &sh[symtab_idx];
+    s->sh_name = shstrtab.len;
+    put_str(&shstrtab, ".symtab");
+    s->sh_type = SHT_SYMTAB;
+    s->sh_link = strtab_idx;
+    s->sh_info = first_global;
+    s->sh_addralign = 8;
+    s->sh_entsize = sizeof(Elf64_Sym);
+    while (f.len % 8)
+      put(&f, 0);
+    s->sh_offset = f.len;
+    s->sh_size = symtab.len;
+    put_raw(&f, symtab.data, symtab.len);
 
-  s = &sh[strtab_idx];
-  s->sh_name = shstrtab.len;
-  put_str(&shstrtab, ".strtab");
-  s->sh_type = SHT_STRTAB;
-  s->sh_addralign = 1;
-  s->sh_offset = f.len;
-  s->sh_size = strtab.len;
-  put_raw(&f, strtab.data, strtab.len);
+    s = &sh[strtab_idx];
+    s->sh_name = shstrtab.len;
+    put_str(&shstrtab, ".strtab");
+    s->sh_type = SHT_STRTAB;
+    s->sh_addralign = 1;
+    s->sh_offset = f.len;
+    s->sh_size = strtab.len;
+    put_raw(&f, strtab.data, strtab.len);
+  }
 
   s = &sh[shstrtab_idx];
   s->sh_name = shstrtab.len;
@@ -2163,6 +2337,14 @@ bool assemble_text(char *src, char *path, char **why) {
   for (int i = 0; i < nsyms; i++)
     if (symlist[i]->sec)
       symlist[i]->value = sym_addr(symlist[i]);
+  for (int i = 0; i < nsyms; i++) {
+    Sym *sym = symlist[i];
+    if (!sym->size_from)
+      continue;
+    if (sym->size_from->sec != sym->size_to->sec)
+      fail(".size of '%s': not in the same section", sym->name);
+    sym->size = sym->size_to->value - sym->size_from->value;
+  }
   for (int i = 0; i < nsections; i++)
     finish_section(sections[i]);
 
