@@ -28,15 +28,16 @@
 #define DBL_MIN_EXP -1021
 #define DBL_TRUE_MIN 0x0.0000000000001p-1022
 
-#define LDBL_DIG 15
-#define LDBL_EPSILON 0x1p-52
-#define LDBL_MANT_DIG 53
-#define LDBL_MAX 0x1.fffffffffffffp+1023
-#define LDBL_MAX_10_EXP 308
-#define LDBL_MAX_EXP 1024
-#define LDBL_MIN 0x1p-1022
-#define LDBL_MIN_10_EXP -307
-#define LDBL_MIN_EXP -1021
-#define LDBL_TRUE_MIN 0x0.0000000000001p-1022
+// long double is x87 extended precision: a 64-bit mantissa.
+#define LDBL_DIG 18
+#define LDBL_EPSILON 0x1p-63L
+#define LDBL_MANT_DIG 64
+#define LDBL_MAX 0x1.fffffffffffffffep+16383L
+#define LDBL_MAX_10_EXP 4932
+#define LDBL_MAX_EXP 16384
+#define LDBL_MIN 0x1p-16382L
+#define LDBL_MIN_10_EXP -4931
+#define LDBL_MIN_EXP -16381
+#define LDBL_TRUE_MIN 0x1p-16445L
 
 #endif
