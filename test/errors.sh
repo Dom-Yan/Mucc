@@ -662,6 +662,19 @@ int main(int argc, char **argv) {
 }
 EOF
 
+# GNU extensions mucc leaves out, which used to miscompile
+expect_error "1:30: error: nested functions are not supported" <<'EOF'
+int main(void) { int f(void) { return 1; } return f(); }
+EOF
+
+expect_error "1:30: error: a variable length array in a struct is not supported" <<'EOF'
+void f(int n) { struct { int a[n]; } s; }
+EOF
+
+expect_error "1:14: error: an empty union takes no value" <<'EOF'
+union {} u = {1};
+EOF
+
 expect_error "1:47: error: 'nothere' is not a function" <<'EOF'
 int main(void) { int x __attribute__((cleanup(nothere))); return 0; }
 EOF

@@ -279,16 +279,18 @@ void add_type(Node *node) {
 
     // Integer promotion treats a bit-field narrower than int as int,
     // even an unsigned one: `unsigned x : 5` holds 0..31, which int can
-    // represent, so `s.x >= -1` compares signed ints and is true. The
-    // loaded bits are still zero-extended, since codegen looks at
-    // mem->ty for that.
-    if (mem->is_bitfield && mem->bit_width < 32 && mem->ty->kind != TY_BOOL &&
-        mem->ty->is_unsigned) {
-      if (mem->ty->size == 4) {
-        node->ty = ty_int;
-      } else if (mem->ty->size < 4) {
+    // represent, so `s.x >= -1` compares signed ints and is true. As with
+    // gcc and clang, a long one too, and one of 32 bits is int or
+    // unsigned int. The loaded bits are still zero- or sign-extended as
+    // mem->ty says, since codegen looks at that.
+    if (mem->is_bitfield && mem->ty->kind != TY_BOOL) {
+      if (mem->bit_width < 32 && mem->ty->size < 4 && mem->ty->is_unsigned) {
         node->ty = copy_type(mem->ty);
         node->ty->is_unsigned = false;
+      } else if (mem->bit_width < 32 && mem->ty->size >= 4) {
+        node->ty = ty_int;
+      } else if (mem->bit_width == 32 && mem->ty->size == 8) {
+        node->ty = mem->ty->is_unsigned ? ty_uint : ty_int;
       }
     }
     return;

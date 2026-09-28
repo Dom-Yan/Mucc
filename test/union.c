@@ -1,6 +1,15 @@
 #include "test.h"
 
+// An empty union (GNU) takes `{}` as its initializer.
+static union empty {} empty_g = {};
+static struct { int a; union empty e; int b; } empty_s = {1, {}, 2};
+
 int main() {
+  ASSERT(0, sizeof(empty_g));
+  ASSERT(3, empty_s.a + empty_s.b);
+  ASSERT(0, ({ union empty u = {}; sizeof(u); }));
+  ASSERT(5, ({ struct { int a; union empty e; int b; } s = {2, {}, 3}; s.a + s.b; }));
+
   ASSERT(8, ({ union { int a; char b[6]; } x; sizeof(x); }));
   ASSERT(3, ({ union { int a; char b[4]; } x; x.a = 515; x.b[0]; }));
   ASSERT(2, ({ union { int a; char b[4]; } x; x.a = 515; x.b[1]; }));

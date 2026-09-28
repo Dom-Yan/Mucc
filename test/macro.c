@@ -10,6 +10,29 @@ int main_line2 = LINE();
 
 /* */ #
 
+// #pragma push_macro saves a definition, or that there was none, and
+// pop_macro brings back the last one saved.
+#define PM 1
+#pragma push_macro("PM")
+#undef PM
+#define PM 2
+#pragma push_macro("PM")
+#undef PM
+#define PM 3
+int pm1 = PM;
+#pragma pop_macro("PM")
+int pm2 = PM;
+#pragma pop_macro("PM")
+int pm3 = PM;
+#pragma push_macro("PM_NONE")
+#define PM_NONE 4
+#pragma pop_macro("PM_NONE")
+#ifdef PM_NONE
+int pm4 = 1;
+#else
+int pm4 = 0;
+#endif
+
 int ret3(void) { return 3; }
 int dbl(int x) { return x*x; }
 
@@ -22,6 +45,11 @@ int add6(int a, int b, int c, int d, int e, int f) {
 }
 
 int main() {
+  ASSERT(3, pm1);
+  ASSERT(2, pm2);
+  ASSERT(1, pm3);
+  ASSERT(0, pm4);
+
   ASSERT(5, include1);
   ASSERT(7, include2);
 

@@ -9,7 +9,21 @@ struct fp_fwd;
 struct fp_fwd { int (*f)(const struct fp_fwd *); int v; };
 static int fp_fwd_get(const struct fp_fwd *s) { return s->v; }
 
+// An empty struct (GNU) is passed and returned in nothing, as gcc does:
+// the arguments after it are where they'd be without it.
+struct empty {};
+struct has_empty { struct empty e; };
+static int empty_count;
+struct empty empty_ret(void) { struct empty e; empty_count++; return e; }
+int empty_arg(int a, struct empty e, int b, struct empty f, double c) {
+  return a * 100 + b * 10 + (int)c;
+}
+
 int main() {
+  ASSERT(123, ({ struct empty e; empty_arg(1, e, 2, e, 3.0); }));
+  ASSERT(1, ({ struct has_empty h = (struct has_empty){ .e = empty_ret() }; (void)h; empty_count; }));
+  ASSERT(0, sizeof(empty_ret()));
+
   ASSERT(7, ({ struct fp_self s = {fp_self_get, 5}; s.f(&s, 2); }));
   ASSERT(9, ({ struct fp_fwd s = {fp_fwd_get, 9}; s.f(&s); }));
   ASSERT(9, ({ struct fp_fwd s; s.f = fp_fwd_get; s.v = 9; s.f(&s); }));

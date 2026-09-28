@@ -46,7 +46,15 @@ static const unsigned long off1[] = {OFF(OffT, b), OFF(OffT, ts[1])};
 static int off_arr[10];
 static const long off2 = &off_arr[7] - &off_arr[2];
 
+// A cast to int is sign-extended when it's widened again.
+long neg1 = (int)-4;
+unsigned long neg2 = (int)-4;
+unsigned long neg3 = (unsigned)-4;
+
 int main() {
+  ASSERT(1, neg1 == -4);
+  ASSERT(1, neg2 == -4UL);
+  ASSERT(1, neg3 == 0xfffffffc);
   ASSERT(8, off1[0]);
   ASSERT(44, off1[1]);
   ASSERT(5, off2);
