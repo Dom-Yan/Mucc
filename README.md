@@ -26,6 +26,12 @@ chmod +x mucc-x86_64-linux
 sudo mv mucc-x86_64-linux /usr/local/bin/mucc
 ```
 
+Without `sudo`, put it in `~/.local/bin` instead (`mkdir -p ~/.local/bin &&
+mv mucc-x86_64-linux ~/.local/bin/mucc`) and make sure that directory is on
+your `PATH`. That one file is all of mucc: nothing else needs installing,
+not even a C library or headers. To update, download it again the same
+way; to uninstall, delete it.
+
 Then:
 
 ```sh
