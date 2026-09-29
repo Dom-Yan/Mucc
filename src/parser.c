@@ -224,7 +224,7 @@ static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
 static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr);
-static bool is_function(Token *tok);
+static bool is_function(Token *tok, Type *basety);
 static bool falls_through(Node *node);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
@@ -1773,7 +1773,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
 
       // `int x, f(void);`: a function declaration among the variables
       // (see function())
-      if (is_function(tok)) {
+      if (is_function(tok, basety)) {
         tok = function(tok, basety, attr ? attr : &(VarAttr){});
         if (equal(tok, ","))
           continue;
@@ -3257,7 +3257,7 @@ static Node *block_item(Token **rest, Token *tok) {
   }
 
   // Function declarations, maybe followed by variables: `int f(void), x;`
-  while (is_function(tok)) {
+  while (is_function(tok, basety)) {
     tok = function(tok, basety, &attr);
     if (!equal(tok, ",")) {
       *rest = tok;
@@ -5233,7 +5233,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   // `int f(void), g(void), x;`: more declarators follow a prototype.
   if (equal(tok, ",")) {
     tok = tok->next;
-    if (is_function(tok))
+    if (is_function(tok, basety))
       return function(tok, basety, attr);
     return global_variable(tok, basety, attr);
   }
@@ -5312,7 +5312,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     if (!first) {
       tok = skip_decl_comma(tok);
       // `int x, f(void);`: the rest starts with a function declaration.
-      if (is_function(tok))
+      if (is_function(tok, basety))
         return function(tok, basety, attr);
     }
     first = false;
@@ -5376,7 +5376,11 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
 
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition or declaration.
-static bool is_function(Token *tok) {
+//
+// The declarator alone decides, `f(void)`, unless it's a bare name and
+// `basety` is a function type from a typedef: `F f;` declares a function
+// too (as in Tcl's `Tcl_FSRenameFileProc TclpObjRenameFile;`).
+static bool is_function(Token *tok, Type *basety) {
   if (equal(tok, ";"))
     return false;
 
@@ -5384,7 +5388,7 @@ static bool is_function(Token *tok) {
   Type dummy = {};
   Attrs ignored = {};
   Type *ty = declarator(&tok, tok, &dummy, &ignored);
-  return ty->kind == TY_FUNC;
+  return ty->kind == TY_FUNC || (ty == &dummy && basety->kind == TY_FUNC);
 }
 
 // Remove redundant tentative definitions.
@@ -5555,7 +5559,7 @@ static Token *top_level_item(Token *tok) {
 
   if (attr.is_typedef)
     return parse_typedef(tok, basety, &attr);
-  if (is_function(tok))
+  if (is_function(tok, basety))
     return function(tok, basety, &attr);
   return global_variable(tok, basety, &attr);
 }
