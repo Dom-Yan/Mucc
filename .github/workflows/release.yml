@@ -1,8 +1,10 @@
 name: Release
 
-# Pushing a version tag (git tag v1.0 && git push origin v1.0) builds the
-# single binary, build/mucc, checks it, and attaches it to a GitHub
-# Release with its size and SHA-256 checksum.
+# Pushing a version tag (git tag -a v1.0.0 -m "mucc 1.0.0" && git push
+# origin v1.0.0) builds the single binary from the tagged commit, checks
+# the exact file that is published, and attaches it to a GitHub Release
+# with its size and SHA-256 checksum. It only goes ahead if CI (every
+# test, on every distribution) passed on that commit.
 
 on:
   push:
@@ -10,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
@@ -17,30 +20,51 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Build the single binary
-        run: make -j"$(nproc)" mucc && make libc && make build/mucc
-
-      - name: Test it alone, and on other distributions
-        run: test/single.sh build/mucc && test/distros.sh build/mucc
-
-      - name: Strip it and write its checksum
+      - name: CI passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          ci=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" \
+            --json conclusion -q '[.[] | select(.conclusion == "success")] | length')
+          if [ "$ci" = 0 ]; then
+            echo "CI hasn't passed on $GITHUB_SHA: wait for it, then push the tag again"
+            exit 1
+          fi
+
+      - name: Build the single binary, stripped
+        run: |
+          make -j"$(nproc)" mucc && make libc && make build/mucc
           cp build/mucc mucc-x86_64-linux
           strip mucc-x86_64-linux
-          test/single.sh mucc-x86_64-linux
           sha256sum mucc-x86_64-linux > mucc-x86_64-linux.sha256
+
+      # Every check runs on mucc-x86_64-linux itself, the file published.
+      - name: Test the file to be published, alone and on other distributions
+        run: test/single.sh mucc-x86_64-linux && test/distros.sh mucc-x86_64-linux
 
       - name: Make the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          sha256sum -c mucc-x86_64-linux.sha256
           size=$(stat -c %s mucc-x86_64-linux)
           sum=$(cut -d' ' -f1 mucc-x86_64-linux.sha256)
           notes="mucc $GITHUB_REF_NAME as one static binary for x86-64 Linux,
           with its headers and C library (musl) inside it. Download it,
           \`chmod +x\` it, and \`./mucc-x86_64-linux -o hello hello.c\`.
 
+          Built from commit $GITHUB_SHA.
           Size: $size bytes. SHA-256: \`$sum\`"
           gh release create "$GITHUB_REF_NAME" mucc-x86_64-linux \
             mucc-x86_64-linux.sha256 --title "mucc $GITHUB_REF_NAME" \
             --notes "$notes"
+
+      # What anyone downloads must be, byte for byte, the file tested.
+      - name: The published file is the one tested
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir published
+          gh release download "$GITHUB_REF_NAME" --dir published
+          cmp published/mucc-x86_64-linux mucc-x86_64-linux
+          (cd published && sha256sum -c mucc-x86_64-linux.sha256)

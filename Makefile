@@ -167,7 +167,7 @@ build/files.s: $(MUSL_BUILD)/lib/libc.a $(wildcard include/*.h include/sys/*.h)
 	( find include -type f -name '*.h' -printf '%p %s\n' | \
 	    sed 's|^\([^ ]*\) .*|& <mucc>/\1|'; \
 	  find $(MUSL_BUILD)/include $(MUSL_BUILD)/lib -type f -printf '%p %s\n' | \
-	    sed 's|^$(MUSL_BUILD)/\([^ ]*\) .*|& <mucc>/musl/\1|' ) | sort | awk '\
+	    sed 's|^$(MUSL_BUILD)/\([^ ]*\) .*|& <mucc>/musl/\1|' ) | LC_ALL=C sort | awk '\
 	  BEGIN { for (c = 1; c < 128; c++) ord[sprintf("%c", c)] = c } \
 	  { src[NR] = $$1; size[NR] = $$2; path[NR] = $$3 } \
 	  END { \
