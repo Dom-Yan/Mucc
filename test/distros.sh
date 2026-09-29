@@ -41,4 +41,31 @@ else
     status=1
 fi
 docker rmi -f mucc-distros-scratch > /dev/null 2>&1
+
+# In an empty image, mucc rebuilds itself from src/ with the files it
+# embeds (build/files.s and what it names), and that mucc rebuilds itself
+# again: the two must be the same, byte for byte. (MUCC itself differs
+# from them only in its debug info, which names musl's headers by their
+# paths on disk, not "<mucc>/musl/...".)
+if [ -f build/files.s ]; then
+    mkdir -p $tmp/m/build
+    cp -r src include $tmp/m
+    cp -r build/files.s build/musl $tmp/m/build
+    srcs=$(ls src/*.c | sed 's/.*/"&", /' | tr -d '\n')
+    build='"-o", "NEW", '"$srcs"'"build/files.s"]'
+    printf '%s\n' 'FROM scratch' 'COPY mucc /mucc' 'COPY m /m' 'WORKDIR /m' \
+        "RUN [\"/mucc\", \"--libc=mucc\", \"-Iinclude\", ${build/NEW/mucc2}" \
+        "RUN [\"./mucc2\", \"--libc=mucc\", \"-Iinclude\", ${build/NEW/mucc3}" \
+        > $tmp/Dockerfile
+    if docker build -q -t mucc-distros-rebuild $tmp > /dev/null &&
+       id=$(docker create mucc-distros-rebuild /m/mucc3) &&
+       docker cp -q $id:/m $tmp/out && docker rm $id > /dev/null &&
+       cmp $tmp/out/mucc2 $tmp/out/mucc3; then
+        echo "testing rebuild FROM scratch ... passed"
+    else
+        echo "testing rebuild FROM scratch ... failed"
+        status=1
+    fi
+    docker rmi -f mucc-distros-rebuild > /dev/null 2>&1
+fi
 exit $status
