@@ -6,7 +6,8 @@ and upgraded by replacing it.
 
 ## musl
 
-The C library mucc bundles (see Phase 3 of `PLAN.md`). MIT license, in
+The C library mucc bundles: `make libc` builds it, and the released binary
+carries it (see "Two C libraries" in the top-level README). MIT license, in
 `musl/COPYRIGHT`.
 
 - Version: 1.2.6
