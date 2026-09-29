@@ -9,6 +9,8 @@
 
 #include "mucc.h"
 
+#define MUCC_VERSION "1.0.1"
+
 //---------- Command-line options --------------------------------------------
 
 typedef enum {
@@ -381,6 +383,11 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "--help"))
       usage(0);
+
+    if (!strcmp(argv[i], "--version")) {
+      printf("mucc %s\n", MUCC_VERSION);
+      exit(0);
+    }
 
     if (!strcmp(argv[i], "-o")) {
       opt_o = argv[++i];
