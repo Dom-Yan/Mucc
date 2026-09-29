@@ -1,7 +1,7 @@
 #!/bin/bash
 # test/thirdparty/distros.sh MUCC [IMAGE...]: the single binary (build/mucc)
 # builds real programs on other Linux distributions. It needs Docker and
-# takes about an hour an image; CI runs it on each image in parallel
+# takes about half an hour an image; CI runs it on each image in parallel
 # (the `projects` job). In each image, with make and git but no C
 # compiler, binutils or C headers, MUCC builds zlib, Lua and SQLite, and
 # each passes its own tests, and it builds mucc, whose test programs pass
@@ -27,6 +27,17 @@ packages() {
     esac
 }
 
+# On CI (where $CI is set), a run's milestones go to the job's log as they
+# happen, so a run that is stopped still shows how far it got: each
+# script's commands, and each SQLite test file as it finishes.
+progress() {
+    if [ -n "$CI" ]; then
+        grep --line-buffered -E '^\+ |^Time: |^open files|passed|failed|errors out of|final OK|test OK'
+    else
+        cat > /dev/null
+    fi
+}
+
 tmp=`mktemp -d /tmp/mucc-tp-distros-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
 mkdir -p test/thirdparty/work
@@ -39,11 +50,16 @@ for img in $images; do
 
     # A copy of the tree for each run, as the container's user; clones
     # already in test/thirdparty/work are reused. That user has no name,
-    # which CentOS 7's git needs unless it's given one.
+    # which CentOS 7's git needs unless it's given one. The open-file
+    # limit is the usual one: with a huge one (some Docker setups give
+    # about a billion), programs that close every descriptor before
+    # running another, as Tcl does in SQLite's tests, crawl.
     docker run --rm -u `id -u`:`id -g` -e HOME=/tmp -e MUCC=/m/mucc \
         -e GIT_COMMITTER_NAME=mucc -e GIT_COMMITTER_EMAIL=mucc@localhost \
+        --ulimit nofile=1024:1048576 \
         -v $mucc:/m/mucc:ro -v `pwd`:/src:ro mucc-tp-distros bash -c '
         set -e
+        echo "open files: `ulimit -n`, processors: `nproc`"
         cp -r /src /tmp/r && cd /tmp/r
         rm -rf build stage2* stage3* mucc src/*.o
         command -v gcc cc as ld && exit 1
@@ -55,7 +71,7 @@ for img in $images; do
         make -j`nproc` LIBC=mucc $tests
         for t in $tests; do ./$t > /dev/null || { echo "$t failed"; exit 1; }; done
         make -j`nproc` LIBC=mucc selfhost
-        echo "all passed"' > $log 2>&1
+        echo "all passed"' 2>&1 | tee $log | progress
     if tail -1 $log | grep -q '^all passed$'; then
         echo "testing $img ... passed"
     else
