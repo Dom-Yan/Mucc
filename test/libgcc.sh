@@ -1,7 +1,7 @@
 #!/bin/bash
 # Checks that code mucc generates never calls a helper from gcc's runtime
 # library, libgcc (like __udivti3 or __popcountdi2): mucc's bundled C
-# library (see PLAN.md) replaces glibc, not libgcc, so nothing may need
+# library (musl, see `make libc`) replaces glibc, not libgcc, so nothing may need
 # it. Every test program and mucc itself are compiled, and no object may
 # refer to a symbol libgcc defines. Needs gcc, to find libgcc.
 mucc="$1 -Iinclude"
