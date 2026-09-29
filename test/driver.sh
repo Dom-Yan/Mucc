@@ -36,6 +36,10 @@ check 'TMPDIR'
 $mucc --help 2>&1 | grep -q mucc
 check --help
 
+# --version
+$mucc --version | grep -q '^mucc [0-9]'
+check --version
+
 # -S
 echo 'int main() {}' | $mucc -S -o- -xc - | grep -q 'main:'
 check -S
