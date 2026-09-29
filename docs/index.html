@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<meta name="description" content="Mucc is a small, self-hosting C compiler for x86-64 Linux.">
+<meta name="description" content="Mucc is a small, self-hosting C compiler for x86-64 Linux, in one binary that needs nothing else installed.">
 <title>Mucc</title>
 <style>
   body {
@@ -28,7 +28,11 @@
 
 <p>Mucc is a small, self-hosting C compiler for x86-64 Linux, written in C.
 It turns C source into a running program with its own preprocessor, parser,
-code generator, assembler and linker, in about 15,000 lines of code.</p>
+code generator, assembler and linker, in about 18,000 lines of code.</p>
+
+<p>It comes as one static binary of about 7 MB with its headers and C
+library (musl) inside it, so it needs nothing else installed: no gcc, no
+binutils, no glibc, no system headers.</p>
 
 <p>It aims to be minimal, easy to read and fast to compile with. It is not
 trying to replace gcc or clang.</p>
@@ -38,25 +42,27 @@ trying to replace gcc or clang.</p>
   <li>Compiles C17 by default, and most of C23 with <code>-std=c23</code></li>
   <li>Compiles itself, and the result compiles itself byte for byte the same</li>
   <li>Builds CPython, Git, SQLite, Lua and zlib, which pass their own tests</li>
-  <li>Compiles about 3.6 times faster than gcc -O0</li>
+  <li>Compiles about 4.5 times faster than gcc -O0</li>
 </ul>
 
 <h2>Try it</h2>
-<pre>git clone https://github.com/Dom-Yan/Mucc.git mucc
-cd mucc
-make
-./mucc -o hello hello.c</pre>
+<pre>curl -LO https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-x86_64-linux
+chmod +x mucc-x86_64-linux
+./mucc-x86_64-linux -o hello hello.c
+./hello</pre>
 
 <h2>Where it runs</h2>
-<p>The compiler runs on Linux with glibc on 64-bit Intel and AMD (x86-64)
-machines, including WSL 2 on Windows. The programs it builds run on any
-x86-64 Linux machine, and with -static they don't even need glibc. It does
-not run on macOS or ARM.</p>
+<p>The binary runs on any Linux on 64-bit Intel and AMD (x86-64) machines,
+with glibc or musl, new or old, including WSL 2 on Windows and empty
+containers. The programs it builds are static, so they run on any x86-64
+Linux machine too. It does not run on macOS or ARM.</p>
 
-<p>Mucc is feature complete. What remains is speed, performance, bug fixes,
-and new features only when the C language changes.</p>
+<p>Mucc 1.0 is feature complete. What remains is speed, performance, bug
+fixes, and new features only when the C language changes.</p>
 
 <h2>Links</h2>
-<p><a href="https://github.com/Dom-Yan/Mucc">Source code</a> and setup instructions on GitHub. MIT license.</p>
+<p><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a>,
+<a href="https://github.com/Dom-Yan/Mucc">source code</a> and build
+instructions on GitHub. MIT license.</p>
 </body>
 </html>

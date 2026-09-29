@@ -121,7 +121,7 @@ selfhost: $(OBJNAMES:%=$(S3)/%) $(OBJNAMES:%=$(S2)/%)
 	for i in $(OBJNAMES); do cmp $(S2)/$$i $(S3)/$$i || exit 1; done
 	@echo "selfhost: $(S2) and $(S3) objects are identical"
 
-# The bundled C library (Phase 3 of PLAN.md)
+# The bundled C library
 #
 # musl, from thirdparty/musl, built by mucc with musl's own configure and
 # Makefile in build/musl, archived by `mucc -ar`, and with no `as`
@@ -154,7 +154,7 @@ $(MUSL_BUILD)/lib/libc.a: mucc
 	$(MAKE) -C $(MUSL_BUILD) install-headers DESTDIR= \
 	  includedir=$(CURDIR)/$(MUSL_BUILD)/include > /dev/null
 
-# The single binary (Phase 4 of PLAN.md)
+# The single binary
 #
 # build/mucc is mucc with its own headers, musl's headers and musl's
 # libraries and startup files inside it, read from memory, so it needs no

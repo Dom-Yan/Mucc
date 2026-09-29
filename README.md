@@ -3,13 +3,39 @@
 [![CI](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml/badge.svg)](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml)
 
 Mucc (`mucc`) is a small, self-hosting C compiler (C17, and C23 with
-`-std=c23`) for x86-64 Linux, written in C. It has its own preprocessor, parser, code generator, assembler and
-static linker. It aims to be minimal, easy to read and fast to compile with.
-It is not trying to replace gcc or clang.
+`-std=c23`) for x86-64 Linux, written in C. It has its own preprocessor,
+parser, code generator, assembler and static linker, and it comes as one
+static binary with its headers and C library (musl) inside it. Copy that
+one file onto any x86-64 Linux machine and it compiles, assembles and
+links C programs with nothing else installed: no gcc, no binutils, no
+glibc, no system headers. It aims to be minimal, easy to read and fast to
+compile with. It is not trying to replace gcc or clang.
 
 Website: <https://dom-yan.github.io/Mucc/>
 
-## Project status: feature complete
+## Get it
+
+Download the binary from the
+[latest release](https://github.com/Dom-Yan/Mucc/releases/latest):
+
+```sh
+curl -LO https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-x86_64-linux
+curl -LO https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-x86_64-linux.sha256
+sha256sum -c mucc-x86_64-linux.sha256
+chmod +x mucc-x86_64-linux
+sudo mv mucc-x86_64-linux /usr/local/bin/mucc
+```
+
+Then:
+
+```sh
+mucc -o hello hello.c
+./hello
+```
+
+To build it from source instead, see [Build from source](#build-from-source).
+
+## Project status: 1.0, feature complete
 
 mucc is feature complete. It compiles C11 and the parts of C23 that real code
 uses, it builds large real-world programs (CPython, Git, SQLite, Lua) that then pass
@@ -28,15 +54,10 @@ All that is left is:
 - **New features, rarely:** only when the C language itself changes, or when
   a real program truly needs something mucc can't do.
 
-**Next direction: self-sufficiency.** The goal is one `mucc` binary that
-compiles and links C programs on any x86-64 Linux machine with nothing else
-installed: no gcc, no binutils, no glibc. The steps, and how each one is
-tested before it is checked off, are in [PLAN.md](PLAN.md).
-
 **mucc is not trying to replace GCC or Clang.** Those are huge compilers that
 target dozens of machines and optimize heavily. mucc has its own niche: a
 simple, extremely lightweight and fast compiler for Linux on x86-64 machines.
-The whole thing is about 15,000 lines you can read end to end, it builds in a
+The whole thing is about 18,000 lines you can read end to end, it builds in a
 few seconds, and it compiles several times faster than gcc. Use it when you
 want quick builds, a compiler you can understand completely, or a small
 self-contained toolchain. Use GCC or Clang when you need maximum runtime
@@ -44,30 +65,31 @@ speed or another platform.
 
 ## Where it runs
 
-**The compiler runs on** Linux on a 64-bit Intel or AMD (x86-64) processor,
-with glibc:
+**The released binary runs on** any Linux on a 64-bit Intel or AMD (x86-64)
+processor. It is a static program, so it doesn't matter which C library the
+system has, or whether it has one at all:
 
-- Linux distributions: Ubuntu, Debian, Fedora, Arch, openSUSE and others
-  that use glibc (tested on Ubuntu 24.04 and 26.04)
+- Linux distributions with glibc (Ubuntu, Debian, Fedora, Arch, ...) or
+  musl (Alpine), new or old (CentOS 7, from 2014)
 - Windows 10 and 11, inside WSL 2
-- Linux virtual machines, containers (Docker) and cloud servers, as long as
-  they are x86-64 with glibc
+- Virtual machines, cloud servers and containers, even an empty one
+  (`FROM scratch`)
 
 **It does not run on:**
 
 - macOS or Windows directly (use a Linux VM or WSL 2)
 - ARM machines: Apple Silicon Macs, Raspberry Pi, ARM servers and phones
 - 32-bit x86
-- Linux distributions that use musl instead of glibc, such as Alpine
 
 **The programs it builds** are 64-bit Linux executables (ELF, x86-64). They
 use only baseline x86-64 instructions, so they run on any 64-bit Intel or
 AMD processor, old or new.
 
-- A normal (dynamically linked) program runs on x86-64 Linux machines with
-  glibc the same age or newer than the machine that built it.
-- A `-static` program carries its C library inside it, so it runs on almost
-  any x86-64 Linux machine, including ones without glibc.
+- By default they are linked statically against the musl inside mucc, so
+  they run on any x86-64 Linux machine too.
+- With `--libc=system` they use the system's glibc and libraries, and are
+  linked dynamically unless `-static` is given (see
+  [Two C libraries](#two-c-libraries)).
 - On Windows, the programs run inside WSL 2, not as native `.exe` files.
 - They do not run on macOS or ARM machines.
 
@@ -75,36 +97,58 @@ AMD processor, old or new.
 
 | | |
 | --- | --- |
-| Compiler source | 14,896 lines of C in 12 files (11,316 without blank and comment lines) |
-| Largest file | `src/parser.c`, 4,148 lines |
-| Headers it ships | 8 (`stddef.h`, `stdarg.h`, `stdatomic.h`, ...), 276 lines |
-| Binary size | 948 KB (built by gcc with `-O2 -g`) |
-| Test programs | 43, with 1,529 assertions |
-| Other checks | 186 command-line, error-message, assembler and linker cases |
+| Compiler source | 18,244 lines of C in 13 files (13,886 without blank and comment lines) |
+| Largest file | `src/parser.c`, 5,630 lines |
+| Headers it ships | 9 (`stddef.h`, `stdarg.h`, `stdatomic.h`, ...), 255 lines |
+| Released binary | about 7 MB, with musl's headers and libraries inside it |
+| Test programs | 49, with 1,739 assertions |
+| Other checks | 261 command-line, error-message, assembler and linker cases |
 | Largest program it builds | CPython 3.10, about 450,000 lines of C, with every module; 402 of its 408 test suites that run pass. gcc fails 5 of the 6 too on the same machine (OpenSSL 3 and network tests); the other, `test_peg_generator`, needs `-fvisibility=hidden` |
-| Other real programs | Git (21,115 tests pass, 0 fail, as with gcc), SQLite 3.34.0 (249,453 tests, 0 errors), Lua 5.4.7, zlib 1.3.1, libpng and TinyCC each pass their own tests |
+| Other real programs | Git (21,115 tests pass, 0 fail, as with gcc), SQLite 3.34.0 (249,453 tests, 0 errors), Lua 5.4.7, zlib 1.3.1, libpng and TinyCC each pass their own tests. The released binary alone, with no gcc on the machine, builds zlib, Lua, Tcl 8.6.14 and SQLite, which pass their tests, on Ubuntu, Fedora, Alpine and CentOS 7 |
+| C library tests | musl built by mucc passes the same `libc-test` cases as musl built by gcc |
 
 Speed, measured on WSL 2 (Ubuntu, gcc 15.2), one file at a time:
 
 | Task | Time |
 | --- | --- |
-| mucc compiling its own 12 source files | 0.21 s |
-| gcc `-O0`, same files | 0.77 s (3.6x slower) |
-| gcc `-O2`, same files | 2.82 s (13x slower) |
-| `make test` | 12.4 s |
-| `make test-all` (tests plus the self-hosting check) | 18.5 s |
-| `make difftest N=100` | 43.7 s, 0 failures |
+| mucc compiling its own 12 source files | 0.20 s |
+| gcc `-O0`, same files | 0.91 s (4.5x slower) |
+| gcc `-O2`, same files | 3.54 s (17x slower) |
+| `make test` | 20.9 s |
+| `make test-all` (also self-hosting, musl and the single binary) | 50.9 s |
+| `make difftest N=100` | 49.7 s, 0 failures |
 
 Code mucc generates runs about as fast as `gcc -O0` code, 3 to 5 times slower
 than `gcc -O2`. Its built-in static linker is about 2.5 times faster than `ld`.
 
-## Setup
+## Two C libraries
+
+`--libc=` picks the C library to compile and link against.
+
+- `--libc=mucc`, the default for the released binary, is musl 1.2.6, built
+  by mucc itself and carried inside the binary. Programs get musl's headers
+  and are always linked statically by mucc's own linker, with nothing from
+  glibc, gcc or binutils. Headers from inside the binary are named
+  `<mucc>/...` in messages, and `-M` leaves them out. musl's complex
+  numbers and its x86-64 assembly math are left out; its portable C math
+  is used instead.
+- `--libc=system` is the system's glibc, with gcc's startup files, for
+  programs that need libraries built against glibc (OpenSSL, SDL and the
+  like) or shared libraries (`.so`, `-shared`). It needs the packages
+  under [Requirements](#requirements). A system library like `-lssl`
+  without it is an error that says so.
+
+A `mucc` built from source has no C library inside it, and its default is
+`--libc=system`. `make libc` builds musl with it (for `--libc=mucc`), and
+`make build/mucc` makes the single binary.
+
+## Build from source
 
 ### Requirements
 
-mucc runs on x86-64 Linux with glibc, and WSL 2 on Windows counts. (The
-single binary below runs on any x86-64 Linux, musl-based Alpine too.) On
-Ubuntu or Debian, `build-essential` has everything.
+The released binary needs nothing. Building mucc from source, and using
+`--libc=system`, needs x86-64 Linux with glibc (WSL 2 on Windows counts).
+On Ubuntu or Debian, `build-essential` has everything.
 
 | For | Needed |
 | --- | --- |
@@ -113,7 +157,7 @@ Ubuntu or Debian, `build-essential` has everything.
 | Dynamic linking | `ld` (binutils). `-static` doesn't need it, since mucc links those itself. |
 | `asm()` statements it can't assemble | `as` (binutils), used as a fallback |
 | Building mucc | a C11 compiler and `make`: gcc the first time, or mucc itself (`make CC=mucc`) |
-| Running the tests | Python 3; gdb for debugging |
+| Running the tests | Python 3; Docker for `test/distros.sh`; gdb for debugging |
 
 ### Linux
 
@@ -144,26 +188,25 @@ their own names (gcc, make, binutils and the C library development files).
 ```sh
 git clone https://github.com/Dom-Yan/Mucc.git mucc
 cd mucc
-make
+make                 # ./mucc
+make libc            # musl, built by mucc, for --libc=mucc
+make build/mucc      # the single binary, as released
 sudo make install
 ```
 
-`make` produces `./mucc`. `make install` copies it to `/usr/local/bin` and its
-headers to `/usr/local/lib/mucc/include`. To install without `sudo`, use
-`make install PREFIX=$HOME/.local` and make sure `~/.local/bin` is on your
-`PATH`. `make uninstall` removes it.
+`make` produces `./mucc`. `make install` copies it to `/usr/local/bin`, its
+headers to `/usr/local/lib/mucc/include` and, if `make libc` built it, musl
+to `/usr/local/lib/mucc/musl`. To install without `sudo`, use `make install
+PREFIX=$HOME/.local` and make sure `~/.local/bin` is on your `PATH`. `make
+uninstall` removes it. `build/mucc` needs no installing: it can be copied
+anywhere on its own.
 
-### Use
+## Use
 
 ```sh
 mucc -o hello hello.c
 ./hello
 ```
-
-Add `-static` for a binary that doesn't depend on the system's C library at
-run time. mucc links those itself; `-fuse-ld=bfd` (any value) makes it use
-`ld` instead, and so do linker flags it doesn't know, such as
-`-Wl,--gc-sections`.
 
 It accepts the usual flags: `-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-U`,
 `-static`, `-shared`, `-fPIC`, `-l`, `-L`, `-M*`, `-w`,
@@ -171,48 +214,55 @@ It accepts the usual flags: `-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-U`,
 picks the C standard: C17 by default, as with gcc 14 and clang, and
 `-std=c23` for C23 (`-std=gnu17` and the like work too; `-ansi` is C89).
 `-O`, `-g`, `-march=`, `-mtune=` and `-W*` (except `-w`) are accepted and
-ignored. When mucc's built-in assembler doesn't know an instruction (in a
-`.s` file or an `asm` statement), mucc runs the system's `as` instead;
-`-fno-as-fallback` makes that an error. As with gcc, a file with an extension mucc doesn't know (such as
-libtool's `.lo`) is passed to the linker as an object file. `-E` writes
-line markers (`# 12 "foo.h" 1`) as gcc does, so its output, compiled
-again, reports errors and debug info against the original files; `-P`
-leaves them out. `mucc -ar rcs libfoo.a a.o b.o` is an archiver for
-static libraries (operations `r`, `q`, `d` and `t`; its archives are the
-same, byte for byte, as GNU `ar`'s), and `mucc -ranlib libfoo.a` rewrites
-an archive's symbol index.
+ignored.
 
-`--libc=` picks the C library to compile and link against.
-`--libc=system` is the system's (glibc, with gcc's startup files), the
-default for a mucc built from source. `--libc=mucc` is the musl in `thirdparty/musl`, which `make libc`
-builds with mucc alone: programs get musl's headers and are always
-linked statically by mucc's own linker, with nothing from glibc, gcc or
-binutils, so they run on any x86-64 Linux. Shared libraries (`.so`,
-`-shared`) need `--libc=system`. `make test-all LIBC=mucc` runs the
-test suite that way, with stages 2 and 3 (mucc built by mucc) linked
-against musl too, and `make install` installs the musl build.
+With `--libc=system`, add `-static` for a binary that doesn't depend on the
+system's C library at run time. mucc links those itself; `-fuse-ld=bfd`
+(any value) makes it use `ld` instead, and so do linker flags it doesn't
+know, such as `-Wl,--gc-sections`. When mucc's built-in assembler doesn't
+know an instruction (in a `.s` file or an `asm` statement), mucc runs the
+system's `as` instead; `-fno-as-fallback` makes that an error.
 
-`make build/mucc` makes a single binary (about 7 MB) with mucc's
-headers and the musl build inside it. It's a static musl program
-itself, so copied on its own to any x86-64 Linux (Alpine, Fedora, an
-old CentOS, even an empty container), `build/mucc -o hello hello.c`
-just works. Its default C library is the musl inside it; `--libc=system`
-uses the system's as above, and a system library like `-lssl` without
-it is a clear error. Headers from inside it are named `<mucc>/...` in
-messages, and `-M` leaves them out. `test/distros.sh` checks it on
-several distributions with Docker.
+As with gcc, a file with an extension mucc doesn't know (such as libtool's
+`.lo`) is passed to the linker as an object file. `-E` writes line markers
+(`# 12 "foo.h" 1`) as gcc does, so its output, compiled again, reports
+errors and debug info against the original files; `-P` leaves them out.
+`mucc -ar rcs libfoo.a a.o b.o` is an archiver for static libraries
+(operations `r`, `q`, `d` and `t`; its archives are the same, byte for
+byte, as GNU `ar`'s), and `mucc -ranlib libfoo.a` rewrites an archive's
+symbol index.
+
+## How it works, start to finish
+
+1. `main.c` (driver): reads the flags, then for each `.c` file runs itself
+   again as `mucc -cc1`.
+2. `token.c` → `preprocess.c`: turns the source into tokens and expands
+   macros and `#include`s. Headers come from inside the binary, named
+   `<mucc>/...`.
+3. `parser.c` + `type.c`: build a typed syntax tree and report errors.
+4. `cgen.c`: turns the tree into x86-64 assembly text, using a simple stack
+   machine.
+5. `asm.c`: turns the assembly into an ELF object file, byte-identical to
+   what GNU `as` produces. Code mucc generates always goes through it; only
+   hand-written assembly it doesn't know (a `.s` file or an `asm`
+   statement) falls back to the system's `as`, if there is one.
+6. `link.c`: links the objects with musl's `libc.a`, also read from inside
+   the binary, into a static executable. `ar.c` makes `.a` libraries. With
+   `--libc=system`, dynamic programs are linked by the system's `ld`.
 
 ## Features
 
-**Self-hosting.** mucc compiles, assembles and links itself. `make CC=mucc`
-builds it with no gcc at all, and with `LDFLAGS=-static` without `ld` either.
-A mucc built by mucc builds a byte-identical mucc.
+**Self-hosting and self-sufficient.** mucc compiles, assembles and links
+itself, and its own C library. A mucc built by mucc builds a byte-identical
+mucc. In an empty container holding only the released binary and mucc's
+source, it rebuilds itself, and that mucc rebuilds itself byte for byte the
+same.
 
 **Its own toolchain.** The assembler (`src/asm.c`) produces object files
 byte-for-byte identical to GNU `as` from the same input; `.incbin` puts a
 file's bytes in an object without holding more than one copy. The linker
 (`src/link.c`) makes static executables, including thread-local data and
-glibc's IFUNC functions.
+glibc's IFUNC functions. The archiver (`src/ar.c`) makes static libraries.
 
 **C23** with `-std=c23` (`__STDC_VERSION__` is `202311L`). The default is
 C17, where these still work as GNU extensions, except that `bool`, `true`,
@@ -271,11 +321,13 @@ functions that can reach their end without a `return`.
 
 **Not supported:**
 
-- C++, or any target but x86-64 Linux with glibc
+- C++, or any target but x86-64 Linux
 - These GNU attributes: `vector_size`, `mode`, `ifunc`, `naked`, `target`
   and a few more
 - `asm goto`, `_Complex`, `__int128`, `_BitInt`,
-  `<stdckdint.h>`, decimal floats, K&R-style definitions
+  `<stdckdint.h>` and `__builtin_add_overflow`, decimal floats,
+  K&R-style definitions
+- Dynamic linking in mucc's own linker (`--libc=system` uses `ld` for it)
 - Optimization beyond register variables and constant folding
 - Debug info for variables and types
 - `const` enforcement (except for `constexpr`)
@@ -286,7 +338,7 @@ functions that can reach their end without a `return`.
 
 | File | Role |
 | --- | --- |
-| `src/main.c` | Driver: command-line flags, runs each stage |
+| `src/main.c` | Driver: command-line flags, runs each stage, embedded files |
 | `src/token.c` | Source text to tokens, error messages |
 | `src/preprocess.c` | Macros, `#include`, `#if` |
 | `src/parser.c` | Recursive-descent parser, builds the typed syntax tree |
@@ -298,6 +350,7 @@ functions that can reach their end without a `return`.
 | `src/mucc.h` | Declarations shared by every file |
 | `src/hashmap.c`, `src/strings.c`, `src/unicode.c` | Hash table, string helpers, UTF-8 |
 | `include/` | Headers mucc ships for the programs it compiles |
+| `thirdparty/musl/` | musl 1.2.6, the C library inside the released binary |
 | `test/` | Tests; `test/thirdparty/` has build scripts for real projects |
 
 Each source file is split into sections marked `//----------`. List them with
@@ -306,9 +359,10 @@ Each source file is split into sections marked `//----------`. List them with
 ### Testing
 
 ```sh
-make test       # language, command-line, error-message, assembler and linker tests
-make test-all   # also rebuilds mucc with itself and checks the result
-make difftest   # compiles 300 random programs with mucc and gcc, compares output
+make test               # language, command-line, error-message, assembler and linker tests
+make test-all           # also rebuilds mucc with itself, and tests musl and the single binary
+make test-all LIBC=mucc # the same, with everything built against the bundled musl
+make difftest           # compiles 300 random programs with mucc and gcc, compares output
 ```
 
 `make test-all` proves self-hosting in three stages: gcc builds `mucc`, `mucc`
@@ -320,11 +374,22 @@ have no undefined behavior, so if mucc and gcc print different things, one of
 them is wrong. Failures are saved in `difftest-failures/`, and
 `test/reduce.py difftest-failures/SEED.c` shrinks one to the lines that matter.
 
-### Continuous integration
+Two scripts need Docker: `test/distros.sh` runs the single binary on
+Ubuntu, Fedora, Alpine, CentOS 7 and in an empty container, where it also
+rebuilds itself; `test/thirdparty/distros.sh` has it build zlib, Lua, Tcl,
+SQLite and mucc on those distributions, with no gcc there, and run their
+tests (about an hour each).
 
-Every push and pull request runs `make test-all` and `make difftest N=100` on
-GitHub Actions (`.github/workflows/ci.yml`). The website in `docs/` is
-published to GitHub Pages by `.github/workflows/pages.yml`.
+### Continuous integration and releases
+
+Every push and pull request, and a weekly run, test everything on GitHub
+Actions (`.github/workflows/ci.yml`): `make test-all` and `make difftest
+N=100`; `make test-all LIBC=mucc` and `test/distros.sh`; and
+`test/thirdparty/distros.sh` on the four distributions in parallel. Pushing a version tag (`git tag v1.0.0 && git
+push origin v1.0.0`) builds the single binary, checks it with
+`test/single.sh` and `test/distros.sh`, and publishes it with its SHA-256
+checksum as a GitHub Release (`.github/workflows/release.yml`). The website
+in `docs/` is published to GitHub Pages by `.github/workflows/pages.yml`.
 
 ### Contributing
 
@@ -339,4 +404,5 @@ published to GitHub Pages by `.github/workflows/pages.yml`.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). musl, in `thirdparty/musl/`, is MIT too (see
+its `COPYRIGHT`).
