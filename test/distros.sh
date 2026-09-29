@@ -3,7 +3,8 @@
 # other Linux distributions, in Docker. In each image, with only MUCC and
 # hello.c mounted, it builds and runs a program; then it does the same in
 # an empty image (FROM scratch). Not part of `make test-all`, since it
-# needs Docker and downloads the images. Containers share the host's
+# needs Docker and downloads the images; CI and the release workflow run
+# it. Containers share the host's
 # kernel, so this checks the distributions' files, not their kernels.
 mucc=${1:-build/mucc}
 shift
