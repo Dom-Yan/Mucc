@@ -20,6 +20,8 @@ EOF
 
 status=0
 for img in $images; do
+    # Pulled first, so Docker's progress messages don't mix into $out.
+    docker pull -q $img > /dev/null
     out=$(docker run --rm -v $tmp:/m:ro --tmpfs /work:exec $img sh -c \
         'cd /work && /m/mucc -o hello /m/hello.c -lm && ./hello' 2>&1)
     if [ "$out" = "hello 1.414" ]; then
