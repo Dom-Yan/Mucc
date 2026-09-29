@@ -53,10 +53,14 @@ for img in $images; do
     # which CentOS 7's git needs unless it's given one. The open-file
     # limit is the usual one: with a huge one (some Docker setups give
     # about a billion), programs that close every descriptor before
-    # running another, as Tcl does in SQLite's tests, crawl.
+    # running another, as Tcl does in SQLite's tests, crawl. No core
+    # dumps: SQLite's writecrash.test aborts a child about a hundred
+    # times, and Docker's unlimited core size hands each one to the
+    # host's crash handler, which took 25 minutes or brought down the
+    # CI runner.
     docker run --rm -u `id -u`:`id -g` -e HOME=/tmp -e MUCC=/m/mucc \
         -e GIT_COMMITTER_NAME=mucc -e GIT_COMMITTER_EMAIL=mucc@localhost \
-        --ulimit nofile=1024:1048576 \
+        --ulimit nofile=1024:1048576 --ulimit core=0 \
         -v $mucc:/m/mucc:ro -v `pwd`:/src:ro mucc-tp-distros bash -c '
         set -e
         echo "open files: `ulimit -n`, processors: `nproc`"
