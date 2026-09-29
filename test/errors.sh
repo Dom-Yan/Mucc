@@ -504,6 +504,29 @@ int k(void) { int v; (void)v; int w = 1; return sizeof(w); }
 int main(void) { }
 EOF
 
+# A case value given twice is an error; Tcl's configure tests
+# sizeof(long) == 8 this way.
+expect_error '1:41: error: duplicate case value' <<'EOF'
+int f(void) { switch (0) { case 1: case (sizeof(long) == 8): ; } return 0; }
+EOF
+
+expect_error '1:58: error: duplicate case value' <<'EOF'
+int g(int x) { switch (x) { case 1 ... 5: return 1; case 3: return 2; } return 0; }
+EOF
+
+expect_error '1:48: error: multiple default labels in one switch' <<'EOF'
+int h(int x) { switch (x) { default: return 1; default: return 2; } }
+EOF
+
+expect_ok 'distinct case values' <<'EOF'
+int f(unsigned x, int y) {
+  switch (x) { case 0xffffffff: return 1; case 0x7fffffff: return 2;
+               case 1 ... 5: return 3; case 6 ... 9: return 4; }
+  switch (y) { case -1: switch (y) { case -1: return 5; default: ; } default: ; }
+  return 0;
+}
+EOF
+
 printf 'int f(void) { int unused; }\n' > $tmp/t.c
 if $mucc -w -c -o $tmp/t.o $tmp/t.c 2> $tmp/err && [ ! -s $tmp/err ]; then
     echo "testing clean '-w silences warnings' ... passed"

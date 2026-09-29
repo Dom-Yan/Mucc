@@ -3040,6 +3040,7 @@ static Node *stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_CASE, tok);
     Type *ty = current_switch->cond->ty;
     bool uns = ty->is_unsigned && ty->size >= 4;
+    Token *start = tok->next;
     int64_t begin = case_value(ty, const_expr(&tok, tok->next));
     int64_t end;
 
@@ -3052,13 +3053,20 @@ static Node *stmt(Token **rest, Token *tok) {
       end = begin;
     }
 
+    // A value that an earlier case has too is an error, as C requires.
+    // (configure scripts rely on it: Tcl's tests sizeof(long) that way.)
+    for (Node *n = current_switch->case_next; n; n = n->case_next)
+      if (uns ? (uint64_t)begin <= (uint64_t)n->end && (uint64_t)n->begin <= (uint64_t)end
+              : begin <= n->end && n->begin <= end)
+        error_tok(start, "duplicate case value");
+
     tok = skip(tok, ":");
     node->label = new_unique_name();
-    node->lhs = label_body(rest, tok);
     node->begin = begin;
     node->end = end;
     node->case_next = current_switch->case_next;
     current_switch->case_next = node;
+    node->lhs = label_body(rest, tok);
     return node;
   }
 
@@ -3068,11 +3076,14 @@ static Node *stmt(Token **rest, Token *tok) {
     if (cleanups != case_cleanups)
       jump_into_scope(cleanups, tok);
 
+    if (current_switch->default_case)
+      error_tok(tok, "multiple default labels in one switch");
+
     Node *node = new_node(ND_CASE, tok);
     tok = skip(tok->next, ":");
     node->label = new_unique_name();
-    node->lhs = label_body(rest, tok);
     current_switch->default_case = node;
+    node->lhs = label_body(rest, tok);
     return node;
   }
 
