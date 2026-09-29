@@ -69,8 +69,15 @@ jobs:
       - name: Build the single binary
         run: make -j"$(nproc)" mucc && make libc && make build/mucc
 
+      # The runner pipes core dumps to a crash handler, and a pipe ignores
+      # the container's core limit of 0, so each of the children SQLite's
+      # writecrash.test aborts waited on it: 25 minutes or a lost runner.
+      # A plain core file honors the limit.
       - name: Build and test the projects
-        run: test/thirdparty/distros.sh build/mucc ${{ matrix.image }}
+        run: |
+          cat /proc/sys/kernel/core_pattern
+          sudo sysctl -w kernel.core_pattern=core
+          test/thirdparty/distros.sh build/mucc ${{ matrix.image }}
 
       - name: Upload the log
         if: always()
