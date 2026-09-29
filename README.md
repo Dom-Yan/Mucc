@@ -149,19 +149,6 @@ make difftest    # random programs compared against gcc
 The tests need gcc and glibc's headers (`build-essential`), since they also
 check `--libc=system`.
 
-## Releasing
-
-When CI has passed on a commit, push a version tag:
-
-```sh
-git tag -a v1.0.1 -m "mucc 1.0.1"
-git push origin v1.0.1
-```
-
-`.github/workflows/release.yml` builds the single binary, tests it on
-several distributions and publishes it with its checksum. Update
-`MUCC_VERSION` in `src/main.c` first.
-
 ## Contributing
 
 - Run `make test-all` before every commit, and add a test for each fix.
