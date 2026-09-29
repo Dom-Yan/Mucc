@@ -55,9 +55,10 @@ jobs:
 
   # On each distribution, with no C compiler, binutils or C headers, the
   # single binary builds zlib, Lua, Tcl, SQLite and mucc, and each passes
-  # its own tests (test/thirdparty/distros.sh). About an hour each.
+  # its own tests (test/thirdparty/distros.sh). About half an hour each.
   projects:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
