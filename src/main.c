@@ -1133,8 +1133,18 @@ static void push_gcc_file(StringArray *arr, char *gcc_libpath, char *name) {
     strarray_push(arr, format("%s/%s", gcc_libpath, name));
 }
 
-static bool is_export_dynamic(char *arg) {
-  return !strcmp(arg, "-E") || !strcmp(arg, "--export-dynamic");
+// Linker flags that do nothing in a static program, as with ld -static:
+// -E (--export-dynamic, which Lua links with) and -rpath DIR (Tcl).
+// Returns how many arguments the flag at inputs[i] takes, or 0 if it's
+// not one of them.
+static int static_noop_flag(StringArray *inputs, int i) {
+  char *arg = inputs->data[i];
+  if (!strcmp(arg, "-E") || !strcmp(arg, "--export-dynamic") ||
+      !strncmp(arg, "-rpath=", 7))
+    return 1;
+  if (!strcmp(arg, "-rpath") && i + 1 < inputs->len)
+    return 2;
+  return 0;
 }
 
 // Links with mucc's own linker (link.c), which makes static executables.
@@ -1143,8 +1153,7 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
   if (!opt_static || opt_shared || opt_system_ld)
     return false;
 
-  // Only -L, -s, -static and -E (--export-dynamic, which does nothing
-  // without dynamic linking, as with ld -static: Lua passes it); with
+  // Only -L, -s, -static and the flags static_noop_flag() drops; with
   // other linker flags, use `ld`.
   StringArray lib_paths = {};
   bool strip = false;
@@ -1157,10 +1166,17 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
     else if (strcmp(arg, "-static"))
       return false;
   }
-  for (int i = 0; i < inputs->len; i++)
-    if (inputs->data[i][0] == '-' && strncmp(inputs->data[i], "-l", 2) &&
-        !is_export_dynamic(inputs->data[i]))
+  StringArray objs = {};
+  for (int i = 0; i < inputs->len; i++) {
+    int n = static_noop_flag(inputs, i);
+    if (n) {
+      i += n - 1;
+      continue;
+    }
+    if (inputs->data[i][0] == '-' && strncmp(inputs->data[i], "-l", 2))
       return false;
+    strarray_push(&objs, inputs->data[i]);
+  }
 
   char *libpath = find_libpath();
   char *gcc_libpath = find_gcc_libpath();
@@ -1173,11 +1189,9 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
   push_gcc_file(&files, gcc_libpath, "crtbegin.o");
   while (names.len < files.len)
     strarray_push(&names, NULL);
-  for (int i = 0; i < inputs->len; i++) {
-    if (is_export_dynamic(inputs->data[i]))
-      continue;
-    strarray_push(&files, inputs->data[i]);
-    strarray_push(&names, hashmap_get(&object_sources, inputs->data[i]));
+  for (int i = 0; i < objs.len; i++) {
+    strarray_push(&files, objs.data[i]);
+    strarray_push(&names, hashmap_get(&object_sources, objs.data[i]));
   }
   push_all(&files, libc->static_libs);
   push_gcc_file(&files, gcc_libpath, "crtend.o");

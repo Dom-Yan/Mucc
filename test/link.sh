@@ -57,11 +57,30 @@ EOF
 static_link -o $tmp/tls $tmp/tls.c -lpthread && $tmp/tls
 check 'thread-local variables in threads'
 
-# -Wl,-E (export symbols for dynamic loading, as Lua links) does nothing
-# in a static program, so it needs no `ld`.
+# -Wl,-E (export symbols for dynamic loading, as Lua links) and -rpath
+# (as Tcl links) do nothing in a static program, so they need no `ld`.
 echo 'int main(void) { return 0; }' > $tmp/export.c
 static_link -Wl,-E -o $tmp/export $tmp/export.c && $tmp/export
 check '-Wl,-E'
+static_link -Wl,-rpath,/nothere -Wl,-rpath=/nothere -o $tmp/export $tmp/export.c &&
+    $tmp/export
+check '-Wl,-rpath'
+
+# `F f;` with a function typedef F declares a function, defined in another
+# file, not a variable (as Tcl's tclIOUtil.c declares TclpObjRenameFile).
+cat > $tmp/ftype1.c <<'EOF'
+typedef int F(int);
+F g, *gp = g;
+int use(void) { F local; return g(1) + gp(2) + local(3); }
+EOF
+cat > $tmp/ftype2.c <<'EOF'
+int g(int x) { return x; }
+int local(int x) { return x * 100; }
+int use(void);
+int main(void) { return use() == 1 + 2 + 300 ? 0 : 1; }
+EOF
+static_link -o $tmp/ftype $tmp/ftype1.c $tmp/ftype2.c && $tmp/ftype
+check 'a function declared with a typedef'
 
 # An archive of our own, found with -L/-l; only needed members are used.
 printf 'int counter;\nint bump(void) { return ++counter; }\n' > $tmp/a1.c
