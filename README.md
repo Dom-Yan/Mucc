@@ -225,9 +225,12 @@ ignored.
 With `--libc=system`, add `-static` for a binary that doesn't depend on the
 system's C library at run time. mucc links those itself; `-fuse-ld=bfd`
 (any value) makes it use `ld` instead, and so do linker flags it doesn't
-know, such as `-Wl,--gc-sections`. When mucc's built-in assembler doesn't
-know an instruction (in a `.s` file or an `asm` statement), mucc runs the
-system's `as` instead; `-fno-as-fallback` makes that an error.
+know, such as `-Wl,--gc-sections`.
+
+In either mode, when mucc's built-in assembler doesn't know an instruction
+in hand-written assembly (a `.s` file or an `asm` statement), mucc runs the
+system's `as` instead, if there is one; `-fno-as-fallback` makes that an
+error.
 
 As with gcc, a file with an extension mucc doesn't know (such as libtool's
 `.lo`) is passed to the linker as an object file. `-E` writes line markers
@@ -384,18 +387,30 @@ Two scripts need Docker: `test/distros.sh` runs the single binary on
 Ubuntu, Fedora, Alpine, CentOS 7 and in an empty container, where it also
 rebuilds itself; `test/thirdparty/distros.sh` has it build zlib, Lua, Tcl,
 SQLite and mucc on those distributions, with no gcc there, and run their
-tests (about an hour each).
+tests (about half an hour each).
 
 ### Continuous integration and releases
 
 Every push and pull request, and a weekly run, test everything on GitHub
 Actions (`.github/workflows/ci.yml`): `make test-all` and `make difftest
 N=100`; `make test-all LIBC=mucc` and `test/distros.sh`; and
-`test/thirdparty/distros.sh` on the four distributions in parallel. Pushing a version tag (`git tag v1.0.0 && git
-push origin v1.0.0`) builds the single binary, checks it with
-`test/single.sh` and `test/distros.sh`, and publishes it with its SHA-256
-checksum as a GitHub Release (`.github/workflows/release.yml`). The website
-in `docs/` is published to GitHub Pages by `.github/workflows/pages.yml`.
+`test/thirdparty/distros.sh` on the four distributions in parallel.
+
+To make a release, wait until CI has passed on the commit, then push a
+version tag:
+
+```sh
+git tag -a v1.0.1 -m "mucc 1.0.1"
+git push origin v1.0.1
+```
+
+The release workflow (`.github/workflows/release.yml`) checks that CI
+passed on the tagged commit, builds and strips the single binary, runs
+`test/single.sh` and `test/distros.sh` on that exact file, publishes it as
+a GitHub Release with its SHA-256 checksum and the commit it came from,
+and then downloads it again to check it is the file it tested. The
+website in `docs/` is published to GitHub Pages by
+`.github/workflows/pages.yml`.
 
 ### Contributing
 
