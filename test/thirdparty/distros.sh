@@ -1,7 +1,8 @@
 #!/bin/bash
 # test/thirdparty/distros.sh MUCC [IMAGE...]: the single binary (build/mucc)
-# builds real programs on other Linux distributions. By hand: it needs
-# Docker and takes hours. In each image, with make and git but no C
+# builds real programs on other Linux distributions. It needs Docker and
+# takes about an hour an image; CI runs it on each image in parallel
+# (the `projects` job). In each image, with make and git but no C
 # compiler, binutils or C headers, MUCC builds zlib, Lua and SQLite, and
 # each passes its own tests, and it builds mucc, whose test programs pass
 # and whose stages 2 and 3 are identical, all against the bundled musl.

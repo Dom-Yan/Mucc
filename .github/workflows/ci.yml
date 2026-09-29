@@ -1,15 +1,22 @@
 name: CI
 
+# Everything that shows mucc works: its tests with glibc and with the
+# bundled musl, random programs compared with gcc, the single binary on
+# other distributions and rebuilding itself in an empty container, and
+# real programs built by it with no gcc there. Weekly too, so a change in
+# a distribution's image or a project's download shows up.
 on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build
         run: make -j"$(nproc)" mucc
@@ -29,14 +36,45 @@ jobs:
           if-no-files-found: ignore
 
   # The same tests with the bundled musl (--libc=mucc), including stages
-  # 2 and 3 built against it
+  # 2 and 3 built against it, then the single binary (build/mucc, which
+  # test-all makes) on Ubuntu, Fedora, Alpine, CentOS 7 and FROM scratch,
+  # where it also rebuilds itself byte for byte
   test-musl:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build mucc and musl
         run: make -j"$(nproc)" mucc && make libc
 
       - name: Test and self-host on musl
         run: make test-all LIBC=mucc
+
+      - name: The single binary on other distributions
+        run: test/distros.sh build/mucc
+
+  # On each distribution, with no C compiler, binutils or C headers, the
+  # single binary builds zlib, Lua, Tcl, SQLite and mucc, and each passes
+  # its own tests (test/thirdparty/distros.sh). About an hour each.
+  projects:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "fedora:latest", "alpine:latest", "centos:7"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the single binary
+        run: make -j"$(nproc)" mucc && make libc && make build/mucc
+
+      - name: Build and test the projects
+        run: test/thirdparty/distros.sh build/mucc ${{ matrix.image }}
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: projects-${{ strategy.job-index }}
+          path: test/thirdparty/work/distros-*.log
+          if-no-files-found: ignore
