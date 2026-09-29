@@ -711,10 +711,11 @@ static void run_subprocess(char **argv) {
   }
 
   // Wait for the child process to finish. If it crashed, say so: it
-  // printed nothing itself.
+  // printed nothing itself. SIGPIPE isn't a crash: whatever read its
+  // output stopped reading (`mucc -E x.c | head`).
   int status;
   while (wait(&status) > 0);
-  if (WIFSIGNALED(status)) {
+  if (WIFSIGNALED(status) && WTERMSIG(status) != SIGPIPE) {
     char *what = !strcmp(argv[0], "as") || !strcmp(argv[0], "ld") ? argv[0] : "mucc -cc1";
     fprintf(stderr, "mucc: internal error: %s crashed (%s)\n", what,
             strsignal(WTERMSIG(status)));

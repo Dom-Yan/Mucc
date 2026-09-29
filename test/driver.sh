@@ -257,6 +257,12 @@ check -include
 echo NULL | $mucc -Iinclude -include stdio.h -E -o- -xc - | grep -q 0
 check -include
 
+# Output read by something that stops early is no crash: no message.
+seq 100000 | sed 's/.*/int x&;/' > $tmp/long.c
+$mucc -E -o- $tmp/long.c 2> $tmp/pipe.err | head -1 > /dev/null
+[ ! -s $tmp/pipe.err ]
+check 'output pipe closed early'
+
 # -x
 echo 'int x;' | $mucc -c -xc -o $tmp/foo.o -
 check -xc
