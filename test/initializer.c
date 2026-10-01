@@ -10,6 +10,7 @@ struct {int a[2];} g12[2] = {{{1, 2}}};
 union { int a; char b[8]; } g13[2] = {0x01020304, 0x05060708};
 char g17[] = "foobar";
 char g18[10] = "foobar";
+char g_paren[] = ("paren"); // [GNU] as gettext's N_("paren") expands to
 char g19[3] = "foobar";
 char *g20 = g17+0;
 char *g21 = g17+3;
@@ -295,6 +296,10 @@ int main() {
   ASSERT(8, ({ char s[8] = {"ab" "cd"}; sizeof(s); }));
   ASSERT('d', ({ char s[8] = {"ab" "cd"}; s[3]; }));
   ASSERT(0, ({ static char s[] = {"xyz"}; strcmp(s, "xyz"); }));
+  ASSERT(6, sizeof(g_paren));
+  ASSERT(0, strcmp(g_paren, "paren"));
+  ASSERT(4, ({ char s[] = ("abc"); sizeof(s); }));
+  ASSERT(0, ({ char s[] = ("ab" "c"); strcmp(s, "abc"); }));
 
   printf("OK\n");
   return 0;

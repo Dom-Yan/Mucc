@@ -309,16 +309,16 @@ void add_type(Node *node) {
     node->ty = node->lhs->ty->base;
     return;
   case ND_STMT_EXPR:
+    // The value of the last statement, or void if it isn't an expression,
+    // as in `({ if (x) f(); })`.
+    node->ty = ty_void;
     if (node->body) {
       Node *stmt = node->body;
       while (stmt->next)
         stmt = stmt->next;
-      if (stmt->kind == ND_EXPR_STMT) {
+      if (stmt->kind == ND_EXPR_STMT)
         node->ty = stmt->lhs->ty;
-        return;
-      }
     }
-    error_tok(node->tok, "statement expression returning void is not supported");
     return;
   case ND_LABEL_VAL:
     node->ty = pointer_to(ty_void);
@@ -336,8 +336,22 @@ void add_type(Node *node) {
     return;
   case ND_EXCH:
     if (node->lhs->ty->kind != TY_PTR)
-      error_tok(node->cas_addr->tok, "pointer expected");
+      error_tok(node->lhs->tok, "pointer expected");
     node->ty = node->lhs->ty->base;
+    return;
+  case ND_CLZ:
+  case ND_CTZ:
+  case ND_POPCOUNT:
+    node->ty = ty_int;
+    return;
+  case ND_BSWAP:
+    node->ty = node->lhs->ty;
+    return;
+  case ND_FENCE:
+    node->ty = ty_void;
+    return;
+  case ND_FRAME_ADDR:
+    node->ty = pointer_to(ty_void);
     return;
   }
 }

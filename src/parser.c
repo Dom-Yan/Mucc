@@ -1249,7 +1249,12 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
       if (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
           equal(tok, "__restrict") || equal(tok, "__restrict__"))
         tok = tok->next;
-      else if (is_attribute(tok))
+      else if (equal(tok, "_Atomic") && !equal(tok->next, "(")) {
+        // `T *_Atomic p`: an atomic pointer (ty is a new type, so it can be
+        // changed).
+        ty->is_atomic = true;
+        tok = tok->next;
+      } else if (is_attribute(tok))
         tok = skip_attributes(tok);
       else
         break;
@@ -1389,6 +1394,17 @@ static bool fits_in(int64_t val, Type *ty) {
   return val >= -((int64_t)1 << (bits - 1)) && val < ((int64_t)1 << (bits - 1));
 }
 
+// Without a fixed underlying type, an enum is unsigned int if none of
+// its values is negative and int otherwise, as with gcc. [GNU] Values that
+// don't fit 32 bits make it a long or unsigned long.
+static void set_enum_type(Type *ty, int64_t min, int64_t max) {
+  ty->is_unsigned = min >= 0;
+  if (min >= 0 ? max <= UINT32_MAX : (min >= INT32_MIN && max <= INT32_MAX))
+    ty->size = ty->align = 4;
+  else
+    ty->size = ty->align = 8;
+}
+
 // enum-specifier = attributes ident? (":" type)? "{" enum-list? "}" attributes
 //                | attributes ident ((":" type)? "{" enum-list? "}" attributes)?
 //                | attributes ident ":" type
@@ -1428,8 +1444,14 @@ static Type *enum_specifier(Token **rest, Token *tok) {
       *rest = tok;
       return ty;
     }
-    if (!ty2)
-      error_tok(tag, "unknown enum type");
+    if (!ty2) {
+      // [GNU] `enum E;` or `enum E *p;` before E is defined. E is
+      // incomplete until its list, as with gcc and clang.
+      ty->size = -1;
+      push_tag_scope(tag, ty);
+      *rest = tok;
+      return ty;
+    }
     if (ty2->kind != TY_ENUM)
       error_tok(tag, "not an enum tag");
     *rest = tok;
@@ -1437,6 +1459,16 @@ static Type *enum_specifier(Token **rest, Token *tok) {
   }
 
   tok = skip(tok, "{");
+
+  // An `enum E` declared earlier in this scope is the same type, completed
+  // here.
+  if (tag) {
+    Type *prev = hashmap_get2(&scope->tags, tag->loc, tag->len);
+    if (prev && prev->kind == TY_ENUM && prev->size < 0) {
+      *prev = *ty;
+      ty = prev;
+    }
+  }
 
   // Read an enum-list.
   int i = 0;
@@ -1458,13 +1490,16 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     if (fixed && !fits_in(val, fixed))
       error_tok(val_tok, "enumerator value %ld is outside the range of '%s'",
                 (long)val, type_name(fixed));
-    if (!fixed)
-      val = (int)val; // an int, as before C23
 
     min = (i == 1) ? val : MIN(min, val);
     max = (i == 1) ? val : MAX(max, val);
+    if (!fixed)
+      set_enum_type(ty, min, max);
+
+    // A constant is an int if its value fits one, and otherwise has the
+    // enum's type, as with gcc.
     VarScope *sc = push_scope(name);
-    sc->enum_ty = fixed ? ty : ty_int;
+    sc->enum_ty = (fixed || val != (int)val) ? ty : ty_int;
     sc->enum_val = val++;
   }
 
@@ -1479,7 +1514,6 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     error_tok(a.layout_tok, "attribute 'packed' is not supported on an enum "
               "with a fixed underlying type");
   if (a.is_packed) {
-    ty->is_unsigned = min >= 0;
     if (min >= 0 ? max <= 0xff : (min >= -128 && max <= 127))
       ty->size = ty->align = 1;
     else if (min >= 0 ? max <= 0xffff : (min >= -32768 && max <= 32767))
@@ -2240,6 +2274,15 @@ static void union_initializer(Token **rest, Token *tok, Initializer *init) {
 static void initializer2(Token **rest, Token *tok, Initializer *init) {
   if (init->ty->kind == TY_ARRAY && tok->kind == TK_STR) {
     string_initializer(rest, tok, init);
+    return;
+  }
+
+  // [GNU] or in parentheses, as gettext's N_("abc") expands to.
+  if (init->ty->kind == TY_ARRAY && equal(tok, "(") &&
+      tok->next->kind == TK_STR && equal(tok->next->next, ")")) {
+    Token *ignore;
+    string_initializer(&ignore, tok->next, init);
+    *rest = tok->next->next->next;
     return;
   }
 
@@ -3659,6 +3702,80 @@ static void check_modifiable(Node *lhs) {
     error_tok(lhs->tok, "cannot modify constexpr '%s'", lhs->var->name);
 }
 
+// `*P op= B` done atomically, returning the old value of *P if
+// `return_old` and the new one otherwise:
+//
+// ({
+//   T *addr = P; T2 val = (B); T old = *addr; T new;
+//   do {
+//    new = old op val;
+//   } while (!atomic_compare_exchange_strong(addr, &old, new));
+//   new; // or old
+// })
+static Node *atomic_rmw(Node *ptr, Node *rhs, NodeKind op, bool return_old,
+                        Token *tok) {
+  add_type(ptr);
+  add_type(rhs);
+  if (!ptr->ty->base)
+    error_tok(tok, "pointer expected");
+
+  // old and new are plain copies; only *addr is shared.
+  Type *ty = ptr->ty->base;
+  if (ty->is_atomic) {
+    ty = copy_type(ty);
+    ty->is_atomic = false;
+  }
+
+  Node head = {};
+  Node *cur = &head;
+
+  Obj *addr = new_lvar("", pointer_to(ptr->ty->base));
+  Obj *val = new_lvar("", rhs->ty);
+  Obj *old = new_lvar("", ty);
+  Obj *new = new_lvar("", ty);
+
+  cur = cur->next =
+    new_unary(ND_EXPR_STMT,
+              new_binary(ND_ASSIGN, new_var_node(addr, tok), ptr, tok), tok);
+
+  cur = cur->next =
+    new_unary(ND_EXPR_STMT,
+              new_binary(ND_ASSIGN, new_var_node(val, tok), rhs, tok), tok);
+
+  cur = cur->next =
+    new_unary(ND_EXPR_STMT,
+              new_binary(ND_ASSIGN, new_var_node(old, tok),
+                         new_unary(ND_DEREF, new_var_node(addr, tok), tok), tok),
+              tok);
+
+  Node *loop = new_node(ND_DO, tok);
+  loop->brk_label = new_unique_name();
+  loop->cont_label = new_unique_name();
+
+  Node *body = new_binary(ND_ASSIGN,
+                          new_var_node(new, tok),
+                          new_binary(op, new_var_node(old, tok),
+                                     new_var_node(val, tok), tok),
+                          tok);
+
+  loop->then = new_node(ND_BLOCK, tok);
+  loop->then->body = new_unary(ND_EXPR_STMT, body, tok);
+
+  Node *cas = new_node(ND_CAS, tok);
+  cas->cas_addr = new_var_node(addr, tok);
+  cas->cas_old = new_unary(ND_ADDR, new_var_node(old, tok), tok);
+  cas->cas_new = new_var_node(new, tok);
+  loop->cond = new_unary(ND_NOT, cas, tok);
+
+  cur = cur->next = loop;
+  cur = cur->next = new_unary(ND_EXPR_STMT,
+                              new_var_node(return_old ? old : new, tok), tok);
+
+  Node *node = new_node(ND_STMT_EXPR, tok);
+  node->body = head.next;
+  return node;
+}
+
 static Node *to_assign(Node *binary) {
   add_type(binary->lhs);
   add_type(binary->rhs);
@@ -3689,67 +3806,10 @@ static Node *to_assign(Node *binary) {
     return new_binary(ND_COMMA, expr1, expr4, tok);
   }
 
-  // If A is an atomic type, Convert `A op= B` to
-  //
-  // ({
-  //   T1 *addr = &A; T2 val = (B); T1 old = *addr; T1 new;
-  //   do {
-  //    new = old op val;
-  //   } while (!atomic_compare_exchange_strong(addr, &old, new));
-  //   new;
-  // })
-  if (binary->lhs->ty->is_atomic) {
-    Node head = {};
-    Node *cur = &head;
-
-    Obj *addr = new_lvar("", pointer_to(binary->lhs->ty));
-    Obj *val = new_lvar("", binary->rhs->ty);
-    Obj *old = new_lvar("", binary->lhs->ty);
-    Obj *new = new_lvar("", binary->lhs->ty);
-
-    cur = cur->next =
-      new_unary(ND_EXPR_STMT,
-                new_binary(ND_ASSIGN, new_var_node(addr, tok),
-                           new_unary(ND_ADDR, binary->lhs, tok), tok),
-                tok);
-
-    cur = cur->next =
-      new_unary(ND_EXPR_STMT,
-                new_binary(ND_ASSIGN, new_var_node(val, tok), binary->rhs, tok),
-                tok);
-
-    cur = cur->next =
-      new_unary(ND_EXPR_STMT,
-                new_binary(ND_ASSIGN, new_var_node(old, tok),
-                           new_unary(ND_DEREF, new_var_node(addr, tok), tok), tok),
-                tok);
-
-    Node *loop = new_node(ND_DO, tok);
-    loop->brk_label = new_unique_name();
-    loop->cont_label = new_unique_name();
-
-    Node *body = new_binary(ND_ASSIGN,
-                            new_var_node(new, tok),
-                            new_binary(binary->kind, new_var_node(old, tok),
-                                       new_var_node(val, tok), tok),
-                            tok);
-
-    loop->then = new_node(ND_BLOCK, tok);
-    loop->then->body = new_unary(ND_EXPR_STMT, body, tok);
-
-    Node *cas = new_node(ND_CAS, tok);
-    cas->cas_addr = new_var_node(addr, tok);
-    cas->cas_old = new_unary(ND_ADDR, new_var_node(old, tok), tok);
-    cas->cas_new = new_var_node(new, tok);
-    loop->cond = new_unary(ND_NOT, cas, tok);
-
-    cur = cur->next = loop;
-    cur = cur->next = new_unary(ND_EXPR_STMT, new_var_node(new, tok), tok);
-
-    Node *node = new_node(ND_STMT_EXPR, tok);
-    node->body = head.next;
-    return node;
-  }
+  // `A op= B` for an atomic A is a compare-and-swap loop.
+  if (binary->lhs->ty->is_atomic)
+    return atomic_rmw(new_unary(ND_ADDR, binary->lhs, tok), binary->rhs,
+                      binary->kind, false, tok);
 
   // `x op= B` for a plain variable x is just `x = x op B`: reading x
   // has no side effects. (Taking &x, as below, would also keep x out
@@ -4741,9 +4801,369 @@ static Node *va_builtin(Token **rest, Token *tok) {
                     new_unary(ND_DEREF, area, start), start);
 }
 
+//---------- GNU builtins ----------------------------------------------------
+
+// [GNU] Read-modify-write atomics: `__atomic_fetch_add(p, v, order)` and
+// the rest are atomic_rmw() with an op. The fetch_op forms return the old
+// value and the op_fetch forms the new one. The __c11 forms, which
+// <stdatomic.h> uses, scale v by the pointed-to size when *p is a pointer,
+// as C11 says; gcc's own builtins don't.
+static struct {
+  char *name;
+  NodeKind op;
+  bool return_old;
+  bool is_c11;
+} rmw_builtins[] = {
+  {"__atomic_fetch_add", ND_ADD, true}, {"__atomic_add_fetch", ND_ADD, false},
+  {"__atomic_fetch_sub", ND_SUB, true}, {"__atomic_sub_fetch", ND_SUB, false},
+  {"__atomic_fetch_and", ND_BITAND, true}, {"__atomic_and_fetch", ND_BITAND, false},
+  {"__atomic_fetch_or", ND_BITOR, true}, {"__atomic_or_fetch", ND_BITOR, false},
+  {"__atomic_fetch_xor", ND_BITXOR, true}, {"__atomic_xor_fetch", ND_BITXOR, false},
+  {"__sync_fetch_and_add", ND_ADD, true}, {"__sync_add_and_fetch", ND_ADD, false},
+  {"__sync_fetch_and_sub", ND_SUB, true}, {"__sync_sub_and_fetch", ND_SUB, false},
+  {"__sync_fetch_and_and", ND_BITAND, true}, {"__sync_and_and_fetch", ND_BITAND, false},
+  {"__sync_fetch_and_or", ND_BITOR, true}, {"__sync_or_and_fetch", ND_BITOR, false},
+  {"__sync_fetch_and_xor", ND_BITXOR, true}, {"__sync_xor_and_fetch", ND_BITXOR, false},
+  {"__c11_atomic_fetch_add", ND_ADD, true, true},
+  {"__c11_atomic_fetch_sub", ND_SUB, true, true},
+  {"__c11_atomic_fetch_and", ND_BITAND, true, true},
+  {"__c11_atomic_fetch_or", ND_BITOR, true, true},
+  {"__c11_atomic_fetch_xor", ND_BITXOR, true, true},
+};
+
+// The other GNU builtins gnu_builtin() handles. The bit builtins also
+// have l and ll forms (__builtin_clzl, ...), which take a long.
+static char *gnu_builtin_names[] = {
+  "__builtin_clz", "__builtin_ctz", "__builtin_popcount", "__builtin_parity",
+  "__builtin_ffs", "__builtin_clrsb",
+  "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64",
+  "__builtin_expect", "__builtin_expect_with_probability",
+  "__builtin_assume_aligned", "__builtin_constant_p",
+  "__builtin_frame_address", "__builtin_return_address",
+  "__builtin_trap", "__builtin_prefetch",
+  "__sync_val_compare_and_swap", "__sync_bool_compare_and_swap",
+  "__sync_lock_test_and_set", "__sync_lock_release", "__sync_synchronize",
+  "__atomic_load_n", "__atomic_store_n", "__atomic_exchange_n",
+  "__atomic_compare_exchange_n", "__atomic_test_and_set", "__atomic_clear",
+  "__atomic_thread_fence", "__atomic_signal_fence",
+  "__atomic_always_lock_free", "__atomic_is_lock_free",
+};
+
+static char *bit_builtins[] = {
+  "__builtin_clz", "__builtin_ctz", "__builtin_popcount", "__builtin_parity",
+  "__builtin_ffs", "__builtin_clrsb",
+};
+
+// For a bit builtin, `__builtin_clz` (int), `__builtin_clzl` or
+// `__builtin_clzll` (long), its name without the suffix and its argument
+// size; NULL if `tok` isn't one.
+static char *bit_builtin(Token *tok, int *size) {
+  for (int i = 0; i < sizeof(bit_builtins) / sizeof(*bit_builtins); i++) {
+    char *name = bit_builtins[i];
+    int len = strlen(name);
+    if (tok->len < len || strncmp(tok->loc, name, len))
+      continue;
+    char *suffix = tok->loc + len;
+    int n = tok->len - len;
+    if (n == 0 || (n == 1 && suffix[0] == 'l') ||
+        (n == 2 && !strncmp(suffix, "ll", 2))) {
+      *size = n ? 8 : 4;
+      return name;
+    }
+  }
+  return NULL;
+}
+
+static int rmw_builtin(Token *tok) {
+  for (int i = 0; i < sizeof(rmw_builtins) / sizeof(*rmw_builtins); i++)
+    if (equal(tok, rmw_builtins[i].name))
+      return i;
+  return -1;
+}
+
+static bool is_gnu_builtin(Token *tok) {
+  int size;
+  for (int i = 0; i < sizeof(gnu_builtin_names) / sizeof(*gnu_builtin_names); i++)
+    if (equal(tok, gnu_builtin_names[i]))
+      return true;
+  return bit_builtin(tok, &size) || rmw_builtin(tok) >= 0;
+}
+
+// The bits a bit builtin counts in a constant, so it can be folded.
+static int count_bits(NodeKind kind, uint64_t x, int bits) {
+  int n = 0;
+  if (kind == ND_POPCOUNT) {
+    for (; x; x &= x - 1)
+      n++;
+    return n;
+  }
+  if (kind == ND_CTZ) {
+    while (n < bits && !(x >> n & 1))
+      n++;
+    return n;
+  }
+  while (n < bits && !(x >> (bits - 1 - n) & 1))
+    n++;
+  return n;
+}
+
+// clz, ctz or popcount of `arg` as type `ty`: a number if it's constant,
+// as with gcc, so it can size an array or be a case label.
+static Node *count_bits_node(NodeKind kind, Node *arg, Type *ty, Token *tok) {
+  arg = new_cast(arg, ty);
+  if (is_const_expr(arg)) {
+    uint64_t x = eval(arg);
+    if (ty->size == 4)
+      x = (uint32_t)x;
+    return new_num(count_bits(kind, x, ty->size * 8), tok);
+  }
+  return new_unary(kind, arg, tok);
+}
+
+static Node *bswap_node(Node *arg, Type *ty, Token *tok) {
+  arg = new_cast(arg, ty);
+  if (is_const_expr(arg)) {
+    uint64_t x = eval(arg), y = 0;
+    for (int i = 0; i < ty->size; i++)
+      y = y << 8 | (x >> (i * 8) & 0xff);
+    Node *node = new_num(y, tok);
+    node->ty = ty;
+    return node;
+  }
+  return new_unary(ND_BSWAP, arg, tok);
+}
+
+// The type `*p` has without _Atomic, for a temporary holding its value.
+static Type *pointee_type(Node *p) {
+  add_type(p);
+  if (!p->ty->base)
+    error_tok(p->tok, "pointer expected");
+  Type *ty = p->ty->base;
+  if (ty->is_atomic) {
+    ty = copy_type(ty);
+    ty->is_atomic = false;
+  }
+  return ty;
+}
+
+static Node *void_node(Token *tok) {
+  return new_cast(new_num(0, tok), ty_void);
+}
+
+// [GNU] gcc's bit-counting, atomic and other builtins, which real code
+// often calls without checking for gcc. `tok` is one of them.
+static Node *gnu_builtin(Token **rest, Token *tok) {
+  Token *start = tok;
+  Node *args[6];
+  int nargs = 0;
+
+  tok = skip(tok->next, "(");
+  if (!equal(tok, ")")) {
+    do {
+      if (nargs == 6)
+        error_tok(tok, "too many arguments");
+      args[nargs++] = assign(&tok, tok);
+    } while (consume(&tok, tok, ","));
+  }
+  *rest = skip(tok, ")");
+
+  int size;
+  char *bit = bit_builtin(start, &size);
+  int rmw = rmw_builtin(start);
+
+  // The fewest arguments each takes
+  int min = 1;
+  if (equal(start, "__sync_synchronize") || equal(start, "__builtin_trap"))
+    min = 0;
+  else if (rmw >= 0 || equal(start, "__builtin_expect") ||
+           equal(start, "__atomic_load_n") ||
+           equal(start, "__atomic_exchange_n") ||
+           equal(start, "__atomic_store_n") ||
+           equal(start, "__atomic_always_lock_free") ||
+           equal(start, "__atomic_is_lock_free") ||
+           equal(start, "__builtin_assume_aligned") ||
+           equal(start, "__sync_lock_test_and_set"))
+    min = 2;
+  else if (equal(start, "__sync_val_compare_and_swap") ||
+           equal(start, "__sync_bool_compare_and_swap") ||
+           equal(start, "__builtin_expect_with_probability") ||
+           equal(start, "__atomic_compare_exchange_n"))
+    min = 3;
+  if (nargs < min)
+    error_tok(start, "too few arguments to '%.*s'", start->len, start->loc);
+
+  if (bit) {
+    Type *ty = (size == 8) ? ty_ulong : ty_uint;
+    Type *sty = (size == 8) ? ty_long : ty_int;
+
+    if (!strcmp(bit, "__builtin_clz"))
+      return count_bits_node(ND_CLZ, args[0], ty, start);
+    if (!strcmp(bit, "__builtin_ctz"))
+      return count_bits_node(ND_CTZ, args[0], ty, start);
+    if (!strcmp(bit, "__builtin_popcount"))
+      return count_bits_node(ND_POPCOUNT, args[0], ty, start);
+    if (!strcmp(bit, "__builtin_parity"))
+      return new_binary(ND_BITAND,
+                        count_bits_node(ND_POPCOUNT, args[0], ty, start),
+                        new_num(1, start), start);
+
+    // ffs(x) is `x ? ctz(x) + 1 : 0`, and clrsb(x), the number of bits
+    // after the sign bit that equal it, is clz(((x ^ (x >> (N-1))) << 1) | 1).
+    // Both need x once, so it's put in a temporary.
+    Obj *var = new_lvar("", sty);
+    Node *init = new_binary(ND_ASSIGN, new_var_node(var, start),
+                            args[0], start);
+    Node *x = new_var_node(var, start);
+
+    if (!strcmp(bit, "__builtin_ffs")) {
+      Node *node = new_node(ND_COND, start);
+      node->cond = x;
+      node->then = new_binary(ND_ADD,
+                              count_bits_node(ND_CTZ, new_var_node(var, start),
+                                              ty, start),
+                              new_num(1, start), start);
+      node->els = new_num(0, start);
+      return new_binary(ND_COMMA, init, node, start);
+    }
+
+    Node *sign = new_binary(ND_SHR, new_var_node(var, start),
+                            new_num(size * 8 - 1, start), start);
+    Node *y = new_binary(ND_BITXOR, x, sign, start);
+    y = new_binary(ND_BITOR,
+                   new_binary(ND_SHL, new_cast(y, ty), new_num(1, start), start),
+                   new_num(1, start), start);
+    return new_binary(ND_COMMA, init, count_bits_node(ND_CLZ, y, ty, start),
+                      start);
+  }
+
+  if (equal(start, "__builtin_bswap16"))
+    return bswap_node(args[0], ty_ushort, start);
+  if (equal(start, "__builtin_bswap32"))
+    return bswap_node(args[0], ty_uint, start);
+  if (equal(start, "__builtin_bswap64"))
+    return bswap_node(args[0], ty_ulong, start);
+
+  // Hints: the value of the first argument
+  if (equal(start, "__builtin_expect") ||
+      equal(start, "__builtin_expect_with_probability"))
+    return new_cast(args[0], ty_long);
+  if (equal(start, "__builtin_assume_aligned"))
+    return new_cast(args[0], pointer_to(ty_void));
+  if (equal(start, "__builtin_prefetch"))
+    return new_cast(args[0], ty_void);
+
+  // Whether the argument is a constant. It isn't evaluated.
+  if (equal(start, "__builtin_constant_p"))
+    return new_num(is_const_expr(args[0]), start);
+
+  if (equal(start, "__builtin_frame_address") ||
+      equal(start, "__builtin_return_address")) {
+    Node *node = new_node(ND_FRAME_ADDR, start);
+    node->val = eval(args[0]);
+    if (node->val < 0)
+      error_tok(args[0]->tok, "the level must not be negative");
+    if (equal(start, "__builtin_frame_address"))
+      return node;
+
+    // The return address is just above the saved %rbp.
+    Node *addr = new_binary(ND_ADD, new_cast(node, ty_ulong),
+                            new_ulong(8, start), start);
+    return new_unary(ND_DEREF,
+                     new_cast(addr, pointer_to(pointer_to(ty_void))), start);
+  }
+
+  if (equal(start, "__builtin_trap")) {
+    Node *node = new_node(ND_UNREACHABLE, start);
+    node->ty = ty_void;
+    return node;
+  }
+
+  if (rmw >= 0) {
+    Node *val = args[1];
+    if (rmw_builtins[rmw].is_c11) {
+      Type *ty = pointee_type(args[0]);
+      if (ty->kind == TY_PTR)
+        val = new_binary(ND_MUL, new_cast(val, ty_long),
+                         new_long(ty->base->size, start), start);
+    }
+    return atomic_rmw(args[0], val, rmw_builtins[rmw].op,
+                      rmw_builtins[rmw].return_old, start);
+  }
+
+  // `T tmp = old;` then a compare-and-swap with &tmp, which leaves the
+  // value *p had in tmp.
+  if (equal(start, "__sync_val_compare_and_swap") ||
+      equal(start, "__sync_bool_compare_and_swap")) {
+    Obj *var = new_lvar("", pointee_type(args[0]));
+    Node *init = new_binary(ND_ASSIGN, new_var_node(var, start), args[1], start);
+    Node *cas = new_node(ND_CAS, start);
+    cas->cas_addr = args[0];
+    cas->cas_old = new_unary(ND_ADDR, new_var_node(var, start), start);
+    cas->cas_new = new_cast(args[2], var->ty);
+    if (equal(start, "__sync_bool_compare_and_swap"))
+      return new_binary(ND_COMMA, init, cas, start);
+    return new_binary(ND_COMMA, init,
+                      new_binary(ND_COMMA, cas, new_var_node(var, start), start),
+                      start);
+  }
+
+  if (equal(start, "__atomic_compare_exchange_n")) {
+    Node *cas = new_node(ND_CAS, start);
+    cas->cas_addr = args[0];
+    cas->cas_old = args[1];
+    cas->cas_new = new_cast(args[2], pointee_type(args[0]));
+    return cas;
+  }
+
+  // x86 loads are atomic, and xchg is a sequentially consistent store.
+  if (equal(start, "__atomic_load_n"))
+    return new_unary(ND_DEREF, args[0], start);
+  if (equal(start, "__atomic_exchange_n") ||
+      equal(start, "__sync_lock_test_and_set") ||
+      equal(start, "__atomic_store_n")) {
+    Node *val = new_cast(args[1], pointee_type(args[0]));
+    Node *exch = new_binary(ND_EXCH, args[0], val, start);
+    if (equal(start, "__atomic_store_n"))
+      return new_cast(exch, ty_void);
+    return exch;
+  }
+  if (equal(start, "__sync_lock_release"))
+    return new_cast(new_binary(ND_ASSIGN, new_unary(ND_DEREF, args[0], start),
+                               new_num(0, start), start),
+                    ty_void);
+
+  // On a byte, which becomes 1 or 0
+  if (equal(start, "__atomic_test_and_set") || equal(start, "__atomic_clear")) {
+    bool set = equal(start, "__atomic_test_and_set");
+    Node *exch = new_binary(ND_EXCH, new_cast(args[0], pointer_to(ty_uchar)),
+                            new_num(set, start), start);
+    return new_cast(exch, set ? ty_bool : ty_void);
+  }
+
+  // Only a sequentially consistent fence needs an instruction on x86;
+  // the others just keep the compiler from moving memory accesses,
+  // which mucc doesn't do. The order is __ATOMIC_SEQ_CST (5) or another.
+  if (equal(start, "__sync_synchronize"))
+    return new_node(ND_FENCE, start);
+  if (equal(start, "__atomic_thread_fence")) {
+    if (is_const_expr(args[0]) && eval(args[0]) != 5)
+      return void_node(start);
+    return new_node(ND_FENCE, start);
+  }
+  if (equal(start, "__atomic_signal_fence"))
+    return void_node(start);
+
+  // Objects of up to 8 bytes are lock-free.
+  assert(equal(start, "__atomic_always_lock_free") ||
+         equal(start, "__atomic_is_lock_free"));
+  return new_num(eval(args[0]) <= 8, start);
+}
+
 // __has_builtin(name) in the preprocessor
 bool is_known_builtin(char *name) {
-  return in_list(name, builtin_names, sizeof(builtin_names) / sizeof(*builtin_names));
+  Token tok = {.loc = name, .len = strlen(name)};
+  return in_list(name, builtin_names, sizeof(builtin_names) / sizeof(*builtin_names)) ||
+         is_gnu_builtin(&tok);
 }
 
 // primary = "(" "{" stmt+ "}" ")"
@@ -4829,6 +5249,11 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "__builtin_va_start") || equal(tok, "__builtin_va_end") ||
       equal(tok, "__builtin_va_copy") || equal(tok, "__builtin_va_arg"))
     return va_builtin(rest, tok);
+
+  // A program's own declaration of the name wins.
+  if (tok->kind == TK_IDENT && tok->loc[0] == '_' && equal(tok->next, "(") &&
+      is_gnu_builtin(tok) && !find_var(tok))
+    return gnu_builtin(rest, tok);
 
   // C23's unreachable() in <stddef.h>. Reaching it traps (ud2).
   if (equal(tok, "__builtin_unreachable")) {

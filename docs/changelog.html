@@ -1,0 +1,155 @@
+<!-- I USE AI AND DONT READ MY CODE -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="Releases and notable changes in Mucc, a small C compiler for x86-64 Linux.">
+<title>Mucc changelog</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+<h1><a href="./">Mucc</a></h1>
+<p>A small, fast, self-hosting C compiler for x86-64 Linux</p>
+</header>
+
+<div class="page">
+<nav aria-label="Site">
+  <h2>About Mucc</h2>
+  <ul>
+    <li><a href="./#intro">Introduction</a></li>
+    <li><a href="./#mission">Mission</a></li>
+    <li><a href="./#runs">Where it runs</a></li>
+    <li><a href="./#supports">What it supports</a></li>
+    <li><a href="./#stats">Statistics</a></li>
+  </ul>
+  <h2>Download</h2>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Latest release</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">All releases</a></li>
+    <li><a href="./#download">Install</a></li>
+  </ul>
+  <h2>News</h2>
+  <ul>
+    <li><a href="./#news">Recent news</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h2>Development</h2>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="./#bugs">Found a bug?</a></li>
+    <li><a href="./#contributing">Contributing</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/pulls">Pull requests</a></li>
+  </ul>
+  <h2>Legal</h2>
+  <ul>
+    <li><a href="./#license">License</a></li>
+    <li><a href="./#credits">Credits</a></li>
+  </ul>
+</nav>
+
+<main>
+
+<h2>Changelog</h2>
+<p>Releases and notable changes, newest first, taken from the
+<a href="https://github.com/Dom-Yan/Mucc/commits/main">commit history</a>.
+Downloads for each release are on the
+<a href="https://github.com/Dom-Yan/Mucc/releases">releases page</a>.</p>
+
+<h2 id="v1.0.1">Mucc 1.0.1 (September 29, 2026)</h2>
+<ul>
+  <li><code>mucc --version</code> prints the version.</li>
+  <li>A shorter README, with instructions to build mucc from source using
+    only mucc, without gcc.</li>
+</ul>
+
+<h2 id="v1.0.0">Mucc 1.0.0 (September 29, 2026)</h2>
+<p>The first release: a single static binary with its headers and musl
+inside, which needs nothing else installed.</p>
+<ul>
+  <li>CI tests everything, including Linux distributions and real
+    programs, and the release workflow publishes only the file that was
+    tested, after CI passed.</li>
+  <li>The README explains how to install without <code>sudo</code>, and how
+    to update and uninstall.</li>
+</ul>
+
+<h2>Development before 1.0</h2>
+<dl class="news">
+  <dt>September 28, 2026</dt>
+  <dd>
+    <ul>
+      <li><code>make build/mucc</code> makes a single binary with the C
+        library inside it. It is a static musl program that runs in an
+        empty container, and its default C library is the musl inside
+        it.</li>
+      <li><code>--libc=mucc</code> compiles and links against the bundled
+        musl.</li>
+      <li>The single binary builds SQLite, zlib, Lua and mucc itself on four
+        distributions, and rebuilds itself in an empty container.</li>
+      <li>A version tag publishes the single binary through the release
+        workflow.</li>
+      <li>Bugs found by gcc's torture tests are fixed. A VLA is freed when
+        its scope is left. A duplicate case value, or a second default, is
+        an error.</li>
+    </ul>
+  </dd>
+  <dt>September 27, 2026</dt>
+  <dd>
+    <ul>
+      <li>musl 1.2.6 is vendored, patched for CVE-2026-40200 and
+        CVE-2026-6042, and built by mucc alone with
+        <code>make libc</code>.</li>
+      <li>musl's libc-test runs against the musl that mucc builds, and the
+        long double and NaN bugs it found are fixed.</li>
+      <li>The assembler handles musl's x86-64 <code>.s</code> files.</li>
+      <li>Varargs and arguments on the stack follow the psABI.</li>
+    </ul>
+  </dd>
+  <dt>September 24, 2026</dt>
+  <dd>
+    <ul>
+      <li>Git builds with mucc and passes its tests. CPython and Git results
+        are added to the README and site.</li>
+      <li>C17 is the default, and <code>-std=</code> chooses the
+        standard.</li>
+      <li>GNU attributes are parsed wherever gcc accepts them, and many are
+        implemented: aligned, packed, weak, used, constructor, destructor,
+        cleanup, alias, section and visibility.</li>
+      <li>GNU <code>asm</code> with operands and register variables.</li>
+      <li>An archiver: <code>mucc -ar</code> and
+        <code>mucc -ranlib</code>.</li>
+      <li><code>--libc=system</code>, and line markers in <code>-E</code>
+        output.</li>
+    </ul>
+  </dd>
+  <dt>September 23, 2026</dt>
+  <dd>
+    <ul>
+      <li>Initial commit: a small self-hosting C11 compiler for x86-64
+        Linux.</li>
+      <li>A built-in assembler and a built-in static linker.</li>
+      <li>Hot variables kept in registers, constant folding, and faster
+        tokenizing and memory allocation.</li>
+      <li>Reproducible builds, and every error in a file is reported, not
+        just the first.</li>
+      <li>GitHub Actions CI and this website.</li>
+    </ul>
+  </dd>
+</dl>
+
+</main>
+</div>
+
+<footer>
+<p>Mucc&trade; and Dom-Yan&trade; are trademarks of Dominick.</p>
+<p>Mucc is released under the MIT License. See the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">LICENSE</a> file.</p>
+</footer>
+
+</body>
+</html>

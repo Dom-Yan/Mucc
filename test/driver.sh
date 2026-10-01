@@ -357,6 +357,52 @@ $mucc -c -MD -o $tmp/objdir/md4.o $tmp/md4.c
 grep -q 'md4\.c' $tmp/objdir/md4.d
 check '-MD with -o in another directory'
 
+# A dependency file doesn't end with a blank line (Linux's fixdep fails
+# on one), and -MP's targets are separated by blank lines, as with gcc.
+[ -n "$(tail -n 1 $tmp/objdir/md4.d)" ] && [ -n "$(tail -n 1 $tmp/mp)" ]
+check 'no blank line at the end of a dependency file'
+[ "$(grep -c '^$' $tmp/mp)" -eq 2 ]
+check '-MP blank lines'
+
+# -Wp,-MD,file, as Linux's kbuild writes it
+$mucc -c -Wp,-MD,$tmp/wp.d -o $tmp/wp.o -I$tmp $tmp/md2.c
+grep -q -z '^md2.o:.*md2\.c .*/out2\.h' $tmp/wp.d
+check -Wp,-MD
+$mucc -E -Wp,-DWP=42 -xc - <<< 'WP' | grep -q 42
+check -Wp,-D
+
+# -pthread defines _REENTRANT and links the threads library.
+printf '#ifndef _REENTRANT\n#error\n#endif\nint main() { return 0; }\n' > $tmp/pthread.c
+$mucc -pthread -o $tmp/pthread $tmp/pthread.c && $tmp/pthread
+check -pthread
+
+# Options that only tune optimization, diagnostics or hardening are
+# accepted.
+$mucc -pedantic -fvisibility=hidden -ffunction-sections -fdata-sections \
+  -fwrapv -fPIE -fno-plt -fstack-protector-strong -fcf-protection=full \
+  -c -o $tmp/ignored.o $tmp/empty.c
+check 'tuning and hardening options'
+
+# Linker flags that mean nothing in a static program don't need the
+# system linker.
+if [ $musl ]; then
+    echo 'int main() { return 0; }' > $tmp/wl.c
+    $mucc -o $tmp/wl $tmp/wl.c -rdynamic -Wl,--gc-sections,--as-needed \
+      -Wl,-z,relro,-z,now,-O1,--build-id,--start-group,--end-group \
+      -Wl,--hash-style=gnu 2> $tmp/wl.err && $tmp/wl && [ ! -s $tmp/wl.err ]
+    check 'harmless -Wl, flags with the built-in linker'
+fi
+
+# -nostdlib: a program with its own _start, and no C library
+cat > $tmp/nostdlib.c <<'EOF'
+void _start(void) {
+  __asm__ volatile("mov $60, %eax; mov $7, %edi; syscall");
+}
+EOF
+$mucc -nostdlib -static -o $tmp/nostdlib $tmp/nostdlib.c
+$tmp/nostdlib; [ $? -eq 7 ]
+check -nostdlib
+
 echo 'extern int bar; int foo() { return bar; }' | $mucc -fPIC -xc -c -o $tmp/foo.o -
 cc -shared -o $tmp/foo.so $tmp/foo.o
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/main.c
