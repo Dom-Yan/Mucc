@@ -14,7 +14,7 @@ Website: <https://dom-yan.github.io/Mucc/>
 
 - **Fast builds.** It compiles about 4.5x faster than `gcc -O0` and 17x
   faster than `gcc -O2`.
-- **Nothing to install.** One 7 MB file is the whole toolchain. It works in
+- **Nothing to install.** One 11 MB file is the whole toolchain. It works in
   an empty container, on old distributions and on machines with no compiler.
 - **Small enough to read.** About 18,000 lines of C that you can understand
   end to end.
@@ -118,9 +118,9 @@ for no `sudo`), and `make uninstall` removes it.
 | | |
 | --- | --- |
 | Source | 19,385 lines of C in 13 files |
-| Released binary | about 7 MB, with musl inside |
+| Released binary | about 11 MB, with musl and Linux's headers inside |
 | Compiling its own source | 0.20 s (gcc `-O0`: 0.91 s, gcc `-O2`: 3.54 s) |
-| Tests | 50 programs with 1,899 assertions, plus 262 command-line, error, assembler and linker checks |
+| Tests | 51 programs with 1,914 assertions, plus 262 command-line, error, assembler and linker checks |
 | Real programs | CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC |
 | Self-hosting | a mucc built by mucc builds a byte-identical mucc |
 
@@ -141,6 +141,9 @@ Times are from WSL 2 on Ubuntu with gcc 15.2.
   `cpuid`, `rdtsc`, `rdmsr`, `lgdt`, `cli`, `iretq` and other system
   instructions, all assembled without binutils
 - Assembly files: `.s`, and `.S`, which go through the preprocessor first
+- Linux's own headers (`<linux/*.h>`, `<asm/*.h>`, ...) come with the
+  bundled musl, for programs that use the kernel directly: USB through
+  usbfs, input devices, netlink, ioctls
 - Not supported: C++, `_Complex`, `__int128`, `_BitInt`, `asm goto`, K&R
   function definitions, optimization beyond register allocation and
   constant folding
@@ -167,3 +170,8 @@ check `--libc=system`.
 ## License
 
 MIT. See [LICENSE](LICENSE). musl, in `thirdparty/musl/`, is MIT too.
+
+Linux's headers, in `thirdparty/linux-headers/`, which the released
+binary carries, are the kernel's: GPL-2.0 WITH Linux-syscall-note. That
+note says programs that use the kernel through them aren't derived works
+of it, so they don't change the license of mucc or of programs it builds.

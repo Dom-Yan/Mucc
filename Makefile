@@ -132,7 +132,10 @@ selfhost: $(OBJNAMES:%=$(S3)/%) $(OBJNAMES:%=$(S2)/%)
 # depend on the compiler. MUSL_BUILD is set at the top. Its headers go in
 # $(MUSL_BUILD)/include and the rest in $(MUSL_BUILD)/lib, where
 # --libc=mucc finds them, with musl's empty libm.a, libpthread.a, ... so
-# -lm and -lpthread work as with glibc.
+# -lm and -lpthread work as with glibc. Linux's own headers (<linux/*.h>,
+# <asm/*.h>, ..., from thirdparty/linux-headers) go in with musl's, as a
+# distribution's linux-headers package does, for programs that talk to
+# the kernel directly.
 
 libc: $(MUSL_BUILD)/lib/libc.a
 
@@ -153,6 +156,8 @@ $(MUSL_BUILD)/lib/libc.a: mucc
 	  $(patsubst %,lib/lib%.a,m rt pthread crypt util xnet resolv dl)
 	$(MAKE) -C $(MUSL_BUILD) install-headers DESTDIR= \
 	  includedir=$(CURDIR)/$(MUSL_BUILD)/include > /dev/null
+	cp -R thirdparty/linux-headers/include/. thirdparty/linux-headers/case/. \
+	  $(MUSL_BUILD)/include/
 
 # The single binary
 #
