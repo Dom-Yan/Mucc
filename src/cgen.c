@@ -1442,6 +1442,8 @@ static void gen_expr(Node *node) {
     if (local_scalar(node->lhs)) {
       gen_expr(node->rhs);
       store_to(node->ty, var_operand(node->lhs->var));
+      if (node->lhs->ty->is_atomic)
+        println("  mfence"); // see below
       return;
     }
 
@@ -1483,6 +1485,11 @@ static void gen_expr(Node *node) {
     }
 
     store(node->ty);
+
+    // A store to an atomic object is sequentially consistent: no later
+    // load may be done before it, which x86 allows without a fence.
+    if (node->lhs->ty->is_atomic)
+      println("  mfence");
     return;
   case ND_STMT_EXPR:
     // The value of the last statement, if it's an expression, is the
@@ -1674,6 +1681,72 @@ static void gen_expr(Node *node) {
     return;
   case ND_UNREACHABLE:
     println("  ud2");
+    return;
+  case ND_CLZ:
+    // bsr finds the highest one bit; its index from the top is the count.
+    // (As with gcc, the result for 0 is undefined.)
+    gen_expr(node->lhs);
+    if (node->lhs->ty->size == 8) {
+      println("  bsr %%rax, %%rax");
+      println("  xor $63, %%eax");
+    } else {
+      println("  bsr %%eax, %%eax");
+      println("  xor $31, %%eax");
+    }
+    return;
+  case ND_CTZ:
+    gen_expr(node->lhs);
+    if (node->lhs->ty->size == 8)
+      println("  bsf %%rax, %%rax");
+    else
+      println("  bsf %%eax, %%eax");
+    return;
+  case ND_POPCOUNT:
+    // Counted in parallel within 2-, 4- and 8-bit fields, then summed by
+    // a multiply, without popcnt, which older x86-64 CPUs lack.
+    gen_expr(node->lhs);
+    if (node->lhs->ty->size < 8)
+      println("  mov %%eax, %%eax");
+    println("  mov %%rax, %%rdx");
+    println("  shr $1, %%rdx");
+    println("  mov $%ld, %%rcx", 0x5555555555555555L);
+    println("  and %%rcx, %%rdx");
+    println("  sub %%rdx, %%rax");
+    println("  mov $%ld, %%rcx", 0x3333333333333333L);
+    println("  mov %%rax, %%rdx");
+    println("  shr $2, %%rdx");
+    println("  and %%rcx, %%rax");
+    println("  and %%rcx, %%rdx");
+    println("  add %%rdx, %%rax");
+    println("  mov %%rax, %%rdx");
+    println("  shr $4, %%rdx");
+    println("  add %%rdx, %%rax");
+    println("  mov $%ld, %%rcx", 0x0f0f0f0f0f0f0f0fL);
+    println("  and %%rcx, %%rax");
+    println("  mov $%ld, %%rcx", 0x0101010101010101L);
+    println("  imul %%rcx, %%rax");
+    println("  shr $56, %%rax");
+    return;
+  case ND_BSWAP:
+    gen_expr(node->lhs);
+    if (node->ty->size == 8) {
+      println("  bswap %%rax");
+    } else if (node->ty->size == 4) {
+      println("  bswap %%eax");
+    } else {
+      println("  bswap %%eax");
+      println("  shr $16, %%eax");
+    }
+    return;
+  case ND_FENCE:
+    println("  mfence");
+    return;
+  case ND_FRAME_ADDR:
+    // Every function keeps its caller's %rbp at 0(%rbp) (see the
+    // prologue), so frames are followed up the chain.
+    println("  mov %%rbp, %%rax");
+    for (int i = 0; i < node->val; i++)
+      println("  mov (%%rax), %%rax");
     return;
   case ND_VA_ARG:
     gen_va_arg(node);

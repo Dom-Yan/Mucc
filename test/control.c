@@ -107,6 +107,12 @@ int main() {
   ASSERT(2, ({ static void *p[]={&&v52,&&v52,&&v53}; int i=0; goto *p[1]; v51:i++; v52:i++; v53:i++; i; }));
   ASSERT(1, ({ static void *p[]={&&v62,&&v62,&&v63}; int i=0; goto *p[2]; v61:i++; v62:i++; v63:i++; i; }));
 
+  // [GNU] A statement expression whose last statement isn't an
+  // expression has type void.
+  ASSERT(3, ({ int x = 1; ({ if (x) x = 3; }); x; }));
+  ASSERT(2, ({ int x = 0; ({ for (int i = 0; i < 2; i++) x++; }); x; }));
+  ASSERT(5, ({ int x = 5; ({ int y = 1; }); ({}); x; }));
+
   printf("OK\n");
   return 0;
 }

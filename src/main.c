@@ -41,6 +41,9 @@ static bool opt_system_ld;             // -fuse-ld=...: always run `ld`
 static bool opt_hash_hash_hash;
 static bool opt_static;
 static bool opt_shared;
+static bool opt_pthread;       // -pthread: also link -lpthread
+static bool opt_nostartfiles;  // -nostartfiles or -nostdlib: no crt*.o
+static bool opt_nodefaultlibs; // -nodefaultlibs or -nostdlib: no libc
 static char *opt_MF;
 static char *opt_MT;
 static char *opt_o;
@@ -354,6 +357,74 @@ static void set_std(int argc, char **argv) {
   }
 }
 
+// Options that only tune optimization, diagnostics or hardening, which
+// a correct program doesn't depend on, so they're accepted and ignored.
+// A name ending in '*' is a prefix.
+static char *ignored_options[] = {
+  "-O*", "-W*", "-g*", "-m64", "-mno-red-zone", "-pipe",
+  "-pedantic", "-pedantic-errors",
+  "-ffreestanding", "-fno-builtin*", "-fno-omit-frame-pointer",
+  "-fomit-frame-pointer", "-fno-strict-aliasing", "-fstrict-aliasing",
+  "-fstack-protector*", "-fno-stack-protector", "-fstack-clash-protection",
+  "-fno-stack-clash-protection", "-fcf-protection*", "-fno-plt", "-fplt",
+  "-fvisibility=*", "-ffunction-sections", "-fdata-sections",
+  "-fno-function-sections", "-fno-data-sections",
+  "-fwrapv", "-fno-strict-overflow", "-fno-delete-null-pointer-checks",
+  "-fno-math-errno", "-fexceptions", "-fno-exceptions",
+  "-funwind-tables", "-fno-unwind-tables", "-fasynchronous-unwind-tables",
+  "-fno-asynchronous-unwind-tables", "-fdiagnostics-*", "-fmessage-length=*",
+  "-fno-ident", "-fno-semantic-interposition", "-fsigned-char",
+  "-fno-lto", "-flto*", "-fno-pie", "-fno-PIE", "-no-pie",
+  // mucc makes non-PIE executables, which -fPIE objects would only be
+  // linked into anyway.
+  "-fpie", "-fPIE",
+};
+
+static bool is_ignored_option(char *arg) {
+  for (int i = 0; i < sizeof(ignored_options) / sizeof(*ignored_options); i++) {
+    char *name = ignored_options[i];
+    int len = strlen(name);
+    if (name[len - 1] == '*' ? !strncmp(arg, name, len - 1) : !strcmp(arg, name))
+      return true;
+  }
+  return false;
+}
+
+// -Wp,-MD,file and the like pass options to the preprocessor, which is
+// mucc itself. (Linux's kbuild writes dependency files this way.)
+static void parse_wp(char *arg) {
+  StringArray opts = {};
+  for (char *s = strtok(strdup(arg), ","); s; s = strtok(NULL, ","))
+    strarray_push(&opts, s);
+
+  for (int i = 0; i < opts.len; i++) {
+    char *opt = opts.data[i];
+    char *next = (i + 1 < opts.len) ? opts.data[i + 1] : NULL;
+    if (!strcmp(opt, "-MD") || !strcmp(opt, "-MMD")) {
+      opt_MD = true;
+      opt_MMD = opt_MMD || !strcmp(opt, "-MMD");
+      if (next && next[0] != '-') {
+        opt_MF = next;
+        i++;
+      }
+    } else if (!strcmp(opt, "-MF") && next) {
+      opt_MF = next;
+      i++;
+    } else if (!strcmp(opt, "-MT") && next) {
+      opt_MT = opt_MT ? format("%s %s", opt_MT, next) : next;
+      i++;
+    } else if (!strcmp(opt, "-MP")) {
+      opt_MP = true;
+    } else if (!strncmp(opt, "-D", 2) && opt[2]) {
+      define(opt + 2);
+    } else if (!strncmp(opt, "-U", 2) && opt[2]) {
+      undef_macro(opt + 2);
+    } else {
+      error("unknown argument: -Wp,%s", arg);
+    }
+  }
+}
+
 static void parse_args(int argc, char **argv) {
   // Make sure that all command line options that take an argument
   // have an argument.
@@ -614,22 +685,49 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    if (!strncmp(argv[i], "-Wp,", 4)) {
+      parse_wp(argv[i] + 4);
+      continue;
+    }
+
+    // As with gcc, -pthread defines _REENTRANT and links -lpthread (an
+    // empty library in glibc 2.34 and later, and in musl).
+    if (!strcmp(argv[i], "-pthread")) {
+      define("_REENTRANT");
+      opt_pthread = true;
+      continue;
+    }
+
+    // Linking without the C library's startup files (crt1.o, ...) or its
+    // libraries, for programs that bring their own _start.
+    if (!strcmp(argv[i], "-nostdlib")) {
+      opt_nostartfiles = opt_nodefaultlibs = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-nostartfiles")) {
+      opt_nostartfiles = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-nodefaultlibs")) {
+      opt_nodefaultlibs = true;
+      continue;
+    }
+
+    // Exporting symbols for dlopen()ed modules: nothing to do in a static
+    // program; see static_noop_flag().
+    if (!strcmp(argv[i], "-rdynamic")) {
+      add_input("-Wl,--export-dynamic");
+      continue;
+    }
+
     if (!strcmp(argv[i], "-hashmap-test")) {
       hashmap_test();
       exit(0);
     }
 
-    // These options are ignored for now.
-    if (!strncmp(argv[i], "-O", 2) ||
-        !strncmp(argv[i], "-W", 2) ||
-        !strncmp(argv[i], "-g", 2) ||
-        !strcmp(argv[i], "-ffreestanding") ||
-        !strcmp(argv[i], "-fno-builtin") ||
-        !strcmp(argv[i], "-fno-omit-frame-pointer") ||
-        !strcmp(argv[i], "-fno-stack-protector") ||
-        !strcmp(argv[i], "-fno-strict-aliasing") ||
-        !strcmp(argv[i], "-m64") ||
-        !strcmp(argv[i], "-mno-red-zone"))
+    if (is_ignored_option(argv[i]))
       continue;
 
     // mucc emits only baseline x86-64 instructions, which every x86-64
@@ -918,13 +1016,15 @@ static void print_dependencies(void) {
     fprintf(out, " \\\n  %s", files[i]->name);
   }
 
-  fprintf(out, "\n\n");
+  fprintf(out, "\n");
 
+  // As with gcc, -MP's targets are separated by blank lines, and the
+  // file doesn't end with one (Linux's fixdep reads it line by line).
   if (opt_MP) {
     for (int i = 1; files[i]; i++) {
       if (!is_dependency(files[i]->name))
         continue;
-      fprintf(out, "%s:\n\n", quote_makefile(files[i]->name));
+      fprintf(out, "\n%s:\n", quote_makefile(files[i]->name));
     }
   }
 }
@@ -1141,17 +1241,36 @@ static void push_gcc_file(StringArray *arr, char *gcc_libpath, char *name) {
     strarray_push(arr, format("%s/%s", gcc_libpath, name));
 }
 
-// Linker flags that do nothing in a static program, as with ld -static:
-// -E (--export-dynamic, which Lua links with) and -rpath DIR (Tcl).
-// Returns how many arguments the flag at inputs[i] takes, or 0 if it's
-// not one of them.
+// Linker flags that do nothing in a static program mucc's linker makes:
+// dynamic linking options like -E (--export-dynamic, which Lua links
+// with) and -rpath DIR (Tcl), grouping (it searches all archives as one
+// group anyway), and hardening and size options build systems add, like
+// -z relro and --gc-sections. A name ending in '*' is a prefix.
+static char *static_noop_flags[] = {
+  "-E", "--export-dynamic", "-export-dynamic", "-rpath=*", "--rpath=*",
+  "--start-group", "--end-group", "-(", "-)", "--as-needed",
+  "--no-as-needed", "--push-state", "--pop-state", "-Bstatic", "-Bdynamic",
+  "-Bsymbolic*", "--gc-sections", "--no-gc-sections", "-O*", "--sort-common*",
+  "--hash-style=*", "--build-id*", "--no-undefined", "--warn-common",
+  "--enable-new-dtags", "--disable-new-dtags", "--eh-frame-hdr", "--relax",
+  "--no-relax", "--fatal-warnings", "--no-copy-dt-needed-entries",
+  "--compress-debug-sections=*", "--icf=*", "-z*", "--version-script=*",
+};
+
+// Returns how many arguments the flag at inputs[i] takes if it's one of
+// static_noop_flags[], or 0.
 static int static_noop_flag(StringArray *inputs, int i) {
   char *arg = inputs->data[i];
-  if (!strcmp(arg, "-E") || !strcmp(arg, "--export-dynamic") ||
-      !strncmp(arg, "-rpath=", 7))
-    return 1;
-  if (!strcmp(arg, "-rpath") && i + 1 < inputs->len)
+  bool has_next = i + 1 < inputs->len;
+  if ((!strcmp(arg, "-rpath") || !strcmp(arg, "-rpath-link") ||
+       !strcmp(arg, "-z") || !strcmp(arg, "--version-script")) && has_next)
     return 2;
+  for (int k = 0; k < sizeof(static_noop_flags) / sizeof(*static_noop_flags); k++) {
+    char *name = static_noop_flags[k];
+    int len = strlen(name);
+    if (name[len - 1] == '*' ? !strncmp(arg, name, len - 1) : !strcmp(arg, name))
+      return 1;
+  }
   return 0;
 }
 
@@ -1181,8 +1300,11 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
       i += n - 1;
       continue;
     }
-    if (inputs->data[i][0] == '-' && strncmp(inputs->data[i], "-l", 2))
+    if (inputs->data[i][0] == '-' && strncmp(inputs->data[i], "-l", 2)) {
+      fprintf(stderr, "mucc: note: using the system linker for %s\n",
+              inputs->data[i]);
       return false;
+    }
     strarray_push(&objs, inputs->data[i]);
   }
 
@@ -1192,18 +1314,23 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
 
   // Objects compiled from C files are named after them in messages.
   StringArray files = {}, names = {};
-  strarray_push(&files, format("%s/crt1.o", libpath));
-  strarray_push(&files, format("%s/crti.o", libpath));
-  push_gcc_file(&files, gcc_libpath, "crtbegin.o");
+  if (!opt_nostartfiles) {
+    strarray_push(&files, format("%s/crt1.o", libpath));
+    strarray_push(&files, format("%s/crti.o", libpath));
+    push_gcc_file(&files, gcc_libpath, "crtbegin.o");
+  }
   while (names.len < files.len)
     strarray_push(&names, NULL);
   for (int i = 0; i < objs.len; i++) {
     strarray_push(&files, objs.data[i]);
     strarray_push(&names, hashmap_get(&object_sources, objs.data[i]));
   }
-  push_all(&files, libc->static_libs);
-  push_gcc_file(&files, gcc_libpath, "crtend.o");
-  strarray_push(&files, format("%s/crtn.o", libpath));
+  if (!opt_nodefaultlibs)
+    push_all(&files, libc->static_libs);
+  if (!opt_nostartfiles) {
+    push_gcc_file(&files, gcc_libpath, "crtend.o");
+    strarray_push(&files, format("%s/crtn.o", libpath));
+  }
   while (names.len < files.len)
     strarray_push(&names, NULL);
 
@@ -1254,7 +1381,9 @@ static void run_linker(StringArray *inputs, char *output) {
   char *libpath = find_libpath();
   char *gcc_libpath = find_gcc_libpath();
 
-  if (opt_shared) {
+  if (opt_nostartfiles) {
+    // none
+  } else if (opt_shared) {
     strarray_push(&arr, format("%s/crti.o", libpath));
     push_gcc_file(&arr, gcc_libpath, "crtbeginS.o");
   } else {
@@ -1279,7 +1408,9 @@ static void run_linker(StringArray *inputs, char *output) {
   for (int i = 0; i < inputs->len; i++)
     strarray_push(&arr, inputs->data[i]);
 
-  if (opt_static) {
+  if (opt_nodefaultlibs) {
+    // none
+  } else if (opt_static) {
     strarray_push(&arr, "--start-group");
     push_all(&arr, libc->static_libs);
     strarray_push(&arr, "--end-group");
@@ -1287,12 +1418,13 @@ static void run_linker(StringArray *inputs, char *output) {
     push_all(&arr, libc->shared_libs);
   }
 
-  if (opt_shared)
-    push_gcc_file(&arr, gcc_libpath, "crtendS.o");
-  else
-    push_gcc_file(&arr, gcc_libpath, "crtend.o");
-
-  strarray_push(&arr, format("%s/crtn.o", libpath));
+  if (!opt_nostartfiles) {
+    if (opt_shared)
+      push_gcc_file(&arr, gcc_libpath, "crtendS.o");
+    else
+      push_gcc_file(&arr, gcc_libpath, "crtend.o");
+    strarray_push(&arr, format("%s/crtn.o", libpath));
+  }
   strarray_push(&arr, NULL);
 
   run_subprocess(arr.data);
@@ -1451,7 +1583,10 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (ld_args.len > 0)
+  if (ld_args.len > 0) {
+    if (opt_pthread && !opt_nodefaultlibs)
+      strarray_push(&ld_args, "-lpthread");
     run_linker(&ld_args, opt_o ? opt_o : "a.out");
+  }
   return 0;
 }

@@ -1531,6 +1531,12 @@ static char *format_time(struct tm *tm) {
 void init_macros(void) {
   // Define predefined macros
   define_macro("_LP64", "1");
+  define_macro("__ATOMIC_ACQUIRE", "2"); // memory orders for __atomic_*
+  define_macro("__ATOMIC_ACQ_REL", "4");
+  define_macro("__ATOMIC_CONSUME", "1");
+  define_macro("__ATOMIC_RELAXED", "0");
+  define_macro("__ATOMIC_RELEASE", "3");
+  define_macro("__ATOMIC_SEQ_CST", "5");
   define_macro("__C99_MACRO_WITH_VA_ARGS", "1");
   define_macro("__ELF__", "1");
   define_macro("__LP64__", "1");
@@ -1555,6 +1561,7 @@ void init_macros(void) {
   define_macro("__amd64", "1");
   define_macro("__amd64__", "1");
   define_macro("__mucc__", "1");
+  define_macro("__builtin_alloca", "alloca"); // as musl's <alloca.h> uses
   define_macro("__const__", "const");
   define_macro("__extension__", ""); // only quiets gcc's -pedantic
   define_macro("__gnu_linux__", "1");

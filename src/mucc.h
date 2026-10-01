@@ -262,6 +262,12 @@ typedef enum {
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
   ND_UNREACHABLE, // __builtin_unreachable() (C23 unreachable())
+  ND_CLZ,       // [GNU] __builtin_clz: leading zero bits of lhs
+  ND_CTZ,       // [GNU] __builtin_ctz: trailing zero bits of lhs
+  ND_POPCOUNT,  // [GNU] __builtin_popcount: one bits in lhs
+  ND_BSWAP,     // [GNU] __builtin_bswap16/32/64: lhs's bytes reversed
+  ND_FENCE,     // [GNU] __sync_synchronize(): a full memory barrier
+  ND_FRAME_ADDR, // [GNU] __builtin_frame_address(val)
   ND_VA_ARG,    // va_arg(): the next argument's address
   ND_VLA_FREE,  // Free VLAs back to the stack bottom in lhs
 } NodeKind;

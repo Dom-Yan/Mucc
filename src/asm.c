@@ -723,7 +723,10 @@ typedef enum {
   UNARY,    // not neg mul div idiv (F6/F7): op is the /digit
   INCDEC,   // inc dec (FE/FF): op is the /digit
   IMUL,     // imul, one or two operands
-  REG_RM,   // bsf, bsr (and imul's two-operand form): 0F op, into a register
+  REG_RM,   // bsf, bsr, popcnt, ... (and imul's two-operand form): 0F op,
+            // into a register, after prefix `pre` if it has one
+  BSWAP,    // bswap: 0F C8+r
+  IO,       // in, out: op is the opcode with an imm8 port (E4 or E6)
   MOV,
   MOVX,     // movsbl, movzwl, ...: op is the second opcode byte
   MOVXX,    // movzb, movzx, movsx: size from the operands; op for byte source
@@ -767,6 +770,10 @@ static Insn insns[] = {
   {"inc", INCDEC, 0}, {"dec", INCDEC, 1},
   {"imul", IMUL, 0xaf},
   {"bsf", REG_RM, 0xbc}, {"bsr", REG_RM, 0xbd},
+  {"popcnt", REG_RM, 0xb8, 0, 0xf3}, {"lzcnt", REG_RM, 0xbd, 0, 0xf3},
+  {"tzcnt", REG_RM, 0xbc, 0, 0xf3},
+  {"bswap", BSWAP},
+  {"in", IO, 0xe4}, {"out", IO, 0xe6},
   {"mov", MOV},
   {"movsbw", MOVX, 0xbe, 2}, {"movsbl", MOVX, 0xbe, 4}, {"movsbq", MOVX, 0xbe, 8},
   {"movswl", MOVX, 0xbf, 4}, {"movswq", MOVX, 0xbf, 8},
@@ -797,6 +804,26 @@ static Insn insns[] = {
   {"std", FIXED, 1, .bytes = {0xfd}},
   {"hlt", FIXED, 1, .bytes = {0xf4}},
   {"pause", FIXED, 2, .bytes = {0xf3, 0x90}},
+  {"mfence", FIXED, 3, .bytes = {0x0f, 0xae, 0xf0}},
+  {"lfence", FIXED, 3, .bytes = {0x0f, 0xae, 0xe8}},
+  {"sfence", FIXED, 3, .bytes = {0x0f, 0xae, 0xf8}},
+  {"cpuid", FIXED, 2, .bytes = {0x0f, 0xa2}},
+  {"rdtsc", FIXED, 2, .bytes = {0x0f, 0x31}},
+  {"rdtscp", FIXED, 3, .bytes = {0x0f, 0x01, 0xf9}},
+  {"rdpmc", FIXED, 2, .bytes = {0x0f, 0x33}},
+  {"xgetbv", FIXED, 3, .bytes = {0x0f, 0x01, 0xd0}},
+  {"int3", FIXED, 1, .bytes = {0xcc}},
+  // System instructions, for kernels and firmware
+  {"cli", FIXED, 1, .bytes = {0xfa}},
+  {"sti", FIXED, 1, .bytes = {0xfb}},
+  {"clts", FIXED, 2, .bytes = {0x0f, 0x06}},
+  {"invd", FIXED, 2, .bytes = {0x0f, 0x08}},
+  {"wbinvd", FIXED, 2, .bytes = {0x0f, 0x09}},
+  {"rdmsr", FIXED, 2, .bytes = {0x0f, 0x32}},
+  {"wrmsr", FIXED, 2, .bytes = {0x0f, 0x30}},
+  {"swapgs", FIXED, 3, .bytes = {0x0f, 0x01, 0xf8}},
+  {"iretq", FIXED, 2, .bytes = {0x48, 0xcf}},
+  {"sysretq", FIXED, 3, .bytes = {0x48, 0x0f, 0x07}},
   {"fnclex", FIXED, 2, .bytes = {0xdb, 0xe2}},
   {"faddp", FIXED, 2, .bytes = {0xde, 0xc1}},
   {"fmulp", FIXED, 2, .bytes = {0xde, 0xc9}},
@@ -841,6 +868,11 @@ static Insn insns[] = {
   {"fldenv", X87, 0xd9, .ext = 4}, {"fnstenv", X87, 0xd9, .ext = 6},
   {"fnstsw", X87, 0xdd, .ext = 7},
   {"ldmxcsr", X87, 0x0fae, .ext = 2}, {"stmxcsr", X87, 0x0fae, .ext = 3},
+  {"fxsave", X87, 0x0fae, .ext = 0}, {"fxrstor", X87, 0x0fae, .ext = 1},
+  {"clflush", X87, 0x0fae, .ext = 7},
+  {"sgdt", X87, 0x0f01, .ext = 0}, {"sidt", X87, 0x0f01, .ext = 1},
+  {"lgdt", X87, 0x0f01, .ext = 2}, {"lidt", X87, 0x0f01, .ext = 3},
+  {"invlpg", X87, 0x0f01, .ext = 7},
   {"fstp", FSTP},
   {"cmpxchg", CMPXCHG, 0xb0}, {"xadd", CMPXCHG, 0xc0},
   {"xchg", XCHG},
@@ -890,7 +922,8 @@ static Insn *find_insn(char *name, int len) {
     return NULL;
   switch (insn->kind) {
   case ALU: case SHIFT: case UNARY: case INCDEC: case IMUL: case MOV:
-  case LEA: case PUSH: case TEST: case CMPXCHG: case XCHG: case REG_RM: {
+  case LEA: case PUSH: case TEST: case CMPXCHG: case XCHG: case REG_RM:
+  case BSWAP: case IO: {
     Insn *sized = calloc(1, sizeof(Insn));
     *sized = *insn;
     sized->size = 1 << (s - suffix);
@@ -1200,10 +1233,45 @@ static void instruction(char *name, int len) {
       fail("unsupported operands");
     int size = op_size(insn, ops, n);
     operand_prefixes(ops, n, size);
+    if (insn->pre)
+      out(insn->pre);
     rex(size == 8, ops[1].reg->num, &ops[0], false);
     out(0x0f);
     out(insn->op);
     modrm(ops[1].reg->num, &ops[0], 0);
+    return;
+  }
+  case BSWAP: {
+    if (n != 1 || !is_gp(&ops[0]) || ops[0].reg->size < 4)
+      fail("expected a 32- or 64-bit register");
+    rex(ops[0].reg->size == 8, 0, &ops[0], false);
+    out(0x0f);
+    out(0xc8 + (ops[0].reg->num & 7));
+    return;
+  }
+  case IO: {
+    // in port, %al/%ax/%eax; out %al/%ax/%eax, port. The port is an
+    // imm8 or %dx.
+    if (n != 2)
+      fail("expected 2 operands");
+    bool is_in = insn->op == 0xe4;
+    Operand *acc = is_in ? &ops[1] : &ops[0];
+    Operand *port = is_in ? &ops[0] : &ops[1];
+    if (!is_gp(acc) || acc->reg->num != 0 || acc->reg->size == 8)
+      fail("expected %%al, %%ax or %%eax");
+    int size = acc->reg->size;
+    if (insn->size && insn->size != size)
+      fail("operand size mismatch");
+    if (size == 2)
+      out(0x66);
+    if (is_gp(port) && port->reg->num == 2 && port->reg->size == 2) {
+      out(insn->op + 8 + (size != 1));
+      return;
+    }
+    if (port->kind != OP_IMM || port->sym || port->val < 0 || port->val > 255)
+      fail("expected a port number from 0 to 255 or %%dx");
+    out(insn->op + (size != 1));
+    out(port->val);
     return;
   }
   case MOV:

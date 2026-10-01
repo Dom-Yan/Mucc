@@ -354,6 +354,51 @@ func:
   imul %rcx, %rax
   imul (%rdi), %r11d
 
+  # __builtin_bswap*, __sync_synchronize and other instructions inline
+  # asm uses
+  bswap %eax
+  bswap %rax
+  bswap %r9d
+  bswap %r12
+  popcnt %ecx, %eax
+  popcnt (%rdi), %r10
+  popcntw %si, %dx
+  lzcnt %rcx, %rax
+  tzcnt %r8d, %eax
+  mfence; lfence; sfence
+  cpuid
+  rdtsc
+  rdtscp
+  rdpmc
+  xgetbv
+  int3
+  clflush (%rdi)
+  fxsave (%rsp)
+  fxrstor 16(%r9)
+
+  # system instructions and port I/O, for kernels and drivers
+  cli; sti
+  clts; invd; wbinvd
+  rdmsr; wrmsr
+  swapgs
+  iretq
+  sysretq
+  lgdt (%rax)
+  lidt 8(%rdi)
+  sgdt (%r10)
+  sidt (%rsp)
+  invlpg (%rdi)
+  inb %dx, %al
+  inw %dx, %ax
+  inl %dx, %eax
+  in $0x60, %al
+  inl $0xcf, %eax
+  outb %al, %dx
+  outw %ax, %dx
+  out %eax, %dx
+  outb %al, $0x80
+  outw %ax, $0x70
+
   # atomics and misc
   lock cmpxchg %edx, (%rdi)
   lock cmpxchg %rdx, (%rdi)

@@ -24,27 +24,34 @@ typedef enum {
 #define ATOMIC_FLAG_INIT(x) (x)
 #define atomic_init(addr, val) (*(addr) = (val))
 #define kill_dependency(x) (x)
-#define atomic_thread_fence(order)
-#define atomic_signal_fence(order)
+#define atomic_thread_fence(order) __atomic_thread_fence(order)
+#define atomic_signal_fence(order) __atomic_signal_fence(order)
 #define atomic_is_lock_free(x) 1
 
 #define atomic_load(addr) (*(addr))
-#define atomic_store(addr, val) (*(addr) = (val))
+#define atomic_store(addr, val) __atomic_store_n((addr), (val), 5)
 
 #define atomic_load_explicit(addr, order) (*(addr))
-#define atomic_store_explicit(addr, val, order) (*(addr) = (val))
+#define atomic_store_explicit(addr, val, order) \
+  __atomic_store_n((addr), (val), (order))
 
-#define atomic_fetch_add(obj, val) (*(obj) += (val))
-#define atomic_fetch_sub(obj, val) (*(obj) -= (val))
-#define atomic_fetch_or(obj, val) (*(obj) |= (val))
-#define atomic_fetch_xor(obj, val) (*(obj) ^= (val))
-#define atomic_fetch_and(obj, val) (*(obj) &= (val))
+// These return the value the object had before.
+#define atomic_fetch_add(obj, val) __c11_atomic_fetch_add((obj), (val), 5)
+#define atomic_fetch_sub(obj, val) __c11_atomic_fetch_sub((obj), (val), 5)
+#define atomic_fetch_or(obj, val) __c11_atomic_fetch_or((obj), (val), 5)
+#define atomic_fetch_xor(obj, val) __c11_atomic_fetch_xor((obj), (val), 5)
+#define atomic_fetch_and(obj, val) __c11_atomic_fetch_and((obj), (val), 5)
 
-#define atomic_fetch_add_explicit(obj, val, order) (*(obj) += (val))
-#define atomic_fetch_sub_explicit(obj, val, order) (*(obj) -= (val))
-#define atomic_fetch_or_explicit(obj, val, order) (*(obj) |= (val))
-#define atomic_fetch_xor_explicit(obj, val, order) (*(obj) ^= (val))
-#define atomic_fetch_and_explicit(obj, val, order) (*(obj) &= (val))
+#define atomic_fetch_add_explicit(obj, val, order) \
+  __c11_atomic_fetch_add((obj), (val), (order))
+#define atomic_fetch_sub_explicit(obj, val, order) \
+  __c11_atomic_fetch_sub((obj), (val), (order))
+#define atomic_fetch_or_explicit(obj, val, order) \
+  __c11_atomic_fetch_or((obj), (val), (order))
+#define atomic_fetch_xor_explicit(obj, val, order) \
+  __c11_atomic_fetch_xor((obj), (val), (order))
+#define atomic_fetch_and_explicit(obj, val, order) \
+  __c11_atomic_fetch_and((obj), (val), (order))
 
 #define atomic_compare_exchange_weak(p, old, new) \
   __builtin_compare_and_swap((p), (old), (new))
@@ -57,8 +64,8 @@ typedef enum {
 
 #define atomic_flag_test_and_set(obj) atomic_exchange((obj), 1)
 #define atomic_flag_test_and_set_explicit(obj, order) atomic_exchange((obj), 1)
-#define atomic_flag_clear(obj) (*(obj) = 0)
-#define atomic_flag_clear_explicit(obj, order) (*(obj) = 0)
+#define atomic_flag_clear(obj) atomic_store((obj), 0)
+#define atomic_flag_clear_explicit(obj, order) atomic_store((obj), 0)
 
 typedef _Atomic _Bool atomic_flag;
 typedef _Atomic _Bool atomic_bool;
