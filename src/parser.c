@@ -4881,12 +4881,53 @@ static int rmw_builtin(Token *tok) {
   return -1;
 }
 
+// For `__builtin_add_overflow` (or sub, mul), its op, with *ty NULL; for
+// the typed forms, like `__builtin_saddl_overflow`, also the type they
+// take: int, long or long long, signed (s) or unsigned (u). False if
+// `tok` isn't one.
+static bool overflow_builtin(Token *tok, NodeKind *op, Type **ty) {
+  char *pre = "__builtin_", *post = "_overflow";
+  int len = tok->len - strlen(pre) - strlen(post);
+  if (len < 3 || strncmp(tok->loc, pre, strlen(pre)) ||
+      strncmp(tok->loc + tok->len - strlen(post), post, strlen(post)))
+    return false;
+
+  char *s = tok->loc + strlen(pre);
+  *ty = NULL;
+  if (len > 3) {
+    if (*s != 's' && *s != 'u')
+      return false;
+    bool is_unsigned = (*s++ == 'u');
+    char *suffix = s + 3;
+    int n = len - 4;
+    if (n == 0)
+      *ty = is_unsigned ? ty_uint : ty_int;
+    else if ((n == 1 && suffix[0] == 'l') || (n == 2 && !strncmp(suffix, "ll", 2)))
+      *ty = is_unsigned ? ty_ulong : ty_long;
+    else
+      return false;
+  }
+
+  if (!strncmp(s, "add", 3))
+    *op = ND_ADD;
+  else if (!strncmp(s, "sub", 3))
+    *op = ND_SUB;
+  else if (!strncmp(s, "mul", 3))
+    *op = ND_MUL;
+  else
+    return false;
+  return true;
+}
+
 static bool is_gnu_builtin(Token *tok) {
   int size;
+  NodeKind op;
+  Type *ty;
   for (int i = 0; i < sizeof(gnu_builtin_names) / sizeof(*gnu_builtin_names); i++)
     if (equal(tok, gnu_builtin_names[i]))
       return true;
-  return bit_builtin(tok, &size) || rmw_builtin(tok) >= 0;
+  return bit_builtin(tok, &size) || rmw_builtin(tok) >= 0 ||
+         overflow_builtin(tok, &op, &ty);
 }
 
 // The bits a bit builtin counts in a constant, so it can be folded.
@@ -4970,6 +5011,9 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
   int size;
   char *bit = bit_builtin(start, &size);
   int rmw = rmw_builtin(start);
+  NodeKind overflow_op;
+  Type *overflow_ty;
+  bool overflow = overflow_builtin(start, &overflow_op, &overflow_ty);
 
   // The fewest arguments each takes
   int min = 1;
@@ -4984,13 +5028,40 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
            equal(start, "__builtin_assume_aligned") ||
            equal(start, "__sync_lock_test_and_set"))
     min = 2;
-  else if (equal(start, "__sync_val_compare_and_swap") ||
+  else if (overflow || equal(start, "__sync_val_compare_and_swap") ||
            equal(start, "__sync_bool_compare_and_swap") ||
            equal(start, "__builtin_expect_with_probability") ||
            equal(start, "__atomic_compare_exchange_n"))
     min = 3;
   if (nargs < min)
     error_tok(start, "too few arguments to '%.*s'", start->len, start->loc);
+
+  // *res = a op b, and whether the exact result didn't fit *res. a and b
+  // become 64-bit values, keeping their sign, for cgen.c's 128-bit sum.
+  if (overflow) {
+    Node *a = args[0], *b = args[1], *res = args[2];
+    if (overflow_ty) {
+      a = new_cast(a, overflow_ty);
+      b = new_cast(b, overflow_ty);
+    }
+    add_type(a);
+    add_type(b);
+    add_type(res);
+    if (!is_integer(a->ty) || !is_integer(b->ty))
+      error_tok(start, "integer operands expected");
+    if (res->ty->kind != TY_PTR || !is_integer(res->ty->base) ||
+        res->ty->base->kind == TY_BOOL)
+      error_tok(res->tok, "pointer to an integer type expected");
+    if (overflow_ty && res->ty->base->size != overflow_ty->size)
+      error_tok(res->tok, "pointer to '%s' expected", type_name(overflow_ty));
+
+    Node *node = new_node(ND_OVERFLOW, start);
+    node->lhs = new_cast(a, a->ty->is_unsigned ? ty_ulong : ty_long);
+    node->rhs = new_cast(b, b->ty->is_unsigned ? ty_ulong : ty_long);
+    node->cas_addr = res;
+    node->val = overflow_op;
+    return node;
+  }
 
   if (bit) {
     Type *ty = (size == 8) ? ty_ulong : ty_uint;

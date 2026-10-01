@@ -268,6 +268,7 @@ typedef enum {
   ND_BSWAP,     // [GNU] __builtin_bswap16/32/64: lhs's bytes reversed
   ND_FENCE,     // [GNU] __sync_synchronize(): a full memory barrier
   ND_FRAME_ADDR, // [GNU] __builtin_frame_address(val)
+  ND_OVERFLOW,  // [GNU] *cas_addr = lhs op rhs (op in val), and if it overflowed
   ND_VA_ARG,    // va_arg(): the next argument's address
   ND_VLA_FREE,  // Free VLAs back to the stack bottom in lhs
 } NodeKind;
@@ -545,6 +546,7 @@ bool in_system_header(Token *tok);
 extern StringArray include_paths;
 extern bool opt_w;
 extern bool opt_fpic;
+extern bool opt_asm_cpp;
 extern bool opt_fcommon;
 extern int opt_std;
 extern char *base_file;

@@ -353,6 +353,10 @@ void add_type(Node *node) {
   case ND_FRAME_ADDR:
     node->ty = pointer_to(ty_void);
     return;
+  case ND_OVERFLOW:
+    add_type(node->cas_addr);
+    node->ty = ty_bool;
+    return;
   }
 }
 

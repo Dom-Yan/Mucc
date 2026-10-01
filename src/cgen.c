@@ -1741,6 +1741,93 @@ static void gen_expr(Node *node) {
   case ND_FENCE:
     println("  mfence");
     return;
+  case ND_OVERFLOW: {
+    // a and b are 64-bit (see gnu_builtin()), so a op b is computed
+    // exactly in 128 bits, in %rdx:%rax. It fits *res's type if that
+    // type's value of its low bits, extended back to 128 bits, is the
+    // same. (Every exact result is less than 2^128 and at least -2^127,
+    // so equal bits mean equal values.)
+    bool signed_a = !node->lhs->ty->is_unsigned;
+    bool signed_b = !node->rhs->ty->is_unsigned;
+    gen_expr(node->cas_addr);
+    push();
+    gen_expr(node->lhs);
+    push();
+    gen_expr(node->rhs);
+    println("  mov %%rax, %%rcx");
+    pop("%rdi");
+    println("  mov %%rdi, %%rax");
+
+    if (node->val == ND_MUL) {
+      // The unsigned product, less 2^64 * b for a negative a and
+      // 2^64 * a for a negative b
+      println("  mul %%rcx");
+      if (signed_a) {
+        println("  test %%rdi, %%rdi");
+        println("  jns 1f");
+        println("  sub %%rcx, %%rdx");
+        println("1:");
+      }
+      if (signed_b) {
+        println("  test %%rcx, %%rcx");
+        println("  jns 1f");
+        println("  sub %%rdi, %%rdx");
+        println("1:");
+      }
+    } else {
+      // Each operand's high 64 bits: copies of its sign, or 0
+      if (signed_a) {
+        println("  mov %%rdi, %%rdx");
+        println("  sar $63, %%rdx");
+      } else {
+        println("  xor %%edx, %%edx");
+      }
+      if (signed_b) {
+        println("  mov %%rcx, %%rsi");
+        println("  sar $63, %%rsi");
+      } else {
+        println("  xor %%esi, %%esi");
+      }
+      if (node->val == ND_ADD) {
+        println("  add %%rcx, %%rax");
+        println("  adc %%rsi, %%rdx");
+      } else {
+        println("  sub %%rcx, %%rax");
+        println("  sbb %%rsi, %%rdx");
+      }
+    }
+
+    Type *ty = node->cas_addr->ty->base;
+    pop("%rsi");
+    println("  mov %s, (%%rsi)", reg_ax(ty->size));
+
+    // *res's value, extended to 128 bits in %r9:%r8
+    switch (ty->size) {
+    case 1:
+      println(ty->is_unsigned ? "  movzbl %%al, %%r8d" : "  movsbq %%al, %%r8");
+      break;
+    case 2:
+      println(ty->is_unsigned ? "  movzwl %%ax, %%r8d" : "  movswq %%ax, %%r8");
+      break;
+    case 4:
+      println(ty->is_unsigned ? "  mov %%eax, %%r8d" : "  movslq %%eax, %%r8");
+      break;
+    default:
+      println("  mov %%rax, %%r8");
+    }
+    if (ty->is_unsigned) {
+      println("  xor %%r9d, %%r9d");
+    } else {
+      println("  mov %%r8, %%r9");
+      println("  sar $63, %%r9");
+    }
+    println("  xor %%rax, %%r8");
+    println("  xor %%rdx, %%r9");
+    println("  or %%r9, %%r8");
+    println("  setne %%al");
+    println("  movzbl %%al, %%eax");
+    return;
+  }
   case ND_FRAME_ADDR:
     // Every function keeps its caller's %rbp at 0(%rbp) (see the
     // prologue), so frames are followed up the chain.

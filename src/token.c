@@ -241,12 +241,13 @@ static bool startswith(char *p, char *q) {
 static int read_ident(char *start) {
   char *p = start;
   uint32_t c = decode_utf8(&p, p);
-  if (!is_ident1(c))
+  if (!is_ident1(c) || (opt_asm_cpp && c == '$'))
     return 0;
 
   for (;;) {
-    // Fast path: plain ASCII letters, digits, _ and $.
-    if (isalnum((unsigned char)*p) || *p == '_' || *p == '$') {
+    // Fast path: plain ASCII letters, digits, _ and $. In assembly, $ is
+    // the immediate prefix, as in `$SYS_write`, so it ends a name.
+    if (isalnum((unsigned char)*p) || *p == '_' || (*p == '$' && !opt_asm_cpp)) {
       p++;
       continue;
     }
@@ -633,6 +634,17 @@ Token *tokenize_string_literal(Token *tok, Type *basety) {
   return res;
 }
 
+// Whether the quote at p has a closing one later on its line.
+static bool closes_on_line(char *p) {
+  for (char *q = p + 1; *q && *q != '\n'; q++) {
+    if (*q == '\\' && q[1] && q[1] != '\n')
+      q++;
+    else if (*q == *p)
+      return true;
+  }
+  return false;
+}
+
 // Tokenize a given string and returns new tokens.
 Token *tokenize(File *file) {
   current_file = file;
@@ -698,6 +710,14 @@ Token *tokenize(File *file) {
           break;
       }
       cur = cur->next = new_token(TK_PP_NUM, q, p);
+      continue;
+    }
+
+    // In assembly (.S), a quote that doesn't close on its line, as in a
+    // `# don't` comment, is just a character, as with gcc.
+    if (opt_asm_cpp && (*p == '\'' || *p == '"') && !closes_on_line(p)) {
+      cur = cur->next = new_token(TK_PUNCT, p, p + 1);
+      p++;
       continue;
     }
 
@@ -788,6 +808,15 @@ Token *tokenize(File *file) {
     if (punct_len) {
       cur = cur->next = new_token(TK_PUNCT, p, p + punct_len);
       p += cur->len;
+      continue;
+    }
+
+    // Assembly has characters C doesn't, like the `@` of `@function`.
+    if (opt_asm_cpp) {
+      char *q = p;
+      decode_utf8(&q, p);
+      cur = cur->next = new_token(TK_PUNCT, p, q);
+      p = q;
       continue;
     }
 
