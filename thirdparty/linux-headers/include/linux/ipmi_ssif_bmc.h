@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note*/
+/*
+ * Copyright (c) 2022, Ampere Computing LLC.
+ */
+
+#ifndef _LINUX_IPMI_SSIF_BMC_H
+#define _LINUX_IPMI_SSIF_BMC_H
+
+#include <linux/types.h>
+
+#define IPMI_SSIF_PAYLOAD_MAX         254
+struct ipmi_ssif_msg {
+	unsigned int len;
+	__u8    payload[IPMI_SSIF_PAYLOAD_MAX];
+};
+
+#endif

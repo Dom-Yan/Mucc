@@ -67,3 +67,48 @@ diff -r musl-1.2.6 thirdparty/musl
 ```
 
 prints nothing.
+
+## Linux headers
+
+Linux's user-space API headers (`<linux/*.h>`, `<asm/*.h>`, `<sound/*.h>`,
+...), for programs that talk to the kernel directly: USB through usbfs,
+input devices, netlink, ioctls. `make libc` puts them next to musl's
+headers, as a distribution's `linux-headers` package does, so the released
+binary carries them. GPL-2.0 WITH Linux-syscall-note, in
+`linux-headers/COPYING` and `linux-headers/LICENSES/`: the note says
+programs that use the kernel through them are not derived works of the
+kernel, so they don't affect a program's license.
+
+- Version: 6.18.54 (longterm)
+- From: https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.54.tar.xz
+- SHA-256 of the tarball, as in kernel.org's `sha256sums.asc`:
+  `9df30b02dd8102bbd0be52556288ef6889ddbe7f1ddb96fbf847d0becf3eacac`
+- `linux-headers/include/` is `make headers_install ARCH=x86_64` run in
+  that tree, its `include/` directory, with comments taken out by
+  `strip-comments.py` (comments with a license or copyright notice stay).
+  That halves them, from 7.1 MB to 3.7 MB, and each header gives the same
+  tokens as before.
+- Eight netfilter headers have names that differ from another's only in
+  case (`xt_DSCP.h` and `xt_dscp.h`, ...). The upper-case ones are in
+  `linux-headers/case/` instead, so the tree checks out on case-insensitive
+  file systems; `make libc` puts them back beside the others.
+- `linux-headers/COPYING` and `linux-headers/LICENSES/` are the tarball's
+  `COPYING`, `LICENSES/preferred/GPL-2.0` and
+  `LICENSES/exceptions/Linux-syscall-note`.
+
+mucc compiles every header alone (with the bundled musl) except the 12 on
+the kernel's own list of headers that need others first
+(`usr/include/Makefile`'s `no-header-test`).
+
+### Checking the tree
+
+```
+tar xJf linux-6.18.54.tar.xz
+make -C linux-6.18.54 ARCH=x86_64 HOSTCC=mucc INSTALL_HDR_PATH=$PWD/hdr headers_install
+thirdparty/strip-comments.py hdr/include stripped
+mkdir merged
+cp -R thirdparty/linux-headers/include/. thirdparty/linux-headers/case/. merged/
+diff -r stripped merged
+```
+
+prints nothing.
