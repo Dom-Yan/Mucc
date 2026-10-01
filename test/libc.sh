@@ -21,7 +21,11 @@ for t in gcc cc c99 as ld ar ranlib; do
     printf '#!/bin/sh\necho "%s $*" >> %s/calls\nexit 1\n' $t $tmp > $tmp/bin/$t
     chmod +x $tmp/bin/$t
 done
-PATH=$tmp/bin:$PATH make -s libc > $tmp/log 2>&1 && [ ! -s $tmp/calls ]
+# musl's configure asks whether the linker takes flags for a libc.so
+# (`-nostdlib -shared ... -o /dev/null`), which isn't built. Where there's
+# no ld, the answer is no, as here, so those calls don't count.
+PATH=$tmp/bin:$PATH make -s libc > $tmp/log 2>&1 &&
+    ! grep -v -E '^ld -o /dev/null .* -shared( |$)' $tmp/calls 2> /dev/null
 check 'make libc with no gcc, as, ld or ar'
 
 cat > $tmp/prog.c <<'EOF'
