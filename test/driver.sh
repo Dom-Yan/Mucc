@@ -391,6 +391,11 @@ if [ $musl ]; then
       -Wl,-z,relro,-z,now,-O1,--build-id,--start-group,--end-group \
       -Wl,--hash-style=gnu 2> $tmp/wl.err && $tmp/wl && [ ! -s $tmp/wl.err ]
     check 'harmless -Wl, flags with the built-in linker'
+
+    # ... but not one that changes what links, like -z muldefs
+    $mucc -o $tmp/wl $tmp/wl.c -Wl,-z,muldefs 2>&1 |
+        grep -q 'using the system linker for -z'
+    check '-z muldefs needs the system linker'
 fi
 
 # -nostdlib: a program with its own _start, and no C library
@@ -584,8 +589,8 @@ $tmp/lo-static
 check '.lo input (static)'
 
 # ... but a source file mucc can't compile is a clear error
-echo '' > $tmp/foo.S
-$mucc -c $tmp/foo.S 2>&1 | grep -q 'unsupported file type'
+echo '' > $tmp/foo.cpp
+$mucc -c $tmp/foo.cpp 2>&1 | grep -q 'unsupported file type'
 check 'unsupported file type'
 
 # -I and -L also take their directory as the next argument, as with gcc
@@ -607,6 +612,41 @@ $mucc -o $tmp/answer $tmp/answer.s $tmp/main.c
 $tmp/answer
 [ $? = 42 ]
 check '.s and .c linked together'
+
+# .S: assembly through the preprocessor, as with gcc. `#` lines that
+# aren't directives are comments, a quote in one is just a character, and
+# $NAME is an immediate whose NAME is a macro.
+cat > $tmp/sys.h <<'EOF'
+#define ANSWER 40
+EOF
+cat > $tmp/answer2.S <<'EOF'
+#include "sys.h"
+#define STR(x) #x
+# don't mind this comment
+  .text
+  .globl answer2
+answer2:
+#ifdef __ASSEMBLER__
+  mov $ANSWER, %eax        # the answer, less 2
+#endif
+  add $(end - start), %eax
+  ret
+  .section .rodata
+start: .ascii "ab"
+end:
+EOF
+printf 'int answer2(void);\nint main(void) { return answer2(); }\n' > $tmp/main2.c
+$mucc -fno-as-fallback -o $tmp/answer2 $tmp/answer2.S $tmp/main2.c
+$tmp/answer2
+[ $? = 42 ]
+check '.S'
+$mucc -E $tmp/answer2.S | grep -q '^# don.t mind this comment$'
+check '.S with -E keeps comments'
+$mucc -E $tmp/answer2.S | grep -q 'mov \$40, %eax'
+check '.S with -E expands $NAME'
+cp $tmp/answer2.S $tmp/answer3.asm
+$mucc -fno-as-fallback -c -o $tmp/answer3.o -x assembler-with-cpp $tmp/answer3.asm
+check '-x assembler-with-cpp'
 
 # ... an instruction it doesn't know in a .s file: a note, then `as`
 printf '  .text\n  .globl f\nf:\n  movups %%xmm0, %%xmm1\n  ret\n' > $tmp/unknown.s

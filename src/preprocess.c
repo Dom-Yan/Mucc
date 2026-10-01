@@ -681,7 +681,8 @@ static Token *subst(Token *tok, MacroArg *args) {
 
   while (tok->kind != TK_EOF) {
     // "#" followed by a parameter is replaced with stringized actuals.
-    if (equal(tok, "#")) {
+    // (In assembly, another `#` is just copied, as with gcc.)
+    if (equal(tok, "#") && (!opt_asm_cpp || find_arg(args, tok->next))) {
       MacroArg *arg = find_arg(args, tok->next);
       if (!arg)
         error_tok(tok->next, "'#' is not followed by a macro parameter");
@@ -1451,6 +1452,19 @@ static Token *preprocess2(Token *tok) {
     // `#`-only line is legal. It's called a null directive.
     if (tok->at_bol)
       continue;
+
+    // In assembly (.S), `#` also starts a comment, so a line that isn't a
+    // directive is kept as it is, as with gcc.
+    if (opt_asm_cpp) {
+      for (tok = start; tok == start || !tok->at_bol; tok = tok->next) {
+        if (tok->kind == TK_EOF)
+          break;
+        tok->line_delta = tok->file->line_delta;
+        tok->filename = tok->file->display_name;
+        cur = cur->next = tok;
+      }
+      continue;
+    }
 
     error_tok(tok, "invalid preprocessor directive");
   }

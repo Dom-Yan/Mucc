@@ -117,10 +117,10 @@ for no `sudo`), and `make uninstall` removes it.
 
 | | |
 | --- | --- |
-| Source | 18,979 lines of C in 13 files |
+| Source | 19,385 lines of C in 13 files |
 | Released binary | about 7 MB, with musl inside |
 | Compiling its own source | 0.20 s (gcc `-O0`: 0.91 s, gcc `-O2`: 3.54 s) |
-| Tests | 49 programs with 1,848 assertions, plus 262 command-line, error, assembler and linker checks |
+| Tests | 50 programs with 1,899 assertions, plus 262 command-line, error, assembler and linker checks |
 | Real programs | CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC |
 | Self-hosting | a mucc built by mucc builds a byte-identical mucc |
 
@@ -129,16 +129,18 @@ Times are from WSL 2 on Ubuntu with gcc 15.2.
 ## What it supports
 
 - C17 and C23: `bool`, `nullptr`, `constexpr`, `auto`, `#embed`,
-  `typeof`, `[[attributes]]` and more
+  `typeof`, `[[attributes]]`, checked arithmetic (`<stdckdint.h>`) and more
 - The full preprocessor, VLAs, `_Generic`, atomics, thread-local variables,
   structs by value, varargs
 - GNU extensions: statement expressions, computed `goto`, case ranges,
   `__attribute__`, extended `asm`, and gcc's builtins for bit counting
   (`__builtin_clz`, `__builtin_popcount`, ...), byte swaps, branch hints
-  and atomics (`__sync_*`, `__atomic_*`)
+  overflow checks (`__builtin_add_overflow`, ...) and atomics (`__sync_*`,
+  `__atomic_*`)
 - Inline assembly for kernels and drivers: port I/O (`inb`, `outl`, ...),
   `cpuid`, `rdtsc`, `rdmsr`, `lgdt`, `cli`, `iretq` and other system
   instructions, all assembled without binutils
+- Assembly files: `.s`, and `.S`, which go through the preprocessor first
 - Not supported: C++, `_Complex`, `__int128`, `_BitInt`, `asm goto`, K&R
   function definitions, optimization beyond register allocation and
   constant folding

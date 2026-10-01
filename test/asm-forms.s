@@ -399,6 +399,23 @@ func:
   outb %al, $0x80
   outw %ax, $0x70
 
+  # hand-written assembly (.S): differences of labels, with a jump
+  # between them, strings and lists
+.Lmsg_start:
+  mov $(.Lmsg_end - .Lmsg_start), %edx
+  mov $.Lmsg_end - .Lmsg_start + 4, %ecx
+  push $(.Lmsg_end - .Lmsg_start)
+  jne .Lmsg_end
+  .ascii "hi\n\t\"\\\101\x42", "two"
+  .asciz "nul"
+  .string "str"
+  .byte 1, 2, 0xff, -1
+  .short 1, -2
+  .long 3, .Lmsg_end - .Lmsg_start
+  .quad .Lmsg_start - .Lmsg_end, 5
+.Lmsg_end:
+  .byte .Lmsg_end - .Lmsg_start
+
   # atomics and misc
   lock cmpxchg %edx, (%rdi)
   lock cmpxchg %rdx, (%rdi)

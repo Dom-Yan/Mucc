@@ -63,13 +63,17 @@ typedef struct {
 } Jump;
 
 // A 4- or 8-byte hole at `pos` for the address of `sym` + `addend`, made
-// relative to the hole itself for pc-relative types.
+// relative to the hole itself for pc-relative types. With `minus`, it's
+// for the constant `sym - minus + addend` instead, two labels in one
+// section, in `size` bytes.
 typedef struct {
   int pos;
   int njumps;         // jumps before it
   int type;           // R_X86_64_*
   Sym *sym;
   int64_t addend;
+  Sym *minus;
+  int size;
 } Hole;
 
 // A hole the linker fills in: against `sym`, or against section `sec`.
@@ -278,6 +282,15 @@ static void hole(int type, Sym *sym, int64_t addend, int size) {
   out_n(size, 0);
 }
 
+// Leaves a `size`-byte hole for `sym - minus + addend`, filled in pass 3,
+// when the labels' addresses are known.
+static void diff_hole(Sym *sym, Sym *minus, int64_t addend, int size) {
+  cur->holes = grow(cur->holes, cur->nholes, &cur->capholes, sizeof(Hole));
+  cur->holes[cur->nholes++] =
+    (Hole){cur->bytes.len, cur->njumps, 0, sym, addend, minus, size};
+  out_n(size, 0);
+}
+
 //---------- Reading operands ------------------------------------------------
 
 typedef enum { GP, XMM, ST, RIP, SEG } RegKind;
@@ -355,6 +368,7 @@ typedef struct {
   int scale;          // OP_MEM: 1, 2, 4 or 8, with an index
   int64_t val;        // immediate or displacement
   Sym *sym;           // symbol in the immediate or displacement
+  Sym *minus;         // a symbol subtracted from sym, as in `end - start`
   Suffix suffix;
   Reg *seg;           // segment override, as in %fs:0
 } Operand;
@@ -458,8 +472,46 @@ static int64_t read_sum(int64_t val) {
   return val;
 }
 
-// Reads `123`, `1+2`, `sym`, `sym+8`, `sym@SUFFIX` or `1f` into op.
+static bool is_symstart(char c) {
+  return isalpha((unsigned char)c) || c == '_' || c == '.';
+}
+
+// Numbers added to or subtracted from a symbol, and at most one symbol
+// subtracted, as in `end - start + 4`.
+static void read_sym_terms(Operand *op) {
+  for (;;) {
+    char *save = p;
+    skip_space();
+    if (*p != '+' && *p != '-') {
+      p = save;
+      return;
+    }
+    bool minus = *p++ == '-';
+    skip_space();
+    if (minus && !op->minus && is_symstart(*p)) {
+      op->minus = read_sym();
+      continue;
+    }
+    uint64_t t = read_term();
+    op->val = minus ? (uint64_t)op->val - t : (uint64_t)op->val + t;
+  }
+}
+
+// Reads `123`, `1+2`, `sym`, `sym+8`, `end - start`, `(end - start)`,
+// `sym@SUFFIX` or `1f` into op.
 static void read_value(Operand *op) {
+  if (*p == '(' && is_symstart(p[1])) {
+    p++;
+    op->sym = read_sym();
+    read_sym_terms(op);
+    skip_space();
+    if (*p != ')')
+      fail("expected ')'");
+    p++;
+    op->val = read_sum(op->val);
+    return;
+  }
+
   if (isdigit((unsigned char)*p) || *p == '-' || *p == '(') {
     // `1f` and `1b` are numeric labels, not numbers.
     char *q = p;
@@ -474,7 +526,7 @@ static void read_value(Operand *op) {
   }
 
   op->sym = read_sym();
-  op->val = read_sum(0);
+  read_sym_terms(op);
 
   if (*p == '@') {
     p++;
@@ -529,8 +581,11 @@ static void read_operand(Operand *op) {
   }
 
   // A displacement, unless the `(` starts the registers: `(1+2)(%rdi)`.
-  if (*p != '(' || (p[1] != '%' && p[1] != ','))
+  if (*p != '(' || (p[1] != '%' && p[1] != ',')) {
     read_value(op);
+    if (op->minus)
+      fail("a difference of labels is only supported as an immediate or data");
+  }
 
   if (*p != '(') {
     op->kind = op->seg ? OP_MEM : OP_SYM; // %fs:0 is an absolute address
@@ -701,6 +756,12 @@ static int64_t imm_value(Operand *imm, int size) {
 static void out_imm(Operand *imm, int size) {
   if (!imm->sym) {
     out_n(size, imm->val);
+    return;
+  }
+  if (imm->minus) {
+    if (imm->suffix != NO_SUFFIX)
+      fail("unsupported relocation");
+    diff_hole(imm->sym, imm->minus, imm->val, size);
     return;
   }
   if (size != 4)
@@ -1511,6 +1572,58 @@ static char *read_string(void) {
   return strndup(start, p++ - start);
 }
 
+// .ascii "str"[, "str"...], and .asciz and .string, which end each
+// string with a 0: the bytes, with GNU as's escapes (\n, \t, \\, \",
+// octal \ddd, hex \xhh, ...).
+static void string_directive(bool nul) {
+  for (;;) {
+    skip_space();
+    if (*p != '"')
+      fail("expected a string");
+    p++;
+    while (*p != '"') {
+      if (!*p)
+        fail("unterminated string");
+      if (*p != '\\') {
+        out(*p++);
+        continue;
+      }
+      p++;
+      if ('0' <= *p && *p <= '7') {
+        int c = 0;
+        for (int i = 0; i < 3 && '0' <= *p && *p <= '7'; i++)
+          c = c * 8 + *p++ - '0';
+        out(c & 0xff);
+        continue;
+      }
+      if (*p == 'x' && isxdigit((unsigned char)p[1])) {
+        int c = 0;
+        for (p++; isxdigit((unsigned char)*p); p++)
+          c = c * 16 + (isdigit((unsigned char)*p) ? *p - '0' : tolower(*p) - 'a' + 10);
+        out(c & 0xff);
+        continue;
+      }
+      switch (*p) {
+      case 'b': out('\b'); break;
+      case 'f': out('\f'); break;
+      case 'n': out('\n'); break;
+      case 'r': out('\r'); break;
+      case 't': out('\t'); break;
+      case '\0': fail("unterminated string");
+      default: out(*p); break;
+      }
+      p++;
+    }
+    p++;
+    if (nul)
+      out(0);
+    skip_space();
+    if (*p != ',')
+      return;
+    p++;
+  }
+}
+
 static void align_to_n(int n) {
   if (n <= 0 || (n & (n - 1)))
     fail("bad alignment");
@@ -1588,11 +1701,34 @@ static void directive(char *name, int len) {
 #define IS(s) (len == sizeof(s) - 1 && !strncmp(name, s, len))
   skip_space();
 
-  if (IS(".byte")) {
-    int64_t v = read_int();
-    if (v < -128 || v > 255)
-      fail(".byte value out of range");
-    out(v & 0xff);
+  if (IS(".ascii") || IS(".asciz") || IS(".string")) {
+    string_directive(!IS(".ascii"));
+  } else if (IS(".byte") || IS(".quad") || IS(".long") || IS(".value") ||
+             IS(".short")) {
+    // A list of values: numbers, symbols (in a .quad) or differences of
+    // labels, as in `.long end - start`
+    int size = IS(".byte") ? 1 : IS(".quad") ? 8 : IS(".long") ? 4 : 2;
+    for (;;) {
+      Operand op = {0};
+      skip_space();
+      read_value(&op);
+      if (op.suffix != NO_SUFFIX)
+        fail("unsupported relocation");
+      if (op.minus)
+        diff_hole(op.sym, op.minus, op.val, size);
+      else if (op.sym && size == 8)
+        hole(R_X86_64_64, op.sym, op.val, 8);
+      else if (op.sym)
+        fail("symbol in a data directive smaller than .quad");
+      else if (size == 1 && (op.val < -128 || op.val > 255))
+        fail(".byte value out of range");
+      else
+        out_n(size, op.val);
+      skip_space();
+      if (*p != ',')
+        break;
+      p++;
+    }
   } else if (IS(".loc")) {
     int file = read_int();
     int line = read_int();
@@ -1656,18 +1792,6 @@ static void directive(char *name, int len) {
     cur = find_section(".bss");
   } else if (IS(".section")) {
     section_directive();
-  } else if (IS(".quad") || IS(".long") || IS(".value") || IS(".short")) {
-    int size = IS(".quad") ? 8 : IS(".long") ? 4 : 2;
-    Operand op = {0};
-    read_value(&op);
-    if (op.suffix != NO_SUFFIX)
-      fail("unsupported relocation");
-    if (!op.sym)
-      out_n(size, op.val);
-    else if (size == 8)
-      hole(R_X86_64_64, op.sym, op.val, 8);
-    else
-      fail("symbol in a data directive smaller than .quad");
   } else if (IS(".zero")) {
     out_zeros(read_int());
   } else if (IS(".incbin")) {
@@ -1924,6 +2048,22 @@ static void fill_hole(Section *sec, uint64_t offset, int type, Sym *sym, int64_t
   add_reloc(sec, offset, type, sym, NULL, addend);
 }
 
+// `end - start`: a constant, if both labels are in one section, as GNU as
+// computes it (otherwise it would need a relocation pair).
+static void fill_diff_hole(Section *sec, uint64_t offset, Hole *h) {
+  if (!h->sym->sec || h->sym->sec != h->minus->sec)
+    fail("can't subtract '%s' from '%s': they must be labels in one section",
+         h->minus->name, h->sym->name);
+  int64_t val = (int64_t)(h->sym->value - h->minus->value) + h->addend;
+  if (h->size < 8) {
+    int bits = h->size * 8;
+    if (val < -(1LL << (bits - 1)) || val >= (1LL << bits))
+      fail("'%s - %s' doesn't fit in %d bytes", h->sym->name, h->minus->name,
+           h->size);
+  }
+  patch(&sec->bytes, offset, h->size, val);
+}
+
 static void place_jumps(Section *sec);
 
 // Writes the final bytes of `sec`, with its jumps in place, then fills
@@ -1937,7 +2077,10 @@ static void finish_section(Section *sec) {
   for (int i = 0; i < sec->nholes; i++) {
     Hole *h = &sec->holes[i];
     uint64_t offset = h->pos + sec->jumps_before[h->njumps];
-    fill_hole(sec, offset, h->type, h->sym, h->addend);
+    if (h->minus)
+      fill_diff_hole(sec, offset, h);
+    else
+      fill_hole(sec, offset, h->type, h->sym, h->addend);
   }
 }
 

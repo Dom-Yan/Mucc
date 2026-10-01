@@ -14,13 +14,14 @@
 //---------- Command-line options --------------------------------------------
 
 typedef enum {
-  FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO,
+  FILE_NONE, FILE_C, FILE_ASM, FILE_ASM_CPP, FILE_OBJ, FILE_AR, FILE_DSO,
 } FileType;
 
 StringArray include_paths;
 bool opt_w; // -w: no warnings
 bool opt_fcommon = true;
 bool opt_fpic;
+bool opt_asm_cpp; // preprocessing assembly (.S), not C
 int opt_std = 2017; // -std=: 1989, 1999, 2011, 2017 or 2023 (C17 by default, as gcc 14)
 
 static FileType opt_x; // the last -x, for the inputs after it
@@ -297,6 +298,8 @@ static FileType parse_opt_x(char *s) {
     return FILE_C;
   if (!strcmp(s, "assembler"))
     return FILE_ASM;
+  if (!strcmp(s, "assembler-with-cpp"))
+    return FILE_ASM_CPP;
   if (!strcmp(s, "none"))
     return FILE_NONE;
   error("<command line>: unknown argument for -x: %s", s);
@@ -621,6 +624,11 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    if (!strcmp(argv[i], "-cc1-asm")) {
+      opt_asm_cpp = true;
+      continue;
+    }
+
     if (!strcmp(argv[i], "-fintegrated-as")) {
       opt_integrated_as = true;
       continue;
@@ -831,7 +839,10 @@ static void run_subprocess(char **argv) {
 
 // Runs `mucc -cc1` to compile `input`. It writes assembly to `output`,
 // or, if `obj` is true, an object file (see cc1()).
-static void run_cc1(int argc, char **argv, char *input, char *output, bool obj) {
+// `asm_cpp`: the input is assembly to preprocess (.S), which cc1
+// preprocesses into `output`.
+static void run_cc1(int argc, char **argv, char *input, char *output, bool obj,
+                    bool asm_cpp) {
   char **args = calloc(argc + 10, sizeof(char *));
   memcpy(args, argv, argc * sizeof(char *));
   args[argc++] = "-cc1";
@@ -848,6 +859,8 @@ static void run_cc1(int argc, char **argv, char *input, char *output, bool obj) 
 
   if (obj)
     args[argc++] = "-cc1-obj";
+  if (asm_cpp)
+    args[argc++] = "-cc1-asm";
 
   run_subprocess(args);
 }
@@ -918,8 +931,8 @@ static void move_to(char *file, char *name, int line) {
 // line came from, so the output, compiled again, reports errors and debug
 // info against the original files. A macro's expansion stays on the line
 // of its name.
-static void print_tokens(Token *tok) {
-  pp_out = open_file(opt_o ? opt_o : "-");
+static void print_tokens(Token *tok, char *path) {
+  pp_out = open_file(path);
   if (!opt_P)
     line_marker(base_file, base_file, 1);
 
@@ -1126,6 +1139,11 @@ static void cc1(void) {
     tok = append_tokens(tok, tok2);
   }
 
+  // Assembly (.S) is only preprocessed, with __ASSEMBLER__ defined, as
+  // gcc does; the driver assembles the output.
+  if (opt_asm_cpp)
+    define("__ASSEMBLER__");
+
   // Tokenize and parse.
   Token *tok2 = must_tokenize_file(base_file);
   tok = append_tokens(tok, tok2);
@@ -1139,8 +1157,8 @@ static void cc1(void) {
   }
 
   // If -E is given, print out preprocessed C code as a result.
-  if (opt_E) {
-    print_tokens(tok);
+  if (opt_E || opt_asm_cpp) {
+    print_tokens(tok, output_file ? output_file : opt_o ? opt_o : "-");
     return;
   }
 
@@ -1245,7 +1263,7 @@ static void push_gcc_file(StringArray *arr, char *gcc_libpath, char *name) {
 // dynamic linking options like -E (--export-dynamic, which Lua links
 // with) and -rpath DIR (Tcl), grouping (it searches all archives as one
 // group anyway), and hardening and size options build systems add, like
-// -z relro and --gc-sections. A name ending in '*' is a prefix.
+// --gc-sections and -z relro. A name ending in '*' is a prefix.
 static char *static_noop_flags[] = {
   "-E", "--export-dynamic", "-export-dynamic", "-rpath=*", "--rpath=*",
   "--start-group", "--end-group", "-(", "-)", "--as-needed",
@@ -1254,24 +1272,43 @@ static char *static_noop_flags[] = {
   "--hash-style=*", "--build-id*", "--no-undefined", "--warn-common",
   "--enable-new-dtags", "--disable-new-dtags", "--eh-frame-hdr", "--relax",
   "--no-relax", "--fatal-warnings", "--no-copy-dt-needed-entries",
-  "--compress-debug-sections=*", "--icf=*", "-z*", "--version-script=*",
+  "--compress-debug-sections=*", "--icf=*", "--version-script=*",
 };
 
+// The `-z keyword`s among them. Others, like -z muldefs, change what
+// links, so they need `ld`.
+static char *static_noop_z[] = {
+  "relro", "norelro", "now", "lazy", "noexecstack", "defs", "nodefs",
+  "origin", "separate-code", "noseparate-code", "text", "combreloc",
+  "nocombreloc", "max-page-size=*", "common-page-size=*", "ibt", "shstk",
+  "cet-report=*",
+};
+
+static bool in_patterns(char *arg, char **names, int n) {
+  for (int i = 0; i < n; i++) {
+    int len = strlen(names[i]);
+    if (names[i][len - 1] == '*' ? !strncmp(arg, names[i], len - 1)
+                                 : !strcmp(arg, names[i]))
+      return true;
+  }
+  return false;
+}
+
 // Returns how many arguments the flag at inputs[i] takes if it's one of
-// static_noop_flags[], or 0.
+// static_noop_flags[] (or -z with one of static_noop_z[]), or 0.
 static int static_noop_flag(StringArray *inputs, int i) {
   char *arg = inputs->data[i];
-  bool has_next = i + 1 < inputs->len;
+  char *next = (i + 1 < inputs->len) ? inputs->data[i + 1] : NULL;
+  int nz = sizeof(static_noop_z) / sizeof(*static_noop_z);
+  if (!strcmp(arg, "-z"))
+    return (next && in_patterns(next, static_noop_z, nz)) ? 2 : 0;
+  if (!strncmp(arg, "-z", 2))
+    return in_patterns(arg + 2, static_noop_z, nz);
   if ((!strcmp(arg, "-rpath") || !strcmp(arg, "-rpath-link") ||
-       !strcmp(arg, "-z") || !strcmp(arg, "--version-script")) && has_next)
+       !strcmp(arg, "--version-script")) && next)
     return 2;
-  for (int k = 0; k < sizeof(static_noop_flags) / sizeof(*static_noop_flags); k++) {
-    char *name = static_noop_flags[k];
-    int len = strlen(name);
-    if (name[len - 1] == '*' ? !strncmp(arg, name, len - 1) : !strcmp(arg, name))
-      return 1;
-  }
-  return 0;
+  return in_patterns(arg, static_noop_flags,
+                     sizeof(static_noop_flags) / sizeof(*static_noop_flags));
 }
 
 // Links with mucc's own linker (link.c), which makes static executables.
@@ -1434,9 +1471,12 @@ static void run_linker(StringArray *inputs, char *output) {
 
 // The type of input `filename`, given `x`, the -x in effect for it.
 static FileType get_file_type(char *filename, FileType x) {
-  // -E implies that the input is the C macro language.
+  // -E implies that the input is the C macro language, or, for .S,
+  // assembly with it.
+  bool is_asm_cpp = (x == FILE_ASM_CPP) || (x == FILE_NONE &&
+      (endswith(filename, ".S") || endswith(filename, ".sx")));
   if (opt_E)
-    return FILE_C;
+    return is_asm_cpp ? FILE_ASM_CPP : FILE_C;
   if (x != FILE_NONE)
     return x;
 
@@ -1450,10 +1490,12 @@ static FileType get_file_type(char *filename, FileType x) {
     return FILE_C;
   if (endswith(filename, ".s"))
     return FILE_ASM;
+  if (endswith(filename, ".S") || endswith(filename, ".sx"))
+    return FILE_ASM_CPP;
 
   // Sources mucc can't compile get a clear error, not a confusing one
   // from the linker.
-  static char *unsupported[] = {".S", ".sx", ".h", ".cc", ".cpp", ".cxx", ".C"};
+  static char *unsupported[] = {".h", ".cc", ".cpp", ".cxx", ".C"};
   for (int i = 0; i < sizeof(unsupported) / sizeof(*unsupported); i++)
     if (endswith(filename, unsupported[i]))
       error("<command line>: unsupported file type: %s", filename);
@@ -1537,6 +1579,20 @@ int main(int argc, char **argv) {
       continue;
     }
 
+    // Handle .S: preprocess it as assembly, then go on as with a .s.
+    if (type == FILE_ASM_CPP) {
+      if (opt_E || opt_M) {
+        run_cc1(argc, argv, input, NULL, false, true);
+        continue;
+      }
+      if (opt_S)
+        continue;
+      char *tmp = create_tmpfile();
+      run_cc1(argc, argv, input, tmp, false, true);
+      input = tmp;
+      type = FILE_ASM;
+    }
+
     // Handle .s: assemble it, and link it unless -c.
     if (type == FILE_ASM) {
       if (opt_S)
@@ -1555,13 +1611,13 @@ int main(int argc, char **argv) {
 
     // Just preprocess
     if (opt_E || opt_M) {
-      run_cc1(argc, argv, input, NULL, false);
+      run_cc1(argc, argv, input, NULL, false, false);
       continue;
     }
 
     // Compile
     if (opt_S) {
-      run_cc1(argc, argv, input, output, false);
+      run_cc1(argc, argv, input, output, false, false);
       continue;
     }
 
@@ -1569,10 +1625,10 @@ int main(int argc, char **argv) {
     // assembly for `as` with -fno-integrated-as.
     char *obj = opt_c ? output : create_tmpfile();
     if (opt_integrated_as) {
-      run_cc1(argc, argv, input, obj, true);
+      run_cc1(argc, argv, input, obj, true, false);
     } else {
       char *tmp = create_tmpfile();
-      run_cc1(argc, argv, input, tmp, false);
+      run_cc1(argc, argv, input, tmp, false, false);
       run_as(tmp, obj);
     }
 
