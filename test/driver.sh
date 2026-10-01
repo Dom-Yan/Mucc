@@ -609,22 +609,22 @@ $tmp/answer
 check '.s and .c linked together'
 
 # ... an instruction it doesn't know in a .s file: a note, then `as`
-printf '  .text\n  .globl f\nf:\n  cpuid\n  ret\n' > $tmp/cpuid.s
-$mucc -c -o $tmp/cpuid.o $tmp/cpuid.s 2>&1 | grep -q 'using the system assembler'
+printf '  .text\n  .globl f\nf:\n  movups %%xmm0, %%xmm1\n  ret\n' > $tmp/unknown.s
+$mucc -c -o $tmp/unknown.o $tmp/unknown.s 2>&1 | grep -q 'using the system assembler'
 check 'unknown instruction in a .s file falls back to as'
 
 # ... and in an asm() statement: quietly `as`
-echo 'int main() { asm("pushq %rbx; cpuid; popq %rbx"); return 0; }' > $tmp/cpuid.c
-$mucc -o $tmp/cpuid $tmp/cpuid.c 2> $tmp/err && [ ! -s $tmp/err ] && $tmp/cpuid
+echo 'int main() { asm("movups %xmm0, %xmm1"); return 0; }' > $tmp/unknown.c
+$mucc -o $tmp/unknown $tmp/unknown.c 2> $tmp/err && [ ! -s $tmp/err ] && $tmp/unknown
 check 'unknown instruction in asm() falls back to as'
 
 # -fno-as-fallback: either one is an error instead, naming the reason
-$mucc -fno-as-fallback -c -o $tmp/cpuid.o $tmp/cpuid.s 2>&1 |
-    grep -q "cpuid.s: the built-in assembler can't assemble this: unknown instruction 'cpuid'"
+$mucc -fno-as-fallback -c -o $tmp/unknown.o $tmp/unknown.s 2>&1 |
+    grep -q "unknown.s: the built-in assembler can't assemble this: unknown instruction 'movups'"
 check '-fno-as-fallback with a .s file'
 
-$mucc -fno-as-fallback -c -o $tmp/cpuid.o $tmp/cpuid.c 2>&1 |
-    grep -q "cpuid.c: the built-in assembler can't assemble an asm statement"
+$mucc -fno-as-fallback -c -o $tmp/unknown.o $tmp/unknown.c 2>&1 |
+    grep -q "unknown.c: the built-in assembler can't assemble an asm statement"
 check '-fno-as-fallback with asm()'
 
 $mucc -fno-as-fallback -fno-integrated-as -c -o $tmp/seven.o $tmp/empty.c 2>&1 |
