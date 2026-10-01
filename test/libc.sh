@@ -27,6 +27,7 @@ done
 PATH=$tmp/bin:$PATH make -s libc > $tmp/log 2>&1 &&
     ! grep -v -E '^ld -o /dev/null .* -shared( |$)' $tmp/calls 2> /dev/null
 check 'make libc with no gcc, as, ld or ar'
+rm -f $tmp/calls
 
 cat > $tmp/prog.c <<'EOF'
 #include <math.h>
