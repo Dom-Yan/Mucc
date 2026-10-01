@@ -117,11 +117,11 @@ for no `sudo`), and `make uninstall` removes it.
 
 | | |
 | --- | --- |
-| Source | 19,385 lines of C in 13 files |
+| Source | 19,975 lines of C in 13 files |
 | Released binary | about 11 MB, with musl and Linux's headers inside |
 | Compiling its own source | 0.20 s (gcc `-O0`: 0.91 s, gcc `-O2`: 3.54 s) |
-| Tests | 51 programs with 1,914 assertions, plus 262 command-line, error, assembler and linker checks |
-| Real programs | CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC |
+| Tests | 51 programs with 1,927 assertions, 8 Linux programs with 166 checks, plus 262 command-line, error, assembler and linker checks |
+| Real programs | CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC, QuickJS (its 9 test files pass), the kilo text editor |
 | Self-hosting | a mucc built by mucc builds a byte-identical mucc |
 
 Times are from WSL 2 on Ubuntu with gcc 15.2.
@@ -134,13 +134,18 @@ Times are from WSL 2 on Ubuntu with gcc 15.2.
   structs by value, varargs
 - GNU extensions: statement expressions, computed `goto`, case ranges,
   `__attribute__`, extended `asm`, and gcc's builtins for bit counting
-  (`__builtin_clz`, `__builtin_popcount`, ...), byte swaps, branch hints
+  (`__builtin_clz`, `__builtin_popcount`, ...), byte swaps, branch hints,
   overflow checks (`__builtin_add_overflow`, ...) and atomics (`__sync_*`,
   `__atomic_*`)
+- Code that can't run isn't compiled, as with gcc: `if (0)`, `0 && x`,
+  constant `?:` and statements after a `return`. Code like
+  `if (ENABLE_FEATURE) f();` links without f.
 - Inline assembly for kernels and drivers: port I/O (`inb`, `outl`, ...),
   `cpuid`, `rdtsc`, `rdmsr`, `lgdt`, `cli`, `iretq` and other system
   instructions, all assembled without binutils
 - Assembly files: `.s`, and `.S`, which go through the preprocessor first
+- Its own linker: static executables, relocatable objects (`-r`, as
+  Linux's kbuild uses for `built-in.o`) and map files (`-Wl,-Map,FILE`)
 - Linux's own headers (`<linux/*.h>`, `<asm/*.h>`, ...) come with the
   bundled musl, for programs that use the kernel directly: USB through
   usbfs, input devices, netlink, ioctls
@@ -152,7 +157,9 @@ Times are from WSL 2 on Ubuntu with gcc 15.2.
 
 ```sh
 make test        # language, driver, error, assembler and linker tests
-make test-all    # also self-hosting, musl and the single binary
+make test-all    # also self-hosting, musl, the single binary, and
+                 # programs written from scratch for Linux, each built by
+                 # the single binary alone in an empty root
 make difftest    # random programs compared against gcc
 ```
 

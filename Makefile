@@ -78,7 +78,7 @@ test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	$(call test_scripts,./mucc)
 
-test-all: test test-stage2 selfhost test-libc test-single
+test-all: test test-stage2 selfhost test-libc test-single test-programs
 
 # Differential testing: random programs compiled by mucc and gcc must print
 # the same thing. `make difftest N=2000` for more. See test/difftest.sh.
@@ -204,6 +204,11 @@ build/obj/%.o: mucc src/%.c src/mucc.h $(MUSL_BUILD)/lib/libc.a
 test-single: build/mucc
 	test/single.sh build/mucc
 
+# Programs written from scratch for Linux (test/programs/), each built by
+# the single binary alone in an empty root, then run. See test/programs.sh.
+test-programs: build/mucc
+	test/programs.sh build/mucc
+
 # Install
 
 install: mucc
@@ -233,4 +238,4 @@ clean:
 	rm -f $(filter-out test/asm-forms.s,$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
-.PHONY: test clean test-stage2 selfhost install uninstall difftest libc test-libc test-single
+.PHONY: test clean test-stage2 selfhost install uninstall difftest libc test-libc test-single test-programs
