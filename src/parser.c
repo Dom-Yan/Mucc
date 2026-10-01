@@ -1218,13 +1218,22 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
     return array_of(ty, -1);
   }
 
+  Token *start = tok;
   Node *expr = conditional(&tok, tok);
   tok = skip(tok, "]");
   ty = type_suffix(rest, tok, ty);
 
   if (ty->kind == TY_VLA || !is_const_expr(expr))
     return vla_of(ty, expr);
-  return array_of(ty, eval(expr));
+
+  // A negative size is an error, as C requires: code checks things at
+  // compile time this way (BusyBox's `char BUG_...[ok ? 1 : -1]`).
+  int64_t len = eval(expr);
+  if (len < 0)
+    error_tok(start, "size of array is negative");
+  if (len > INT32_MAX / MAX(ty->size, 1))
+    error_tok(start, "size of array is too large");
+  return array_of(ty, len);
 }
 
 // type-suffix = "(" func-params
@@ -2991,6 +3000,22 @@ static int64_t case_value(Type *ty, int64_t val) {
   return (ty->is_unsigned && ty->size == 4) ? (int64_t)(uint32_t)val : (int32_t)val;
 }
 
+// Does `node` hold a label or case that a jump could reach from outside?
+static bool has_label(Node *node) {
+  if (!node)
+    return false;
+  if (node->kind == ND_LABEL || node->kind == ND_CASE)
+    return true;
+  if (has_label(node->lhs) || has_label(node->rhs) || has_label(node->cond) ||
+      has_label(node->then) || has_label(node->els) || has_label(node->init) ||
+      has_label(node->inc))
+    return true;
+  for (Node *n = node->body; n; n = n->next)
+    if (has_label(n))
+      return true;
+  return false;
+}
+
 // stmt = "return" expr? ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "switch" "(" expr ")" stmt
@@ -3047,6 +3072,21 @@ static Node *stmt(Token **rest, Token *tok) {
     if (equal(tok, "else"))
       node->els = stmt(&tok, tok->next);
     *rest = tok;
+
+    // With a constant condition, only the branch that can run is
+    // compiled, as gcc does even without optimizing: code like BusyBox's
+    // `if (ENABLE_FEATURE) f();` names functions that don't exist when
+    // the feature is off. A branch with a label stays, since a goto or a
+    // case can still reach it.
+    add_type(node->cond);
+    if (is_integer(node->cond->ty) && is_const_expr(node->cond)) {
+      if (eval(node->cond)) {
+        if (node->els && !has_label(node->els))
+          node->els = NULL;
+      } else if (!has_label(node->then)) {
+        node->then = new_node(ND_BLOCK, tok);
+      }
+    }
     return node;
   }
 
@@ -3376,10 +3416,17 @@ static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr) {
 
   enter_scope();
 
+  // Statements after one that can't finish (a return, a goto, `if (1)
+  // return x;`) run only if a jump reaches them, through a label. Until
+  // one, they're dropped, as gcc does: they may name functions that don't
+  // exist (see the `if` in stmt()).
+  bool dead = false;
   while (!equal(tok, "}") && tok->kind != TK_EOF) {
     Node *item = block_item_or_skip(&tok, tok);
-    if (item)
-      cur = cur->next = item;
+    if (!item || (dead && !is_stmt_expr && !has_label(item)))
+      continue;
+    cur = cur->next = item;
+    dead = !falls_through(item);
   }
 
   leave_scope();
@@ -3581,10 +3628,24 @@ static int64_t eval_rval(Node *node, char ***label) {
   error_tok(node->tok, "invalid initializer");
 }
 
+// Is `node` an lvalue at a constant address: a member of, or element
+// through, a constant pointer, as in offsetof's `&((T *)0)->a.b[2]`?
+static bool is_const_lvalue(Node *node) {
+  if (node->kind == ND_MEMBER)
+    return !node->member->is_bitfield && is_const_lvalue(node->lhs);
+  if (node->kind == ND_DEREF)
+    return is_const_expr(node->lhs);
+  return false;
+}
+
 static bool is_const_expr(Node *node) {
   add_type(node);
 
   switch (node->kind) {
+  case ND_ADDR:
+    return is_const_lvalue(node->lhs);
+  case ND_MEMBER: // an array member, which is its address
+    return node->ty->kind == TY_ARRAY && is_const_lvalue(node);
   case ND_ADD:
   case ND_SUB:
   case ND_MUL:
@@ -3913,15 +3974,37 @@ static Node *conditional(Token **rest, Token *tok) {
   node->then = expr(&tok, tok->next);
   tok = skip(tok, ":");
   node->els = conditional(rest, tok);
+
+  // A constant condition picks the arm at compile time, as gcc does; the
+  // other may name functions that don't exist (see the `if` in stmt()).
+  Node *then = node->then, *els = node->els; // before add_type converts them
+  add_type(node);
+  if (is_integer(cond->ty) && is_const_expr(cond)) {
+    Node *arm = eval(cond) ? then : els;
+    if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
+      return arm;
+    return new_cast(arm, node->ty);
+  }
   return node;
 }
 
+// Is `node` an integer constant equal to `val` (0, or 1 for any nonzero)?
+static bool is_const_truth(Node *node, int val) {
+  add_type(node);
+  return is_integer(node->ty) && is_const_expr(node) && !eval(node) == !val;
+}
+
 // logor = logand ("||" logand)*
+//
+// `1 || x` is 1 without x, as `0 && x` is 0: x isn't compiled, as with
+// gcc (see the `if` in stmt()).
 static Node *logor(Token **rest, Token *tok) {
   Node *node = logand(&tok, tok);
   while (equal(tok, "||")) {
     Token *start = tok;
-    node = new_binary(ND_LOGOR, node, logand(&tok, tok->next), start);
+    Node *rhs = logand(&tok, tok->next);
+    node = is_const_truth(node, 1) ? new_num(1, start)
+                                   : new_binary(ND_LOGOR, node, rhs, start);
   }
   *rest = tok;
   return node;
@@ -3932,7 +4015,9 @@ static Node *logand(Token **rest, Token *tok) {
   Node *node = bitor(&tok, tok);
   while (equal(tok, "&&")) {
     Token *start = tok;
-    node = new_binary(ND_LOGAND, node, bitor(&tok, tok->next), start);
+    Node *rhs = bitor(&tok, tok->next);
+    node = is_const_truth(node, 0) ? new_num(0, start)
+                                   : new_binary(ND_LOGAND, node, rhs, start);
   }
   *rest = tok;
   return node;
@@ -5524,6 +5609,9 @@ static bool falls_through(Node *node) {
   case ND_CASE:
     return falls_through(node->lhs);
   case ND_IF:
+    // A constant condition takes one branch (see stmt()).
+    if (is_integer(node->cond->ty) && is_const_expr(node->cond))
+      return falls_through(eval(node->cond) ? node->then : node->els);
     return !node->els || falls_through(node->then) || falls_through(node->els);
   case ND_FOR:
     // `for (;;)` and `while (1)` only end with a break.

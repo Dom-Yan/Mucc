@@ -398,6 +398,41 @@ if [ $musl ]; then
     check '-z muldefs needs the system linker'
 fi
 
+# -r: objects linked into one object file, as kbuild makes built-in.o;
+# statics of the same name stay apart, a strong definition beats a weak
+# one, and -r output can go into -r again.
+cat > $tmp/ra.c <<'EOF'
+static int helper(void) { return 1; }
+int counter = 10;
+int a_value(void) { return helper() + counter; }
+EOF
+cat > $tmp/rb.c <<'EOF'
+static int helper(void) { return 2; }
+extern int counter;
+static int table[] = {100, 200};
+int *b_ptr = &table[1];
+int b_value(void) { return helper() + counter + *b_ptr; }
+__attribute__((weak)) int pick(void) { return -1; }
+EOF
+echo 'int pick(void) { return 7; }' > $tmp/rc.c
+cat > $tmp/rmain.c <<'EOF'
+int a_value(void), b_value(void), pick(void);
+int main(void) { return a_value() == 11 && b_value() == 212 && pick() == 7 ? 0 : 1; }
+EOF
+for f in ra rb rc rmain; do $mucc -c -o $tmp/$f.o $tmp/$f.c; done
+$mucc -nostdlib -r -o $tmp/rab.o $tmp/ra.o $tmp/rb.o &&
+  $mucc -nostdlib -r -o $tmp/rabc.o $tmp/rab.o $tmp/rc.o 2> $tmp/r.err &&
+  [ ! -s $tmp/r.err ] && $mucc -o $tmp/r $tmp/rmain.o $tmp/rabc.o && $tmp/r
+check -r
+
+# -Map FILE: where everything went
+if [ $musl ]; then
+    $mucc -o $tmp/mapped $tmp/rmain.o $tmp/rabc.o -Wl,-Map,$tmp/out.map 2> $tmp/map.err &&
+      [ ! -s $tmp/map.err ] && grep -q '^\.text ' $tmp/out.map &&
+      grep -q ' a_value$' $tmp/out.map
+    check -Map
+fi
+
 # -nostdlib: a program with its own _start, and no C library
 cat > $tmp/nostdlib.c <<'EOF'
 void _start(void) {
@@ -630,6 +665,11 @@ answer2:
   mov $ANSWER, %eax        # the answer, less 2
 #endif
   add $(end - start), %eax
+  xor %ecx, %ecx
+1:
+  inc %ecx                 # 1b and 1f are labels, not numbers
+  cmp $3, %ecx
+  jne 1b
   ret
   .section .rodata
 start: .ascii "ab"

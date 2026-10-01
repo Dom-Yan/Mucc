@@ -4,7 +4,41 @@
  * This is a block comment.
  */
 
+// Code that can't run isn't compiled, as with gcc, so it may name a
+// function that isn't defined anywhere: this file only links if every
+// call to never_defined() below is left out.
+void never_defined(void);
+#define FEATURE 0
+
+static int dead_code(int x) {
+  if (FEATURE)
+    never_defined();
+  if (FEATURE && x)
+    never_defined();
+  if (!FEATURE || x)
+    x++;
+  else
+    never_defined();
+  x += FEATURE ? (never_defined(), 1) : 2;
+  if (sizeof(int) == 4)
+    return x;
+  never_defined(); // after an `if` that always returns
+  return 0;
+}
+
+static int dead_but_labeled(int x) {
+  goto inside;
+  if (0) {
+  inside: // reachable by the goto, so kept
+    x = 42;
+  }
+  return x;
+}
+
 int main() {
+  ASSERT(4, dead_code(1));
+  ASSERT(42, dead_but_labeled(0));
+  ASSERT(5, ({ int x = 5; switch (x) { case 1: return 1; x = 0; case 5: break; } x; }));
   ASSERT(3, ({ int x; if (0) x=2; else x=3; x; }));
   ASSERT(3, ({ int x; if (1-1) x=2; else x=3; x; }));
   ASSERT(2, ({ int x; if (1) x=2; else x=3; x; }));
