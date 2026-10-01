@@ -505,7 +505,8 @@ int run_ranlib(int argc, char **argv);
 //---------- link.c: static linker (stage 6) ---------------------------------
 
 bool link_static(StringArray *inputs, StringArray *names, StringArray *lib_paths,
-                 char *path, bool strip, char **why);
+                 char *path, bool strip, char *map, char **why);
+bool link_relocatable(StringArray *inputs, char *path, char **why);
 
 //---------- unicode.c: UTF-8 helpers ----------------------------------------
 

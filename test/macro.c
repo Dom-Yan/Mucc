@@ -33,6 +33,18 @@ int pm4 = 1;
 int pm4 = 0;
 #endif
 
+// C99's _Pragma: #pragma from a macro. Others are ignored, as #pragma's.
+#define HIDDEN_BEGIN _Pragma("GCC visibility push(hidden)")
+#define HIDDEN_END _Pragma("GCC visibility pop")
+HIDDEN_BEGIN
+int pragma_op = 5;
+HIDDEN_END
+#define PM5 1
+_Pragma("push_macro(\"PM5\")")
+#undef PM5
+_Pragma("pop_macro(\"PM5\")")
+int pm5 = PM5;
+
 int ret3(void) { return 3; }
 int dbl(int x) { return x*x; }
 
@@ -49,6 +61,8 @@ int main() {
   ASSERT(2, pm2);
   ASSERT(1, pm3);
   ASSERT(0, pm4);
+  ASSERT(5, pragma_op);
+  ASSERT(1, pm5);
 
   ASSERT(5, include1);
   ASSERT(7, include2);
@@ -441,6 +455,13 @@ int main() {
 
 #define M31(x, y) (1, ##x y)
   ASSERT(3, M31(, 3));
+
+  // A preprocessing number may hold `_`, so 802_2 is one token to paste,
+  // as in BusyBox's ETH_P_##802_2.
+#define P_802_2 42
+#define M32(x) P_##x
+  ASSERT(42, M32(802_2));
+  ASSERT(0, strcmp(STR(802_2), "802_2"));
 
   printf("OK\n");
   return 0;

@@ -445,6 +445,15 @@ static void unreachable(void) { puts("x"); }
 int main(void) { unreachable(); return 0; }
 EOF
 
+# A negative array size is an error, as compile-time checks rely on.
+expect_error "1:21: error: size of array is negative" <<'EOF'
+struct S { char bug[1 == 2 ? 1 : -1]; };
+EOF
+
+expect_error "1:7: error: size of array is negative" <<'EOF'
+int a[-4];
+EOF
+
 # enum E : type: values must fit the type, and it must be an integer type.
 expect_error "1:30: error: enumerator value 256 is outside the range of 'unsigned char'" <<'EOF'
 enum E : unsigned char { A = 256 };

@@ -1395,6 +1395,45 @@ static void fill_image(void) {
   }
 }
 
+//---------- The map file (-Map) ---------------------------------------------
+
+static int by_addr(const void *a, const void *b) {
+  GSym *x = *(GSym **)a, *y = *(GSym **)b;
+  return x->addr < y->addr ? -1 : x->addr > y->addr;
+}
+
+// Where everything went: each output section with the input sections in
+// it, then the global symbols by address. For people, as ld's -Map.
+static void write_map(char *path) {
+  FILE *fp = fopen(path, "w");
+  if (!fp)
+    error("cannot open map file: %s: %s", path, strerror(errno));
+
+  fprintf(fp, "Sections\n\n");
+  for (int i = 0; i < nouts; i++) {
+    OutSec *o = outs[i];
+    fprintf(fp, "%-24s 0x%016lx 0x%8lx\n", o->name, (unsigned long)o->addr,
+            (unsigned long)o->size);
+    for (int k = 0; k < o->nin; k++) {
+      InSec *in = o->in[k];
+      fprintf(fp, "  %-22s 0x%016lx 0x%8lx %s\n", in->name,
+              (unsigned long)(o->addr + in->offset), (unsigned long)in->sh->sh_size,
+              in->file->name);
+    }
+  }
+
+  GSym **syms = calloc(ngsyms + 1, sizeof(GSym *));
+  int n = 0;
+  for (int i = 0; i < ngsyms; i++)
+    if (gsymlist[i]->is_defined)
+      syms[n++] = gsymlist[i];
+  qsort(syms, n, sizeof(GSym *), by_addr);
+  fprintf(fp, "\nSymbols\n\n");
+  for (int i = 0; i < n; i++)
+    fprintf(fp, "0x%016lx %s\n", (unsigned long)syms[i]->addr, syms[i]->name);
+  fclose(fp);
+}
+
 //---------- Entry point -----------------------------------------------------
 
 static void reset(void) {
@@ -1427,7 +1466,7 @@ static void reset(void) {
 // support; then *why says what. Real errors, like undefined symbols,
 // are reported and end mucc, as ld's would.
 bool link_static(StringArray *inputs, StringArray *names, StringArray *lib_paths,
-                 char *path, bool strip, char **why) {
+                 char *path, bool strip, char *map, char **why) {
   reset();
   strip_all = strip;
   jmp_buf here;
@@ -1477,5 +1516,379 @@ bool link_static(StringArray *inputs, StringArray *names, StringArray *lib_paths
         apply_relocations(files[i]->secs[k]);
 
   write_executable(path);
+  if (map)
+    write_map(map);
+  return true;
+}
+
+//---------- Relocatable output (-r) -----------------------------------------
+//
+// `ld -r`: the inputs' sections, joined by name into one object file
+// with their symbols and relocations, to be linked later. Linux's kbuild
+// (and BusyBox's) makes each directory's built-in.o this way. Local
+// symbols keep their names, globals are merged by name as in a link, and
+// every relocation is carried over, moved by where its section went.
+
+// A symbol in the output: a section's (kind 0), a local (1) or a global
+// (2), by index into rsecs[], rlocals[] or rglobals[]; kind -1 is none.
+typedef struct {
+  int kind;
+  int idx;
+} RRef;
+
+typedef struct {
+  uint64_t offset;
+  int type;
+  RRef sym;
+  int64_t addend;
+} RRel;
+
+// An output section, and the relocations against it.
+typedef struct {
+  char *name;
+  Elf64_Shdr sh;     // type, flags, alignment and entsize; size so far
+  Buf data;          // contents (empty for SHT_NOBITS)
+  RRel *rels;
+  int nrels, caprels;
+} RSec;
+
+typedef struct {
+  char *name;
+  Elf64_Sym sym;     // st_shndx: an rsecs[] index + 1, or SHN_ABS/COMMON/UNDEF
+} RSym;
+
+static RSec *rsecs;
+static int nrsecs, caprsecs;
+static RSym *rlocals, *rglobals;
+static int nrlocals, caprlocals, nrglobals, caprglobals;
+static HashMap rsec_map, rglobal_map;
+
+// The output section `name` for input section `sh`, made if needed.
+static int rsec_for(char *name, Elf64_Shdr *sh) {
+  int idx = (int)(intptr_t)hashmap_get(&rsec_map, name) - 1;
+  if (idx >= 0) {
+    if (rsecs[idx].sh.sh_type != sh->sh_type)
+      fail("section %s has different types", name);
+    return idx;
+  }
+  rsecs = grow(rsecs, nrsecs, &caprsecs, sizeof(RSec));
+  RSec *r = &rsecs[nrsecs];
+  *r = (RSec){.name = name};
+  r->sh.sh_type = sh->sh_type;
+  r->sh.sh_flags = sh->sh_flags;
+  r->sh.sh_entsize = sh->sh_entsize;
+  r->sh.sh_addralign = 1;
+  hashmap_put(&rsec_map, name, (void *)(intptr_t)(nrsecs + 1));
+  return nrsecs++;
+}
+
+// Adds global `s`, called `name`, resolving it against others of the name
+// as a link does.
+static int add_rglobal(char *name, Elf64_Sym *s) {
+  int idx = (int)(intptr_t)hashmap_get(&rglobal_map, name) - 1;
+  if (idx < 0) {
+    rglobals = grow(rglobals, nrglobals, &caprglobals, sizeof(RSym));
+    rglobals[nrglobals] = (RSym){name, *s};
+    hashmap_put(&rglobal_map, name, (void *)(intptr_t)(nrglobals + 1));
+    return nrglobals++;
+  }
+
+  Elf64_Sym *old = &rglobals[idx].sym;
+  bool old_def = old->st_shndx != SHN_UNDEF && old->st_shndx != SHN_COMMON;
+  bool old_weak = ELF64_ST_BIND(old->st_info) == STB_WEAK;
+  bool new_weak = ELF64_ST_BIND(s->st_info) == STB_WEAK;
+
+  if (s->st_shndx == SHN_UNDEF) {
+    // A strong reference makes a weak one strong.
+    if (old->st_shndx == SHN_UNDEF && old_weak && !new_weak)
+      old->st_info = ELF64_ST_INFO(STB_GLOBAL, ELF64_ST_TYPE(old->st_info));
+  } else if (s->st_shndx == SHN_COMMON) {
+    if (old->st_shndx == SHN_COMMON) {
+      old->st_size = MAX(old->st_size, s->st_size);
+      old->st_value = MAX(old->st_value, s->st_value);
+    } else if (!old_def) {
+      *old = *s;
+    }
+  } else if (old_def && !old_weak && !new_weak) {
+    error("multiple definition of '%s'", name);
+  } else if (!old_def || (old_weak && !new_weak)) {
+    *old = *s;
+  }
+  return idx;
+}
+
+static void read_relocatable(char *path, unsigned char *data, size_t size) {
+  Elf64_Ehdr *eh = (Elf64_Ehdr *)data;
+  if (!is_elf_object(data, size) || eh->e_ident[EI_CLASS] != ELFCLASS64 ||
+      eh->e_machine != EM_X86_64 || eh->e_type != ET_REL)
+    fail("%s: not an x86-64 object file", path);
+  if (eh->e_shnum == 0 || eh->e_shnum >= SHN_LORESERVE)
+    fail("%s: unsupported number of sections", path);
+
+  Elf64_Shdr *sh = (Elf64_Shdr *)(data + eh->e_shoff);
+  int nsh = eh->e_shnum;
+  char *shstr = (char *)data + sh[eh->e_shstrndx].sh_offset;
+  int *out = calloc(nsh, sizeof(int));          // rsecs[] index, or -1
+  uint64_t *at = calloc(nsh, sizeof(uint64_t)); // offset in it
+
+  for (int i = 0; i < nsh; i++) {
+    out[i] = -1;
+    int type = sh[i].sh_type;
+    if (type == SHT_NULL || type == SHT_SYMTAB || type == SHT_STRTAB ||
+        type == SHT_RELA)
+      continue;
+    if (type == SHT_REL || type == SHT_GROUP || (sh[i].sh_flags & SHF_GROUP))
+      fail("%s: section groups and REL relocations are not supported", path);
+
+    out[i] = rsec_for(shstr + sh[i].sh_name, &sh[i]);
+    RSec *r = &rsecs[out[i]];
+    uint64_t align = MAX(sh[i].sh_addralign, 1);
+    r->sh.sh_addralign = MAX(r->sh.sh_addralign, align);
+    r->sh.sh_flags |= sh[i].sh_flags;
+    while (r->sh.sh_size % align) {
+      if (type != SHT_NOBITS)
+        buf_add(&r->data, "", 1);
+      r->sh.sh_size++;
+    }
+    at[i] = r->sh.sh_size;
+    if (type != SHT_NOBITS)
+      buf_add(&r->data, data + sh[i].sh_offset, sh[i].sh_size);
+    r->sh.sh_size += sh[i].sh_size;
+  }
+
+  // Symbols: where each of this file's goes in the output
+  int symtab = -1;
+  for (int i = 0; i < nsh; i++)
+    if (sh[i].sh_type == SHT_SYMTAB)
+      symtab = i;
+  int nsyms = 0;
+  Elf64_Sym *syms = NULL;
+  char *strtab = NULL;
+  if (symtab >= 0) {
+    syms = (Elf64_Sym *)(data + sh[symtab].sh_offset);
+    nsyms = sh[symtab].sh_size / sizeof(Elf64_Sym);
+    strtab = (char *)data + sh[sh[symtab].sh_link].sh_offset;
+  }
+  RRef *ref = calloc(nsyms + 1, sizeof(RRef));
+  int64_t *adjust = calloc(nsyms + 1, sizeof(int64_t));
+
+  for (int i = 1; i < nsyms; i++) {
+    Elf64_Sym s = syms[i];
+    int shndx = s.st_shndx;
+    int type = ELF64_ST_TYPE(s.st_info);
+    ref[i] = (RRef){-1, 0};
+    if (shndx != SHN_UNDEF && shndx < SHN_LORESERVE) {
+      if (out[shndx] < 0)
+        fail("%s: a symbol in a section that isn't kept", path);
+      s.st_value += at[shndx];
+      s.st_shndx = out[shndx] + 1;
+    } else if (shndx >= SHN_LORESERVE && shndx != SHN_ABS && shndx != SHN_COMMON) {
+      fail("%s: unsupported symbol section", path);
+    }
+
+    if (i < (int)sh[symtab].sh_info) {
+      if (type == STT_SECTION) {
+        ref[i] = (RRef){0, out[shndx]};
+        adjust[i] = at[shndx];
+      } else if (type != STT_FILE) {
+        rlocals = grow(rlocals, nrlocals, &caprlocals, sizeof(RSym));
+        rlocals[nrlocals] = (RSym){strtab + s.st_name, s};
+        ref[i] = (RRef){1, nrlocals++};
+      }
+      continue;
+    }
+    ref[i] = (RRef){2, add_rglobal(strtab + s.st_name, &s)};
+  }
+
+  // Relocations, moved with their sections
+  for (int i = 0; i < nsh; i++) {
+    if (sh[i].sh_type != SHT_RELA)
+      continue;
+    int target = sh[i].sh_info;
+    if (target <= 0 || target >= nsh || out[target] < 0)
+      fail("%s: relocations for a section that isn't kept", path);
+    RSec *r = &rsecs[out[target]];
+    Elf64_Rela *rel = (Elf64_Rela *)(data + sh[i].sh_offset);
+    int n = sh[i].sh_size / sizeof(Elf64_Rela);
+    for (int k = 0; k < n; k++) {
+      int sym = ELF64_R_SYM(rel[k].r_info);
+      if (sym >= nsyms || (sym > 0 && ref[sym].kind < 0))
+        fail("%s: a relocation against an unsupported symbol", path);
+      r->rels = grow(r->rels, r->nrels, &r->caprels, sizeof(RRel));
+      r->rels[r->nrels++] = (RRel){
+        rel[k].r_offset + at[target], ELF64_R_TYPE(rel[k].r_info),
+        sym ? ref[sym] : (RRef){-1, 0}, rel[k].r_addend + (sym ? adjust[sym] : 0),
+      };
+    }
+  }
+}
+
+// The output symbol table index of `r`: the null symbol, a symbol per
+// section, the locals, then the globals.
+static int rsym_index(RRef r) {
+  switch (r.kind) {
+  case 0: return 1 + r.idx;
+  case 1: return 1 + nrsecs + r.idx;
+  case 2: return 1 + nrsecs + nrlocals + r.idx;
+  }
+  return 0;
+}
+
+// Adds section header `s`'s contents, `len` bytes of `data` (none for
+// SHT_NOBITS), to `body` at its alignment, setting its offset and size.
+static void place_section(Buf *body, Elf64_Shdr *s, void *data, int len) {
+  uint64_t align = MAX(s->sh_addralign, 1);
+  while (body->len % align)
+    buf_add(body, "", 1);
+  s->sh_offset = body->len;
+  if (s->sh_type != SHT_NOBITS) {
+    buf_add(body, data, len);
+    s->sh_size = len;
+  }
+}
+
+static void write_relocatable(char *path) {
+  Buf symtab = {0}, strtab = {0}, shstrtab = {0}, body = {0};
+  Elf64_Sym null = {0};
+  buf_add(&symtab, &null, sizeof(null));
+  buf_add(&strtab, "", 1);
+  buf_add(&shstrtab, "", 1);
+  for (int i = 0; i < nrsecs; i++)
+    add_sym(&symtab, &strtab, "", STB_LOCAL, STT_SECTION, i + 1, 0, 0);
+  for (int pass = 0; pass < 2; pass++) {
+    RSym *list = pass ? rglobals : rlocals;
+    int n = pass ? nrglobals : nrlocals;
+    for (int i = 0; i < n; i++) {
+      Elf64_Sym s = list[i].sym;
+      s.st_name = buf_str(&strtab, list[i].name);
+      buf_add(&symtab, &s, sizeof(s));
+    }
+  }
+
+  // Sections: the null one, the joined ones, their .rela sections, then
+  // the tables.
+  int nrela = 0;
+  for (int i = 0; i < nrsecs; i++)
+    nrela += rsecs[i].nrels > 0;
+  int nsh = 1 + nrsecs + nrela + 3;
+  int symtab_idx = nsh - 3;
+  Elf64_Shdr *shdrs = calloc(nsh, sizeof(Elf64_Shdr));
+  Elf64_Ehdr eh = {0};
+  buf_add(&body, &eh, sizeof(eh));
+
+  for (int i = 0; i < nrsecs; i++) {
+    Elf64_Shdr *s = &shdrs[i + 1];
+    *s = rsecs[i].sh;
+    s->sh_name = buf_str(&shstrtab, rsecs[i].name);
+    place_section(&body, s, rsecs[i].data.data, rsecs[i].data.len);
+  }
+
+  int k = 1 + nrsecs;
+  for (int i = 0; i < nrsecs; i++) {
+    if (!rsecs[i].nrels)
+      continue;
+    Buf rela = {0};
+    for (int j = 0; j < rsecs[i].nrels; j++) {
+      RRel *r = &rsecs[i].rels[j];
+      Elf64_Rela e = {r->offset, ELF64_R_INFO(rsym_index(r->sym), r->type), r->addend};
+      buf_add(&rela, &e, sizeof(e));
+    }
+    Elf64_Shdr *s = &shdrs[k++];
+    s->sh_name = buf_str(&shstrtab, format(".rela%s", rsecs[i].name));
+    s->sh_type = SHT_RELA;
+    s->sh_flags = SHF_INFO_LINK;
+    s->sh_link = symtab_idx;
+    s->sh_info = i + 1;
+    s->sh_addralign = 8;
+    s->sh_entsize = sizeof(Elf64_Rela);
+    place_section(&body, s, rela.data, rela.len);
+  }
+
+  Elf64_Shdr *s = &shdrs[symtab_idx];
+  s->sh_name = buf_str(&shstrtab, ".symtab");
+  s->sh_type = SHT_SYMTAB;
+  s->sh_link = symtab_idx + 1;
+  s->sh_info = 1 + nrsecs + nrlocals;
+  s->sh_addralign = 8;
+  s->sh_entsize = sizeof(Elf64_Sym);
+  place_section(&body, s, symtab.data, symtab.len);
+
+  s = &shdrs[symtab_idx + 1];
+  s->sh_name = buf_str(&shstrtab, ".strtab");
+  s->sh_type = SHT_STRTAB;
+  s->sh_addralign = 1;
+  place_section(&body, s, strtab.data, strtab.len);
+
+  s = &shdrs[symtab_idx + 2];
+  s->sh_name = buf_str(&shstrtab, ".shstrtab");
+  s->sh_type = SHT_STRTAB;
+  s->sh_addralign = 1;
+  place_section(&body, s, shstrtab.data, shstrtab.len);
+
+  while (body.len % 8)
+    buf_add(&body, "", 1);
+  uint64_t shoff = body.len;
+  buf_add(&body, shdrs, nsh * sizeof(Elf64_Shdr));
+
+  Elf64_Ehdr *e = (Elf64_Ehdr *)body.data;
+  memcpy(e->e_ident, ELFMAG, SELFMAG);
+  e->e_ident[EI_CLASS] = ELFCLASS64;
+  e->e_ident[EI_DATA] = ELFDATA2LSB;
+  e->e_ident[EI_VERSION] = EV_CURRENT;
+  e->e_ident[EI_OSABI] = ELFOSABI_SYSV;
+  e->e_type = ET_REL;
+  e->e_machine = EM_X86_64;
+  e->e_version = EV_CURRENT;
+  e->e_shoff = shoff;
+  e->e_ehsize = sizeof(Elf64_Ehdr);
+  e->e_shentsize = sizeof(Elf64_Shdr);
+  e->e_shnum = nsh;
+  e->e_shstrndx = symtab_idx + 2;
+
+  unlink(path);
+  FILE *fp = fopen(path, "wb");
+  if (!fp)
+    error("cannot open output file: %s: %s", path, strerror(errno));
+  fwrite(body.data, 1, body.len, fp);
+  fclose(fp);
+}
+
+// Links object files `inputs` into the object file `path`, as `ld -r`
+// does. An empty archive among them (kbuild's built-in.o for a directory
+// with nothing in it) adds nothing. Returns false, writing nothing, if it
+// meets something it doesn't support; then *why says what.
+bool link_relocatable(StringArray *inputs, char *path, char **why) {
+  rsecs = NULL;
+  nrsecs = caprsecs = 0;
+  rlocals = rglobals = NULL;
+  nrlocals = caprlocals = nrglobals = caprglobals = 0;
+  rsec_map = rglobal_map = (HashMap){0};
+  jmp_buf here;
+  fail_jmp = &here;
+  if (setjmp(here)) {
+    *why = fail_msg;
+    return false;
+  }
+
+  for (int i = 0; i < inputs->len; i++) {
+    char *in = inputs->data[i];
+    size_t size;
+    unsigned char *data = read_file(in, &size);
+    if (size >= 8 && !memcmp(data, "!<arch>\n", 8)) {
+      // Only an empty one: its members would be pulled in by need, which
+      // isn't done here.
+      for (uint64_t off = 8; off + 60 <= size;) {
+        unsigned char *hdr = data + off;
+        if (memcmp(hdr, "/               ", 16) && memcmp(hdr, "//              ", 16) &&
+            memcmp(hdr, "/SYM64/         ", 16))
+          fail("%s: an archive with members in a relocatable link", in);
+        uint64_t len = member_size(hdr);
+        off += 60 + len + (len & 1);
+      }
+      continue;
+    }
+    read_relocatable(in, data, size);
+  }
+  write_relocatable(path);
   return true;
 }

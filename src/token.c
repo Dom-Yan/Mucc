@@ -702,8 +702,8 @@ Token *tokenize(File *file) {
       for (;;) {
         if (p[0] && p[1] && strchr("eEpP", p[0]) && strchr("+-", p[1]))
           p += 2;
-        else if (isalnum(*p) || *p == '.')
-          p++;
+        else if (isalnum(*p) || *p == '.' || *p == '_')
+          p++; // `802_2` is one token, as ETH_P_##802_2 needs
         else if (*p == '\'' && isalnum(p[-1]) && isalnum(p[1]))
           p++; // C23 digit separator, as in 1'000'000
         else

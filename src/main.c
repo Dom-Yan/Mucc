@@ -45,6 +45,7 @@ static bool opt_shared;
 static bool opt_pthread;       // -pthread: also link -lpthread
 static bool opt_nostartfiles;  // -nostartfiles or -nostdlib: no crt*.o
 static bool opt_nodefaultlibs; // -nodefaultlibs or -nostdlib: no libc
+static bool opt_r;             // -r: link into an object file, as ld -r
 static char *opt_MF;
 static char *opt_MT;
 static char *opt_o;
@@ -708,6 +709,11 @@ static void parse_args(int argc, char **argv) {
 
     // Linking without the C library's startup files (crt1.o, ...) or its
     // libraries, for programs that bring their own _start.
+    if (!strcmp(argv[i], "-r")) {
+      opt_r = true;
+      continue;
+    }
+
     if (!strcmp(argv[i], "-nostdlib")) {
       opt_nostartfiles = opt_nodefaultlibs = true;
       continue;
@@ -1273,6 +1279,7 @@ static char *static_noop_flags[] = {
   "--enable-new-dtags", "--disable-new-dtags", "--eh-frame-hdr", "--relax",
   "--no-relax", "--fatal-warnings", "--no-copy-dt-needed-entries",
   "--compress-debug-sections=*", "--icf=*", "--version-script=*",
+  "--verbose", "--sort-section=*",
 };
 
 // The `-z keyword`s among them. Others, like -z muldefs, change what
@@ -1305,7 +1312,7 @@ static int static_noop_flag(StringArray *inputs, int i) {
   if (!strncmp(arg, "-z", 2))
     return in_patterns(arg + 2, static_noop_z, nz);
   if ((!strcmp(arg, "-rpath") || !strcmp(arg, "-rpath-link") ||
-       !strcmp(arg, "--version-script")) && next)
+       !strcmp(arg, "--version-script") || !strcmp(arg, "--sort-section")) && next)
     return 2;
   return in_patterns(arg, static_noop_flags,
                      sizeof(static_noop_flags) / sizeof(*static_noop_flags));
@@ -1331,10 +1338,25 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
       return false;
   }
   StringArray objs = {};
+  char *map = NULL;
   for (int i = 0; i < inputs->len; i++) {
     int n = static_noop_flag(inputs, i);
     if (n) {
       i += n - 1;
+      continue;
+    }
+    // -Map FILE: a report of where everything went, as ld writes
+    char *arg = inputs->data[i];
+    if ((!strcmp(arg, "-Map") || !strcmp(arg, "--Map")) && i + 1 < inputs->len) {
+      map = inputs->data[++i];
+      continue;
+    }
+    if (!strncmp(arg, "-Map=", 5) || !strncmp(arg, "--Map=", 6)) {
+      map = strchr(arg, '=') + 1;
+      continue;
+    }
+    if (!strcmp(arg, "-s") || !strcmp(arg, "--strip-all")) {
+      strip = true;
       continue;
     }
     if (inputs->data[i][0] == '-' && strncmp(inputs->data[i], "-l", 2)) {
@@ -1372,7 +1394,7 @@ static bool run_builtin_linker(StringArray *inputs, char *output) {
     strarray_push(&names, NULL);
 
   char *why;
-  if (link_static(&files, &names, &lib_paths, output, strip, &why))
+  if (link_static(&files, &names, &lib_paths, output, strip, map, &why))
     return true;
   fprintf(stderr, "mucc: note: using the system linker (%s)\n", why);
   return false;
@@ -1399,6 +1421,39 @@ static void check_static_libraries(StringArray *inputs) {
       error("cannot find %s: not in -L directories or the bundled C library "
             "(--libc=system links the system's libraries)", name);
   }
+}
+
+// -r: the objects linked into one object file, with link.c's
+// link_relocatable(), or by `ld -r` if it can't. Linker flags that mean
+// nothing here (see static_noop_flag()) are dropped.
+static void run_relocatable_link(StringArray *inputs, char *output) {
+  StringArray objs = {};
+  for (int i = 0; i < inputs->len; i++) {
+    int n = static_noop_flag(inputs, i);
+    if (n) {
+      i += n - 1;
+      continue;
+    }
+    strarray_push(&objs, inputs->data[i]);
+  }
+
+  bool plain = true;
+  for (int i = 0; i < objs.len; i++)
+    plain &= objs.data[i][0] != '-';
+  char *why = "a linker flag";
+  if (plain && !opt_system_ld && link_relocatable(&objs, output, &why))
+    return;
+  fprintf(stderr, "mucc: note: using the system linker (%s)\n", why);
+
+  StringArray arr = {};
+  strarray_push(&arr, "ld");
+  strarray_push(&arr, "-r");
+  strarray_push(&arr, "-o");
+  strarray_push(&arr, output);
+  for (int i = 0; i < inputs->len; i++)
+    strarray_push(&arr, inputs->data[i]);
+  strarray_push(&arr, NULL);
+  run_subprocess(arr.data);
 }
 
 static void run_linker(StringArray *inputs, char *output) {
@@ -1637,6 +1692,11 @@ int main(int argc, char **argv) {
       strarray_push(&ld_args, obj);
       hashmap_put(&object_sources, obj, input);
     }
+  }
+
+  if (ld_args.len > 0 && opt_r) {
+    run_relocatable_link(&ld_args, opt_o ? opt_o : "a.out");
+    return 0;
   }
 
   if (ld_args.len > 0) {

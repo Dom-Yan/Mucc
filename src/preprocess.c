@@ -488,6 +488,24 @@ static Token *push_pop_macro(Token *tok) {
   return tok;
 }
 
+// C99's _Pragma("text"), which a macro can expand to: the same as
+// `#pragma text`, so, as there, push_macro and pop_macro are done and
+// other pragmas are ignored. Returns the token after the `)`.
+static Token *pragma_operator(Token *tok) {
+  tok = skip(tok->next, "(");
+  if (tok->kind != TK_STR)
+    error_tok(tok, "_Pragma takes a string literal");
+  Token *str = tok;
+  tok = skip(tok->next, ")");
+
+  // The string's contents, its escapes undone, as a line of tokens
+  Token *body = tokenize(new_file(str->file->name, str->file->file_no,
+                                  format("%s\n", str->str)));
+  if (equal(body, "push_macro") || equal(body, "pop_macro"))
+    push_pop_macro(body);
+  return tok;
+}
+
 static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_name) {
   MacroParam head = {};
   MacroParam *cur = &head;
@@ -1278,6 +1296,11 @@ static Token *preprocess2(Token *tok) {
     if (expand_macro(&tok, tok))
       continue;
 
+    if (equal(tok, "_Pragma") && equal(tok->next, "(")) {
+      tok = pragma_operator(tok);
+      continue;
+    }
+
     // Pass through if it is not a "#".
     if (!is_hash(tok)) {
       tok->line_delta = tok->file->line_delta;
@@ -1741,6 +1764,11 @@ Token *preprocess(Token *tok) {
   // the file name #line gave.
   for (Token *t = tok; t; t = t->next)
     t->line_no += t->line_delta;
+
+  // Assembly (.S) keeps its tokens as written: `1b` is a label, not a C
+  // number.
+  if (opt_asm_cpp)
+    return tok;
 
   convert_pp_tokens(tok);
   join_adjacent_string_literals(tok);
