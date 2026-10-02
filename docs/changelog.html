@@ -59,6 +59,35 @@
 Downloads for each release are on the
 <a href="https://github.com/Dom-Yan/Mucc/releases">releases page</a>.</p>
 
+<h2 id="unreleased">Not released yet (on the main branch, October 1, 2026)</h2>
+<ul>
+  <li>Fixes: atomics' fetch operations return the value from before, and
+    atomic stores are sequentially consistent; an enum with no negative
+    values is unsigned, as with gcc; a negative array size is an error.</li>
+  <li>Linux's own headers (Linux 6.18.54) come with the bundled musl, for
+    programs that use the kernel directly. The single binary grows from
+    7.2 to 10.9 MB.</li>
+  <li><code>.S</code> files, <code>-x assembler-with-cpp</code>,
+    <code>_Pragma</code>, C23's <code>&lt;stdckdint.h&gt;</code>,
+    <code>offsetof</code> with a member path as a constant, and forward
+    <code>enum E;</code> declarations.</li>
+  <li>gcc's builtins for bit counting, byte swaps, overflow checks and
+    atomics (<code>__sync_*</code>, <code>__atomic_*</code>), and
+    <code>__builtin_expect</code>, <code>__builtin_constant_p</code> and
+    others.</li>
+  <li>The assembler: port I/O, <code>cpuid</code>, <code>rdtsc</code>,
+    MSRs, descriptor tables, fences, <code>bswap</code>,
+    <code>popcnt</code>, <code>.ascii</code>, value lists and label
+    differences.</li>
+  <li>The linker: relocatable links (<code>-r</code>), map files
+    (<code>-Map</code>) and many more <code>-Wl,</code> flags; the driver:
+    <code>-pthread</code>, <code>-nostdlib</code>,
+    <code>-Wp,-MD</code>, and tuning and hardening flags accepted.</li>
+  <li>Code that can't run isn't compiled, as with gcc.</li>
+  <li>Eight Linux programs written from scratch are built by the single
+    binary in an empty root and run on every change.</li>
+</ul>
+
 <h2 id="v1.0.1">Mucc 1.0.1 (September 29, 2026)</h2>
 <ul>
   <li><code>mucc --version</code> prints the version.</li>
