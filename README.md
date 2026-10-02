@@ -117,10 +117,10 @@ for no `sudo`), and `make uninstall` removes it.
 
 | | |
 | --- | --- |
-| Source | 19,975 lines of C in 13 files |
+| Source | 19,991 lines of C in 13 files |
 | Released binary | about 11 MB, with musl and Linux's headers inside |
 | Compiling its own source | 0.20 s (gcc `-O0`: 0.91 s, gcc `-O2`: 3.54 s) |
-| Tests | 51 programs with 1,927 assertions, 8 Linux programs with 166 checks, plus 262 command-line, error, assembler and linker checks |
+| Tests | 51 programs with 1,934 assertions, 8 Linux programs with 166 checks, plus 262 command-line, error, assembler and linker checks |
 | Real programs | CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC, QuickJS (its 9 test files pass), the kilo text editor |
 | Self-hosting | a mucc built by mucc builds a byte-identical mucc |
 
