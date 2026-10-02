@@ -3477,6 +3477,15 @@ static int64_t eval(Node *node) {
   return eval2(node, NULL);
 }
 
+// Whether constant `node` is nonzero: 0.5 is, though eval() would make it
+// the integer 0.
+static bool eval_truth(Node *node) {
+  add_type(node);
+  if (is_flonum(node->ty))
+    return eval_double(node) != 0;
+  return eval(node) != 0;
+}
+
 // Evaluate a given node as a constant expression.
 //
 // A constant expression is either just a number or ptr+n where ptr
@@ -3528,29 +3537,36 @@ static int64_t eval2(Node *node, char ***label) {
       return (uint64_t)eval(node->lhs) >> eval(node->rhs);
     return eval(node->lhs) >> eval(node->rhs);
   case ND_EQ:
-    return eval(node->lhs) == eval(node->rhs);
   case ND_NE:
-    return eval(node->lhs) != eval(node->rhs);
   case ND_LT:
-    if (node->lhs->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) < eval(node->rhs);
-    return eval(node->lhs) < eval(node->rhs);
   case ND_LE:
+    // Floating operands (as in `2.5 > 2.0`) are compared as such.
+    if (is_flonum(node->lhs->ty)) {
+      long double a = eval_double(node->lhs), b = eval_double(node->rhs);
+      return node->kind == ND_EQ ? a == b : node->kind == ND_NE ? a != b :
+             node->kind == ND_LT ? a < b : a <= b;
+    }
+    if (node->kind == ND_EQ)
+      return eval(node->lhs) == eval(node->rhs);
+    if (node->kind == ND_NE)
+      return eval(node->lhs) != eval(node->rhs);
     if (node->lhs->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) <= eval(node->rhs);
-    return eval(node->lhs) <= eval(node->rhs);
+      return node->kind == ND_LT ? (uint64_t)eval(node->lhs) < eval(node->rhs)
+                                 : (uint64_t)eval(node->lhs) <= eval(node->rhs);
+    return node->kind == ND_LT ? eval(node->lhs) < eval(node->rhs)
+                               : eval(node->lhs) <= eval(node->rhs);
   case ND_COND:
-    return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
+    return eval_truth(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
   case ND_COMMA:
     return eval2(node->rhs, label);
   case ND_NOT:
-    return !eval(node->lhs);
+    return !eval_truth(node->lhs);
   case ND_BITNOT:
     return ~eval(node->lhs);
   case ND_LOGAND:
-    return eval(node->lhs) && eval(node->rhs);
+    return eval_truth(node->lhs) && eval_truth(node->rhs);
   case ND_LOGOR:
-    return eval(node->lhs) || eval(node->rhs);
+    return eval_truth(node->lhs) || eval_truth(node->rhs);
   case ND_CAST: {
     // To bool, anything nonzero is 1: 2, 256, 0.5 and an address too.
     if (node->ty->kind == TY_BOOL) {

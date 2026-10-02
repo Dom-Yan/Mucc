@@ -38,6 +38,16 @@ static int dead_but_labeled(int x) {
 int main() {
   ASSERT(4, dead_code(1));
   ASSERT(42, dead_but_labeled(0));
+
+  // Constant conditions with floating operands are decided as such:
+  // 2.5 > 2.0, and 0.5 is true.
+  ASSERT(1, (2.5 > 2.0) ? 1 : 0);
+  ASSERT(0, (2.5 == 2.0) ? 1 : 0);
+  ASSERT(2, 0.5 ? 2 : 3);
+  ASSERT(1, 0.5 && 1);
+  ASSERT(0, !0.5);
+  ASSERT(5, ({ int x = 0; if (0.25 < 0.5) x = 5; x; }));
+  ASSERT(7, ({ int x = 7; if (1e-300 == 0.0) x = 0; x; }));
   ASSERT(5, ({ int x = 5; switch (x) { case 1: return 1; x = 0; case 5: break; } x; }));
   ASSERT(3, ({ int x; if (0) x=2; else x=3; x; }));
   ASSERT(3, ({ int x; if (1-1) x=2; else x=3; x; }));
