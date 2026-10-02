@@ -100,6 +100,16 @@ clearer or more correct.</p>
 
 <h2 id="news">News</h2>
 <dl class="news">
+  <dt>October 1, 2026</dt>
+  <dd>On the main branch, for the next release: Linux's own headers come
+    with the bundled musl, so programs that use the kernel directly (USB
+    through usbfs, input devices, netlink) compile from the one file.
+    Also <code>.S</code> files, C23's <code>&lt;stdckdint.h&gt;</code>,
+    gcc's bit, overflow and atomic builtins, <code>_Pragma</code>,
+    relocatable links (<code>-r</code>), system instructions in the
+    assembler, and fixes to atomics and enums. Eight Linux programs written
+    from scratch are now built by the single binary in an empty root on
+    every change, and QuickJS and the kilo text editor build and work.</dd>
   <dt>September 29, 2026</dt>
   <dd><a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.0.1">Mucc
     1.0.1</a> released. It adds <code>mucc --version</code>, and the README
@@ -167,6 +177,12 @@ the <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
     thread-local variables, structs by value, varargs</li>
   <li>GNU extensions: statement expressions, computed <code>goto</code>,
     case ranges, <code>__attribute__</code>, extended <code>asm</code></li>
+  <li>Coming in the next release (on the main branch now): Linux's own
+    headers (<code>&lt;linux/*.h&gt;</code>), <code>.S</code> files,
+    <code>&lt;stdckdint.h&gt;</code>, gcc's bit-counting, overflow and
+    atomic builtins, <code>_Pragma</code>, <code>-r</code> and
+    <code>-Map</code> in the linker, and port I/O, <code>cpuid</code> and
+    other system instructions in the assembler</li>
   <li>Not supported: C++, <code>_Complex</code>, <code>__int128</code>,
     <code>_BitInt</code>, <code>asm goto</code>, K&amp;R function
     definitions, and optimization beyond register allocation and constant
