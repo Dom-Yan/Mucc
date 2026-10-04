@@ -754,6 +754,15 @@ int main() { return blob_end - blob == 10000000 && blob[0] == blob[0] ? 0 : 1; }
 $mucc -o $tmp/blob $tmp/blob.c $tmp/blob.o && $tmp/blob
 check '.incbin linked into a program'
 
+# String literals and const objects are read-only: writing to one faults
+# (the shell reports a signal as an exit status above 128).
+for target in '"abc"' '(char *)&ci' '(char *)carr'; do
+  echo "const int ci = 1; const int carr[2] = {1, 2};
+int main() { char *p = $target; *p = 2; return 0; }" > $tmp/ro.c
+  $mucc -o $tmp/ro $tmp/ro.c && { $tmp/ro; [ $? -gt 128 ]; } 2> /dev/null
+  check "writing to $target faults"
+done
+
 # Out of memory is an error, not a crash. (mucc reserves memory 64 MB at a
 # time, so it can't start under a 50 MB address space limit.)
 (ulimit -v 51200; $mucc -c -o $tmp/oom.o $tmp/empty.c) 2>&1 | grep -q 'error: out of memory'

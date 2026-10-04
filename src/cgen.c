@@ -2777,12 +2777,24 @@ static void emit_init_arrays(Obj *fn) {
     emit_init_entry("fini", fn->dtor_prio, fn->name);
 }
 
+// A string literal, or a const object with no addresses for the linker to
+// fill in, goes in .rodata, as with gcc, so writing to it faults.
+static bool is_readonly(Obj *var) {
+  if (var->is_tls || var->section || var->rel)
+    return false;
+  Type *ty = var->ty;
+  while (ty->kind == TY_ARRAY)
+    ty = ty->base;
+  return var->is_string || ty->is_const;
+}
+
 static void emit_data(Obj *prog) {
   for (Obj *var = prog; var; var = var->next) {
     if (var->is_function || !var->is_definition)
       continue;
 
     emit_binding(prog, var);
+    bool ro = is_readonly(var);
 
     int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
       ? MAX(16, var->align) : var->align;
@@ -2794,14 +2806,14 @@ static void emit_data(Obj *prog) {
       continue;
     }
 
-    // .data or .tdata, or its section("name")
+    // .data, .rodata or .tdata, or its section("name")
     if (var->init_data) {
       if (var->is_tls)
         println("  .section .tdata,\"awT\",@progbits");
       else if (var->section)
         println("  .section %s,\"aw\",@progbits", var->section);
       else
-        println("  .data");
+        println(ro ? "  .section .rodata" : "  .data");
 
       println("  .type %s, @object", var->name);
       println("  .size %s, %d", var->name, var->ty->size);
@@ -2822,15 +2834,15 @@ static void emit_data(Obj *prog) {
       continue;
     }
 
-    // .bss or .tbss, or its section("name"), which holds zeros unless it
-    // is a .bss one
+    // .bss, .rodata or .tbss, or its section("name"), which holds zeros
+    // unless it is a .bss one
     if (var->is_tls)
       println("  .section .tbss,\"awT\",@nobits");
     else if (var->section)
       println("  .section %s,\"aw\",@%s", var->section,
               strncmp(var->section, ".bss", 4) ? "progbits" : "nobits");
     else
-      println("  .bss");
+      println(ro ? "  .section .rodata" : "  .bss");
 
     println("  .align %d", align);
     println("%s:", var->name);

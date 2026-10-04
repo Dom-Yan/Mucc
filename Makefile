@@ -32,7 +32,9 @@ S2=stage2
 S3=stage3
 COMMON=
 MUSL_DEP=
-link_test=$(CC) -pthread -o $@ $(2) -xc test/common
+# (-Wno-psabi: gcc notes that passing a union with a long double changed
+# in gcc 4.4, which test/common does on purpose.)
+link_test=$(CC) -pthread -Wno-psabi -o $@ $(2) -xc test/common
 link_mucc=$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 endif
 TESTS=$(TEST_SRCS:.c=$(X).exe)

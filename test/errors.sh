@@ -930,6 +930,57 @@ expect_error "2:34: error: a packed bit-field spanning more than 8 bytes is not 
 struct s { char c; int a:4; long b:61; };
 EOF
 
+# Nothing const can be modified.
+expect_error "2:16: error: cannot modify read-only variable 'x'" <<'EOF'
+const int x = 1;
+void f(void) { x = 2; }
+EOF
+
+expect_error "1:24: error: cannot modify a read-only location" <<'EOF'
+void f(const int *p) { *p = 3; }
+EOF
+
+expect_error "1:25: error: cannot modify a read-only location" <<'EOF'
+void f(const int *p) { (*p)++; }
+EOF
+
+expect_error "2:32: error: cannot modify a read-only location" <<'EOF'
+struct S { int a; };
+void f(const struct S *p) { p->a = 1; }
+EOF
+
+expect_error "2:35: error: cannot modify a read-only location" <<'EOF'
+struct S { const int a; };
+void f(struct S *p, struct S q) { *p = q; }
+EOF
+
+expect_error "1:25: error: cannot modify read-only variable 'p'" <<'EOF'
+void f(char *const p) { p = 0; }
+EOF
+
+expect_error "2:28: error: cannot convert 'const char **' to 'char **' in argument 1 of 'g' (use a cast if this is intended)" <<'EOF'
+void g(char **);
+void f(const char **p) { g(p); }
+EOF
+
+expect_warning "1:45: warning: initialization discards the 'const' qualifier of 'const int *'" <<'EOF'
+void f(int x) { const int *p = &x; int *q = p; *q = 1; }
+EOF
+
+# A pointer to const, and a const pointer to a struct completed later.
+expect_clean 'const pointers' <<'EOF'
+struct S;
+void g(const struct S *);
+struct S { int a; };
+void h(struct S *s, const char *p, char *q) {
+  g(s);
+  void (*fp)(const struct S *) = g;
+  fp(s);
+  p = q;
+  p++;
+}
+EOF
+
 # A header found through -I is the user's code, not a system header: its
 # type errors are reported, and -MMD lists it.
 mkdir -p $tmp/inc

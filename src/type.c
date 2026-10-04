@@ -13,14 +13,17 @@ Type *ty_void = &(Type){TY_VOID, 1, 1};
 Type *ty_bool = &(Type){TY_BOOL, 1, 1};
 
 Type *ty_char = &(Type){TY_CHAR, 1, 1};
+Type *ty_schar = &(Type){TY_CHAR, 1, 1, .is_distinct = true};
 Type *ty_short = &(Type){TY_SHORT, 2, 2};
 Type *ty_int = &(Type){TY_INT, 4, 4};
 Type *ty_long = &(Type){TY_LONG, 8, 8};
+Type *ty_llong = &(Type){TY_LONG, 8, 8, .is_distinct = true};
 
 Type *ty_uchar = &(Type){TY_CHAR, 1, 1, true};
 Type *ty_ushort = &(Type){TY_SHORT, 2, 2, true};
 Type *ty_uint = &(Type){TY_INT, 4, 4, true};
 Type *ty_ulong = &(Type){TY_LONG, 8, 8, true};
+Type *ty_ullong = &(Type){TY_LONG, 8, 8, true, .is_distinct = true};
 
 Type *ty_float = &(Type){TY_FLOAT, 4, 4};
 Type *ty_double = &(Type){TY_DOUBLE, 8, 8};
@@ -87,15 +90,18 @@ bool is_ret_in_memory(Type *ty) {
   return nld > 0 && nother > 0;
 }
 
-bool is_compatible(Type *t1, Type *t2) {
+// Are t1 and t2 compatible, leaving aside their own qualifiers (not those
+// of what they point to)? Copies (see copy_type) lead back to the type
+// they were made from.
+static bool is_compatible_unqual(Type *t1, Type *t2) {
   if (t1 == t2)
     return true;
 
   if (t1->origin)
-    return is_compatible(t1->origin, t2);
+    return is_compatible_unqual(t1->origin, t2);
 
   if (t2->origin)
-    return is_compatible(t1, t2->origin);
+    return is_compatible_unqual(t1, t2->origin);
 
   if (t1->kind != t2->kind)
     return false;
@@ -105,7 +111,8 @@ bool is_compatible(Type *t1, Type *t2) {
   case TY_SHORT:
   case TY_INT:
   case TY_LONG:
-    return t1->is_unsigned == t2->is_unsigned;
+    return t1->is_unsigned == t2->is_unsigned &&
+           t1->is_distinct == t2->is_distinct;
   case TY_FLOAT:
   case TY_DOUBLE:
   case TY_LDOUBLE:
@@ -113,7 +120,9 @@ bool is_compatible(Type *t1, Type *t2) {
   case TY_PTR:
     return is_compatible(t1->base, t2->base);
   case TY_FUNC: {
-    if (!is_compatible(t1->return_ty, t2->return_ty))
+    // A parameter's own qualifiers, as in `int f(const int x)`, and the
+    // return type's, don't count.
+    if (!is_compatible_unqual(t1->return_ty, t2->return_ty))
       return false;
     if (t1->is_variadic != t2->is_variadic)
       return false;
@@ -121,7 +130,7 @@ bool is_compatible(Type *t1, Type *t2) {
     Type *p1 = t1->params;
     Type *p2 = t2->params;
     for (; p1 && p2; p1 = p1->next, p2 = p2->next)
-      if (!is_compatible(p1, p2))
+      if (!is_compatible_unqual(p1, p2))
         return false;
     return p1 == NULL && p2 == NULL;
   }
@@ -135,6 +144,13 @@ bool is_compatible(Type *t1, Type *t2) {
   return false;
 }
 
+// C11 6.2.7: compatible types also have the same qualifiers, so neither
+// `const int` and `int` nor `int *` and `const int *` are.
+bool is_compatible(Type *t1, Type *t2) {
+  return t1->is_const == t2->is_const && t1->is_volatile == t2->is_volatile &&
+         is_compatible_unqual(t1, t2);
+}
+
 //---------- Type constructors -----------------------------------------------
 
 Type *copy_type(Type *ty) {
@@ -142,6 +158,58 @@ Type *copy_type(Type *ty) {
   *ret = *ty;
   ret->origin = ty;
   return ret;
+}
+
+// `ty` with const and volatile added, if they're true. Qualifying an
+// array qualifies its elements. A struct or union that isn't complete yet
+// keeps its qualified copies in `variants`, so complete_variants() can
+// complete them too.
+Type *qualified(Type *ty, bool is_const, bool is_volatile) {
+  if ((!is_const || ty->is_const) && (!is_volatile || ty->is_volatile))
+    return ty;
+
+  if (ty->kind == TY_ARRAY) {
+    Type *ret = array_of(qualified(ty->base, is_const, is_volatile), ty->array_len);
+    ret->origin = ty;
+    return ret;
+  }
+
+  Type *ret = copy_type(ty);
+  ret->is_const |= is_const;
+  ret->is_volatile |= is_volatile;
+  if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->size < 0) {
+    ret->variants = ty->variants;
+    ty->variants = ret;
+  }
+  return ret;
+}
+
+// `ty` without its own qualifiers, as a value of it is (C11 6.3.2.1p2).
+Type *unqual(Type *ty) {
+  if (!ty->is_const && !ty->is_volatile)
+    return ty;
+  Type *ret = copy_type(ty);
+  ret->is_const = ret->is_volatile = false;
+  return ret;
+}
+
+// Struct or union `ty` was just completed and laid out: so are the
+// qualified copies made of it before.
+void complete_variants(Type *ty) {
+  Type *variants = ty->variants;
+  ty->variants = NULL;
+  for (Type *v = variants, *next; v; v = next) {
+    next = v->variants;
+    Type saved = *v;
+    *v = *ty;
+    v->is_const = saved.is_const;
+    v->is_volatile = saved.is_volatile;
+    v->is_atomic = saved.is_atomic;
+    v->origin = saved.origin;
+    v->name = saved.name;
+    v->name_pos = saved.name_pos;
+    v->variants = NULL;
+  }
 }
 
 Type *pointer_to(Type *base) {
@@ -199,17 +267,25 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT)
     return ty_float;
 
+  // Integer promotion: an enum is its int or unsigned int.
   if (ty1->size < 4)
     ty1 = ty_int;
+  else if (ty1->kind == TY_ENUM)
+    ty1 = ty1->is_unsigned ? ty_uint : ty_int;
   if (ty2->size < 4)
     ty2 = ty_int;
+  else if (ty2->kind == TY_ENUM)
+    ty2 = ty2->is_unsigned ? ty_uint : ty_int;
 
   if (ty1->size != ty2->size)
-    return (ty1->size < ty2->size) ? ty2 : ty1;
+    return unqual(ty1->size < ty2->size ? ty2 : ty1);
 
-  if (ty2->is_unsigned)
-    return ty2;
-  return ty1;
+  // long long outranks long, so with it the result is long long, unsigned
+  // if either is.
+  if (ty1->size == 8 && ty1->is_distinct != ty2->is_distinct)
+    return ty1->is_unsigned || ty2->is_unsigned ? ty_ullong : ty_llong;
+
+  return unqual(ty2->is_unsigned ? ty2 : ty1);
 }
 
 // For many binary operators, we implicitly promote operands so that
@@ -268,7 +344,7 @@ void add_type(Node *node) {
       error_tok(node->lhs->tok, "not an lvalue");
     if (node->lhs->ty->kind != TY_STRUCT)
       node->rhs = new_cast(node->rhs, node->lhs->ty);
-    node->ty = node->lhs->ty;
+    node->ty = unqual(node->lhs->ty);
     return;
   case ND_EQ:
   case ND_NE:
@@ -278,7 +354,7 @@ void add_type(Node *node) {
     node->ty = ty_int;
     return;
   case ND_FUNCALL:
-    node->ty = node->func_ty->return_ty;
+    node->ty = unqual(node->func_ty->return_ty);
     return;
   case ND_NOT:
   case ND_LOGOR:
@@ -289,10 +365,12 @@ void add_type(Node *node) {
   case ND_SHL:
   case ND_SHR:
     // Integer promotion: a char or short operand becomes int, so
-    // ~c on an unsigned char is a negative int, not an unsigned char.
-    if (is_integer(node->lhs->ty) && node->lhs->ty->size < 4)
-      node->lhs = new_cast(node->lhs, ty_int);
-    node->ty = node->lhs->ty;
+    // ~c on an unsigned char is a negative int, not an unsigned char,
+    // and an enum its int or unsigned int.
+    if (is_integer(node->lhs->ty) &&
+        (node->lhs->ty->size < 4 || node->lhs->ty->kind == TY_ENUM))
+      node->lhs = new_cast(node->lhs, get_common_type(ty_int, node->lhs->ty));
+    node->ty = unqual(node->lhs->ty);
     return;
   case ND_VAR:
   case ND_VLA_PTR:
@@ -307,7 +385,8 @@ void add_type(Node *node) {
     }
     return;
   case ND_COMMA:
-    node->ty = node->rhs->ty;
+    // (Some nodes, like ones that only zero memory, have no type.)
+    node->ty = node->rhs->ty ? unqual(node->rhs->ty) : NULL;
     return;
   case ND_MEMBER: {
     Member *mem = node->member;
@@ -329,6 +408,10 @@ void add_type(Node *node) {
         node->ty = mem->ty->is_unsigned ? ty_uint : ty_int;
       }
     }
+
+    // A member of a const struct is const.
+    Type *base = node->lhs->ty;
+    node->ty = qualified(node->ty, base->is_const, base->is_volatile);
     return;
   }
   case ND_ADDR:
@@ -400,18 +483,17 @@ void add_type(Node *node) {
 
 static char *param_names(Type *fn);
 
-// Returns a type spelled the way C writes it, e.g. "unsigned char *",
-// for error messages.
-char *type_name(Type *ty) {
+// type_name() without ty's own qualifiers.
+static char *unqual_type_name(Type *ty) {
   char *u = ty->is_unsigned ? "unsigned " : "";
 
   switch (ty->kind) {
   case TY_VOID: return "void";
   case TY_BOOL: return "_Bool";
-  case TY_CHAR: return format("%schar", u);
+  case TY_CHAR: return ty->is_distinct ? "signed char" : format("%schar", u);
   case TY_SHORT: return format("%sshort", u);
   case TY_INT: return format("%sint", u);
-  case TY_LONG: return format("%slong", u);
+  case TY_LONG: return format("%slong%s", u, ty->is_distinct ? " long" : "");
   case TY_FLOAT: return "float";
   case TY_DOUBLE: return "double";
   case TY_LDOUBLE: return "long double";
@@ -437,6 +519,19 @@ char *type_name(Type *ty) {
   }
   }
   unreachable();
+}
+
+// Returns a type spelled the way C writes it, e.g. "const unsigned char *"
+// or "char *const", for error messages.
+char *type_name(Type *ty) {
+  char *s = unqual_type_name(ty);
+  char *q = ty->is_const ? (ty->is_volatile ? "const volatile" : "const")
+                         : (ty->is_volatile ? "volatile" : NULL);
+  if (!q)
+    return s;
+  if (ty->kind == TY_PTR)
+    return format("%s%s", s, q);
+  return format("%s %s", q, s);
 }
 
 // Returns a function's parameter list for type_name(), e.g. "int, char *".
@@ -476,10 +571,11 @@ static bool is_large_file_pair(Type *a, Type *b) {
 }
 
 // Can a pointer to `from` be stored in a pointer to `to` without a cast?
+// The pointees' own qualifiers are checked by check_assign.
 static bool pointee_ok(Type *to, Type *from) {
   if (to->kind == TY_VOID || from->kind == TY_VOID)
     return true;
-  if (is_compatible(to, from))
+  if (is_compatible_unqual(to, from))
     return true;
   if (is_large_file_pair(to, from))
     return true;
@@ -492,7 +588,7 @@ static bool pointee_ok(Type *to, Type *from) {
   // A function declared with empty parentheses, like `int f()`,
   // matches any parameter list.
   if (to->kind == TY_FUNC && from->kind == TY_FUNC &&
-      is_compatible(to->return_ty, from->return_ty) &&
+      is_compatible_unqual(to->return_ty, from->return_ty) &&
       ((!to->params && to->is_variadic) || (!from->params && from->is_variadic)))
     return true;
 
@@ -530,12 +626,21 @@ void check_assign(Type *to, Node *from, char *what) {
     return;
 
   if ((to->kind == TY_STRUCT || to->kind == TY_UNION) &&
-      to->kind == ty->kind && is_compatible(to, ty))
+      to->kind == ty->kind && is_compatible_unqual(to, ty))
     return;
 
   if (to->kind == TY_PTR) {
-    if (ty->kind == TY_PTR && pointee_ok(to->base, ty->base))
+    // Dropping the pointee's const or volatile is allowed with a warning,
+    // as gcc does.
+    if (ty->kind == TY_PTR && pointee_ok(to->base, ty->base)) {
+      Type *t = to->base, *f = ty->base;
+      char *q = f->is_const && !t->is_const ? "const"
+                : f->is_volatile && !t->is_volatile ? "volatile" : NULL;
+      if (q && !in_system_header(from->tok))
+        warn_tok(from->tok, "%s discards the '%s' qualifier of '%s'", what, q,
+                 type_name(ty));
       return;
+    }
     if (is_integer(ty) && is_null_const(from))
       return;
 

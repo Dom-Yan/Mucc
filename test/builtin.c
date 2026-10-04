@@ -17,6 +17,13 @@ int main() {
   ASSERT(0, __builtin_types_compatible_p(unsigned, int));
   ASSERT(1, __builtin_types_compatible_p(signed, int));
   ASSERT(0, __builtin_types_compatible_p(struct {int a;}, struct {int a;}));
+  ASSERT(0, __builtin_types_compatible_p(int *, const int *));
+  ASSERT(1, __builtin_types_compatible_p(int *const, int *));
+  ASSERT(0, __builtin_types_compatible_p(long, long long));
+  ASSERT(0, __builtin_types_compatible_p(char, signed char));
+  ASSERT(1, __builtin_types_compatible_p(signed char, signed char));
+  ASSERT(1, __builtin_types_compatible_p(long long, long long int));
+  ASSERT(0, __builtin_types_compatible_p(char **, const char **));
 
   ASSERT(1, __builtin_types_compatible_p(int (*)(void), int (*)(void)));
   ASSERT(1, __builtin_types_compatible_p(void (*)(int), void (*)(int)));

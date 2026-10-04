@@ -169,6 +169,7 @@ struct Obj {
   // Global variable
   bool is_tentative;
   bool is_tls;
+  bool is_string; // a string literal, which goes in .rodata
   char *init_data;
   Relocation *rel;
 
@@ -400,6 +401,10 @@ struct Type {
   int align;          // alignment
   bool is_unsigned;   // unsigned or signed
   bool is_atomic;     // true if _Atomic
+  bool is_const;
+  bool is_volatile;
+  bool is_distinct;   // signed char or long long: char or long, but not
+                      // compatible with them
   Type *origin;       // for type compatibility check
 
   // Pointer-to or array-of type. We intentionally use the same member
@@ -430,6 +435,7 @@ struct Type {
   bool is_flexible;
   bool is_packed;
   uint8_t pack; // #pragma pack: the largest member alignment, or 0
+  Type *variants; // qualified copies made while incomplete (see qualified())
 
   // Function type
   Type *return_ty;
@@ -460,14 +466,17 @@ extern Type *ty_void;
 extern Type *ty_bool;
 
 extern Type *ty_char;
+extern Type *ty_schar;
 extern Type *ty_short;
 extern Type *ty_int;
 extern Type *ty_long;
+extern Type *ty_llong;
 
 extern Type *ty_uchar;
 extern Type *ty_ushort;
 extern Type *ty_uint;
 extern Type *ty_ulong;
+extern Type *ty_ullong;
 
 extern Type *ty_float;
 extern Type *ty_double;
@@ -480,6 +489,9 @@ bool has_ldouble(Type *ty);
 bool is_ret_in_memory(Type *ty);
 bool is_compatible(Type *t1, Type *t2);
 Type *copy_type(Type *ty);
+Type *qualified(Type *ty, bool is_const, bool is_volatile);
+Type *unqual(Type *ty);
+void complete_variants(Type *ty);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);

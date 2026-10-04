@@ -500,6 +500,7 @@ static bool convert_pp_int(Token *tok, char *s, int len) {
 
   // Read U, L or LL suffixes.
   bool l = false;
+  bool ll = false;
   bool u = false;
 
   if (startswith(p, "LLU") || startswith(p, "LLu") ||
@@ -507,13 +508,13 @@ static bool convert_pp_int(Token *tok, char *s, int len) {
       startswith(p, "ULL") || startswith(p, "Ull") ||
       startswith(p, "uLL") || startswith(p, "ull")) {
     p += 3;
-    l = u = true;
+    l = ll = u = true;
   } else if (!strncasecmp(p, "lu", 2) || !strncasecmp(p, "ul", 2)) {
     p += 2;
     l = u = true;
   } else if (startswith(p, "LL") || startswith(p, "ll")) {
     p += 2;
-    l = true;
+    l = ll = true;
   } else if (*p == 'L' || *p == 'l') {
     p++;
     l = true;
@@ -552,6 +553,10 @@ static bool convert_pp_int(Token *tok, char *s, int len) {
     else
       ty = ty_int;
   }
+
+  // With LL, a long is a long long.
+  if (ll)
+    ty = ty->is_unsigned ? ty_ullong : ty_llong;
 
   tok->kind = TK_NUM;
   tok->val = val;

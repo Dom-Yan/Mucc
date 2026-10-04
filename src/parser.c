@@ -500,6 +500,7 @@ static Obj *new_anon_gvar(Type *ty) {
 static Obj *new_string_literal(char *p, Type *ty) {
   Obj *var = new_anon_gvar(ty);
   var->init_data = p;
+  var->is_string = true;
   return var;
 }
 
@@ -901,6 +902,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   Type *ty = ty_int;
   int counter = 0;
   bool is_atomic = false;
+  bool is_const = false;
+  bool is_volatile = false;
   bool is_auto = false;
 
   while (is_typename(tok)) {
@@ -953,9 +956,17 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       continue;
     }
 
+    if (consume(&tok, tok, "const")) {
+      is_const = true;
+      continue;
+    }
+    if (consume(&tok, tok, "volatile")) {
+      is_volatile = true;
+      continue;
+    }
+
     // These keywords are recognized but ignored.
-    if (consume(&tok, tok, "const") || consume(&tok, tok, "volatile") ||
-        consume(&tok, tok, "restrict") ||
+    if (consume(&tok, tok, "restrict") ||
         consume(&tok, tok, "__restrict") || consume(&tok, tok, "__restrict__"))
       continue;
 
@@ -1054,8 +1065,10 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       ty = ty_bool;
       break;
     case CHAR:
-    case SIGNED + CHAR:
       ty = ty_char;
+      break;
+    case SIGNED + CHAR:
+      ty = ty_schar;
       break;
     case UNSIGNED + CHAR:
       ty = ty_uchar;
@@ -1081,19 +1094,23 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       break;
     case LONG:
     case LONG + INT:
-    case LONG + LONG:
-    case LONG + LONG + INT:
     case SIGNED + LONG:
     case SIGNED + LONG + INT:
+      ty = ty_long;
+      break;
+    case LONG + LONG:
+    case LONG + LONG + INT:
     case SIGNED + LONG + LONG:
     case SIGNED + LONG + LONG + INT:
-      ty = ty_long;
+      ty = ty_llong;
       break;
     case UNSIGNED + LONG:
     case UNSIGNED + LONG + INT:
+      ty = ty_ulong;
+      break;
     case UNSIGNED + LONG + LONG:
     case UNSIGNED + LONG + LONG + INT:
-      ty = ty_ulong;
+      ty = ty_ullong;
       break;
     case FLOAT:
       ty = ty_float;
@@ -1115,6 +1132,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     ty = copy_type(ty);
     ty->is_atomic = true;
   }
+  ty = qualified(ty, is_const, is_volatile);
 
   *rest = tok;
   if (is_auto && counter == 0 && !is_atomic)
@@ -1255,12 +1273,16 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
   while (consume(&tok, tok, "*")) {
     ty = pointer_to(ty);
     for (;;) {
-      if (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
-          equal(tok, "__restrict") || equal(tok, "__restrict__"))
+      // ty is a new type, so these can change it.
+      if (consume(&tok, tok, "const"))
+        ty->is_const = true;
+      else if (consume(&tok, tok, "volatile"))
+        ty->is_volatile = true;
+      else if (equal(tok, "restrict") || equal(tok, "__restrict") ||
+               equal(tok, "__restrict__"))
         tok = tok->next;
       else if (equal(tok, "_Atomic") && !equal(tok->next, "(")) {
-        // `T *_Atomic p`: an atomic pointer (ty is a new type, so it can be
-        // changed).
+        // `T *_Atomic p`: an atomic pointer
         ty->is_atomic = true;
         tok = tok->next;
       } else if (is_attribute(tok))
@@ -1562,10 +1584,10 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
 //---------- C23 auto and constexpr ------------------------------------------
 
 // The type `auto x = init;` gives x: init's type, with arrays and
-// functions turned into pointers and _Atomic dropped.
+// functions turned into pointers and _Atomic, const and volatile dropped.
 static Type *auto_type_of(Node *init) {
   add_type(init);
-  Type *ty = init->ty;
+  Type *ty = unqual(init->ty);
 
   if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
     return pointer_to(ty->base);
@@ -3789,12 +3811,36 @@ static long double eval_double(Node *node) {
 // However, if a given expression is of form `A.x op= C`, the input is
 // converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
 // to bitfields.
-// A constexpr can't change after its initialization. (mucc doesn't track
-// `const` in general, but a constexpr's value is also baked into
-// constant expressions, so a change would be silently half-applied.)
+
+// Does struct or union `ty` have a const member, at any depth?
+static bool has_const_member(Type *ty) {
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    Type *t = mem->ty;
+    while (t->kind == TY_ARRAY)
+      t = t->base;
+    if (t->is_const ||
+        ((t->kind == TY_STRUCT || t->kind == TY_UNION) && has_const_member(t)))
+      return true;
+  }
+  return false;
+}
+
+// Nothing const can change: a const variable, what a pointer to const
+// points to, a member of a const struct (const too, see add_type), or a
+// struct with a const member. Nor can a constexpr, whose value is also
+// baked into constant expressions.
 static void check_modifiable(Node *lhs) {
+  add_type(lhs);
   if (lhs->kind == ND_VAR && lhs->var->is_constexpr)
     error_tok(lhs->tok, "cannot modify constexpr '%s'", lhs->var->name);
+
+  Type *ty = lhs->ty;
+  if (!ty->is_const &&
+      !((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && has_const_member(ty)))
+    return;
+  if (lhs->kind == ND_VAR)
+    error_tok(lhs->tok, "cannot modify read-only variable '%s'", lhs->var->name);
+  error_tok(lhs->tok, "cannot modify a read-only location");
 }
 
 // `*P op= B` done atomically, returning the old value of *P if
@@ -4307,8 +4353,8 @@ static Node *cast(Token **rest, Token *tok) {
     if (equal(tok, "{"))
       return unary(rest, start);
 
-    // type cast
-    Node *node = new_cast(cast(rest, tok), ty);
+    // type cast, whose result has no qualifiers
+    Node *node = new_cast(cast(rest, tok), unqual(ty));
     node->tok = start;
     return node;
   }
@@ -4522,8 +4568,12 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
   ty->size = 0;
   *rest = attribute_list(tok, ty);
 
+  // Its qualified copies are completed once it's laid out (see
+  // struct_decl).
   if (prev) {
+    Type *variants = prev->variants;
     *prev = *ty;
+    prev->variants = variants;
     return prev;
   }
   return ty;
@@ -4618,6 +4668,7 @@ static Type *struct_decl(Token **rest, Token *tok) {
   ty->size = align_to(bits, ty->align * 8) / 8;
   if (is_loose(ty))
     place_loose_bitfields(ty);
+  complete_variants(ty);
   return ty;
 }
 
@@ -4644,6 +4695,7 @@ static Type *union_decl(Token **rest, Token *tok) {
   ty->size = align_to(ty->size, ty->align);
   if (is_loose(ty))
     place_loose_bitfields(ty);
+  complete_variants(ty);
   return ty;
 }
 
@@ -4892,7 +4944,9 @@ static Node *generic_selection(Token **rest, Token *tok) {
   Node *ctrl = assign(&tok, tok);
   add_type(ctrl);
 
-  Type *t1 = ctrl->ty;
+  // The controlling expression's value: an array or a function is a
+  // pointer, and its own qualifiers are dropped.
+  Type *t1 = unqual(ctrl->ty);
   if (t1->kind == TY_FUNC)
     t1 = pointer_to(t1);
   else if (t1->kind == TY_ARRAY)
@@ -5493,7 +5547,8 @@ static Node *primary(Token **rest, Token *tok) {
     tok = skip(tok, ",");
     Type *t2 = typename(&tok, tok);
     *rest = skip(tok, ")");
-    return new_num(is_compatible(t1, t2), start);
+    // As with gcc, the types' own qualifiers don't count.
+    return new_num(is_compatible(unqual(t1), unqual(t2)), start);
   }
 
   if (equal(tok, "__builtin_va_start") || equal(tok, "__builtin_va_end") ||
