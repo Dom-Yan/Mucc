@@ -1,4 +1,5 @@
 #include "test.h"
+#include <stddef.h>
 
 int main() {
   ASSERT(97, 'a');
@@ -97,6 +98,10 @@ of(char), \
 
   ASSERT(4, sizeof(L'\0'));
   ASSERT(97, L'a');
+
+  // wchar_t is int on x86-64 Linux, as with gcc and musl: L'a' has its type.
+  ASSERT(1, (wchar_t)-1 < 0);
+  ASSERT(1, __builtin_types_compatible_p(wchar_t, typeof(L'a')));
 
   printf("OK\n");
   return 0;

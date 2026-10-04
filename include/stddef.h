@@ -5,7 +5,7 @@
 
 typedef unsigned long size_t;
 typedef long ptrdiff_t;
-typedef unsigned int wchar_t;
+typedef int wchar_t;
 typedef long max_align_t;
 #if __STDC_VERSION__ >= 202311L
 typedef typeof(nullptr) nullptr_t;

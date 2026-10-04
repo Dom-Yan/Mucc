@@ -82,7 +82,7 @@ typedef _Atomic long long atomic_llong;
 typedef _Atomic unsigned long long atomic_ullong;
 typedef _Atomic unsigned short atomic_char16_t;
 typedef _Atomic unsigned atomic_char32_t;
-typedef _Atomic unsigned atomic_wchar_t;
+typedef _Atomic int atomic_wchar_t;
 typedef _Atomic signed char atomic_int_least8_t;
 typedef _Atomic unsigned char atomic_uint_least8_t;
 typedef _Atomic short atomic_int_least16_t;
