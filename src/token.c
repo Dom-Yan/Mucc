@@ -189,9 +189,10 @@ void error_expected(Token *tok, char *what) {
 
 // Returns true if the current token is `op`. The parser calls this
 // constantly and nearly every call fails, usually on the first character,
-// so check that before comparing the rest.
+// so check that before comparing the rest. strncmp, not memcmp, stops at
+// the end of an `op` shorter than the token instead of reading past it.
 bool equal(Token *tok, char *op) {
-  return tok->loc[0] == op[0] && memcmp(tok->loc, op, tok->len) == 0 &&
+  return tok->loc[0] == op[0] && strncmp(tok->loc, op, tok->len) == 0 &&
          op[tok->len] == '\0';
 }
 
