@@ -920,6 +920,16 @@ expect_error "1:24: error: invalid argument type to unary '+'" <<'EOF'
 int f(int *p) { return +p; }
 EOF
 
+expect_error "1:14: error: #pragma pack takes 1, 2, 4, 8 or 16" <<'EOF'
+#pragma pack(3)
+EOF
+
+# A packed bit-field is loaded and stored in at most 8 bytes.
+expect_error "2:34: error: a packed bit-field spanning more than 8 bytes is not supported" <<'EOF'
+#pragma pack(1)
+struct s { char c; int a:4; long b:61; };
+EOF
+
 # A header found through -I is the user's code, not a system header: its
 # type errors are reported, and -MMD lists it.
 mkdir -p $tmp/inc

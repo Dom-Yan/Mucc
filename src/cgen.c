@@ -442,6 +442,38 @@ static void store_to(Type *ty, char *addr) {
     println("  mov %%rax, %s", addr);
 }
 
+// Loads a bit-field's unit, the mem->unit bytes at `addr`, into %rax (the
+// bits above them may be anything). An odd size, which only a packed
+// struct has (see place_loose_bitfields), is read a byte at a time.
+static void load_unit(int unit, char *addr) {
+  switch (unit) {
+  case 1: println("  movzbl %s, %%eax", addr); return;
+  case 2: println("  movzwl %s, %%eax", addr); return;
+  case 4: println("  mov %s, %%eax", addr); return;
+  case 8: println("  mov %s, %%rax", addr); return;
+  }
+  println("  lea %s, %%rcx", addr);
+  println("  xor %%eax, %%eax");
+  for (int i = unit - 1; i >= 0; i--) {
+    println("  shl $8, %%rax");
+    println("  mov %d(%%rcx), %%al", i);
+  }
+}
+
+// Stores %rax's low `unit` bytes to (%rdi), as load_unit reads them.
+static void store_unit(int unit) {
+  switch (unit) {
+  case 1: println("  mov %%al, (%%rdi)"); return;
+  case 2: println("  mov %%ax, (%%rdi)"); return;
+  case 4: println("  mov %%eax, (%%rdi)"); return;
+  case 8: println("  mov %%rax, (%%rdi)"); return;
+  }
+  for (int i = 0; i < unit; i++) {
+    println("  mov %%al, %d(%%rdi)", i);
+    println("  shr $8, %%rax");
+  }
+}
+
 // Store %rax to an address that the stack top is pointing to.
 static void store(Type *ty) {
   pop("%rdi");
@@ -1452,7 +1484,10 @@ static void gen_expr(Node *node) {
         snprintf(addr, sizeof(addr), "%d(%%rax)", mem->offset);
       }
       // A bit-field's whole unit, not its promoted type (see add_type())
-      load_from(mem->is_bitfield ? mem->ty : node->ty, addr);
+      if (mem->is_bitfield)
+        load_unit(mem->unit, addr);
+      else
+        load_from(node->ty, addr);
     }
 
     if (mem->is_bitfield) {
@@ -1493,19 +1528,20 @@ static void gen_expr(Node *node) {
       Member *mem = node->lhs->member;
       // The mask goes through a register: `and` only takes 32-bit
       // immediates, too small for the mask of a 32-bit-wide field.
+      uint64_t bits = mem->bit_width == 64 ? -1 : (1UL << mem->bit_width) - 1;
       println("  mov %%rax, %%rdi");
-      println("  mov $%ld, %%r9", (1L << mem->bit_width) - 1);
+      println("  mov $%ld, %%r9", (long)bits);
       println("  and %%r9, %%rdi");
       println("  shl $%d, %%rdi", mem->bit_offset);
 
       println("  mov (%%rsp), %%rax");
-      load(mem->ty);
+      load_unit(mem->unit, "(%rax)");
 
-      long mask = ((1L << mem->bit_width) - 1) << mem->bit_offset;
-      println("  mov $%ld, %%r9", ~mask);
+      println("  mov $%ld, %%r9", (long)~(bits << mem->bit_offset));
       println("  and %%r9, %%rax");
       println("  or %%rdi, %%rax");
-      store(mem->ty); // the whole unit loaded, not the promoted type
+      pop("%rdi");
+      store_unit(mem->unit); // the whole unit loaded, not the promoted type
 
       // The assignment's value is what the field now holds: the new
       // value cut to its width, sign- or zero-extended.

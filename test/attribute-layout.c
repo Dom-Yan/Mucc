@@ -33,6 +33,62 @@ enum __attribute__((packed)) pe4 { PA4 = 70000 };
 enum __attribute__((packed)) pe5 { PA5 = -200 };
 struct s19 { char c; enum pe1 e; enum pe2 f; };
 
+// #pragma pack caps members' alignment, an explicit one too, and lets
+// bit-fields straddle units of their type.
+#pragma pack(push, 2)
+struct p1 { char a; int b; double c; };
+struct p2 { char a; int b __attribute__((aligned(8))); };
+struct p3 { char a; int b:4; int c:30; char d; };
+union pu1 { char a[5]; int b; };
+#pragma pack(1)
+struct p4 { char a; short b:9; char c; };
+struct p5 { char a; long b:40; char c; };
+#pragma pack(pop)
+struct p6 { char a; int b; };
+_Pragma("pack(push, 4)") struct p7 { char a; double b; long double c; }; _Pragma("pack(pop)")
+#pragma pack(push, 1)
+#pragma pack(push, 8)
+struct p8 { char a; int b:20; int c:20; };
+#pragma pack(pop)
+struct p9 { char a; struct p6 in; };
+#pragma pack(pop)
+#pragma pack(16)
+union __attribute__((packed)) pu2 { long a:11; char b; };
+#pragma pack()
+
+// Zero-width bit-fields leave a struct's alignment alone; packed unions
+// and packed structs' bit-fields are laid out as gcc does.
+struct z1 { char a; int :0; char b; };
+struct z2 { char a; int b:4; long :0; char c; };
+union z3 { char a; int :0; };
+union __attribute__((packed)) z4 { char a[5]; int b; };
+struct __attribute__((packed)) z5 { char a; int b:20; int c:20; };
+struct __attribute__((packed)) z6 { char a; long b:60; char c; };
+
+// Values stored in bit-fields that straddle units, as bytes.
+static void show_bytes(char *name, void *p, size_t n) {
+  printf("%s", name);
+  for (size_t i = 0; i < n; i++)
+    printf(" %02x", ((unsigned char *)p)[i]);
+  printf("\n");
+}
+
+static void packed_bitfields(void) {
+  struct p3 x = {1, 5, -3, 9};
+  x.c += 7;
+  show_bytes("p3", &x, sizeof x);
+  printf("p3 %d %d %d %d\n", x.a, x.b, x.c, x.d);
+  static struct p5 y = {1, -2, 3};
+  y.b -= 0x123456789;
+  show_bytes("p5", &y, sizeof y);
+  printf("p5 %d %ld %d\n", y.a, (long)y.b, y.c);
+  struct z6 z = {0};
+  z.b = 0x0fedcba987654321;
+  z.c = 4;
+  show_bytes("z6", &z, sizeof z);
+  printf("z6 %lx\n", (long)z.b);
+}
+
 int g1 __attribute__((aligned(64)));
 __attribute__((aligned(32))) static char g2;
 char g3 [[gnu::aligned(128)]];
@@ -84,6 +140,24 @@ int main(void) {
   SHOW(union u1, x);
   SHOW(struct s18, y);
   SHOW(struct s19, f);
+  SHOW(struct p1, c);
+  SHOW(struct p2, b);
+  SHOW(struct p3, d);
+  SHOW(union pu1, b);
+  SHOW(struct p4, c);
+  SHOW(struct p5, c);
+  SHOW(struct p6, b);
+  SHOW(struct p7, c);
+  SHOW(struct p8, a);
+  SHOW(struct p9, in);
+  SHOW(union pu2, b);
+  SHOW(struct z1, b);
+  SHOW(struct z2, c);
+  SHOW(union z3, a);
+  SHOW(union z4, b);
+  SHOW(struct z5, a);
+  SHOW(struct z6, c);
+  packed_bitfields();
   printf("ai16 align=%zu ai1 align=%zu\n", _Alignof(ai16), _Alignof(ai1));
   printf("packed enums %zu %zu %zu %zu %zu, signed %d %d %d\n",
          sizeof(enum pe1), sizeof(enum pe2), sizeof(enum pe3),

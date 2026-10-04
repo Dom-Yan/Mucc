@@ -2495,29 +2495,27 @@ static Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
 
 //---------- Global variable initializers ------------------------------------
 
+// The `sz`-byte little-endian integer at `buf` (sz is 1 to 8).
 static uint64_t read_buf(char *buf, int sz) {
-  if (sz == 1)
-    return *buf;
-  if (sz == 2)
-    return *(uint16_t *)buf;
-  if (sz == 4)
-    return *(uint32_t *)buf;
-  if (sz == 8)
-    return *(uint64_t *)buf;
-  unreachable();
+  uint64_t val = 0;
+  for (int i = sz - 1; i >= 0; i--)
+    val = val << 8 | (uint8_t)buf[i];
+  return val;
 }
 
 static void write_buf(char *buf, uint64_t val, int sz) {
-  if (sz == 1)
-    *buf = val;
-  else if (sz == 2)
-    *(uint16_t *)buf = val;
-  else if (sz == 4)
-    *(uint32_t *)buf = val;
-  else if (sz == 8)
-    *(uint64_t *)buf = val;
-  else
-    unreachable();
+  for (int i = 0; i < sz; i++)
+    buf[i] = val >> (i * 8);
+}
+
+// Puts bit-field `mem`'s value from `init` into the struct at `buf`.
+static void write_bitfield(Initializer *init, Member *mem, char *buf) {
+  if (!init->expr)
+    return;
+  char *loc = buf + mem->offset;
+  uint64_t mask = mem->bit_width == 64 ? -1 : (1UL << mem->bit_width) - 1;
+  uint64_t val = (eval(init->expr) & mask) << mem->bit_offset;
+  write_buf(loc, read_buf(loc, mem->unit) | val, mem->unit);
 }
 
 static Relocation *
@@ -2531,21 +2529,11 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
 
   if (ty->kind == TY_STRUCT) {
     for (Member *mem = ty->members; mem; mem = mem->next) {
-      if (mem->is_bitfield) {
-        Node *expr = init->children[mem->idx]->expr;
-        if (!expr)
-          continue;
-
-        char *loc = buf + offset + mem->offset;
-        uint64_t oldval = read_buf(loc, mem->ty->size);
-        uint64_t newval = eval(expr);
-        uint64_t mask = (1L << mem->bit_width) - 1;
-        uint64_t combined = oldval | ((newval & mask) << mem->bit_offset);
-        write_buf(loc, combined, mem->ty->size);
-      } else {
+      if (mem->is_bitfield)
+        write_bitfield(init->children[mem->idx], mem, buf + offset);
+      else
         cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
                               offset + mem->offset);
-      }
     }
     return cur;
   }
@@ -2553,6 +2541,10 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
   if (ty->kind == TY_UNION) {
     if (!init->mem)
       return cur;
+    if (init->mem->is_bitfield) {
+      write_bitfield(init->children[init->mem->idx], init->mem, buf + offset);
+      return cur;
+    }
     return write_gvar_data(cur, init->children[init->mem->idx],
                            init->mem->ty, buf, offset);
   }
@@ -4509,6 +4501,7 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
     return ty;
   }
 
+  ty->pack = tok->pack;
   tok = skip(tok, "{");
 
   // The tag is in scope from the `{` on, so a member can refer to its own
@@ -4537,11 +4530,48 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
 }
 
 // In a packed struct, only an explicit aligned(N) or _Alignas on a member
-// counts; every other member is 1-byte aligned.
+// counts; every other member is 1-byte aligned. #pragma pack caps any
+// member's alignment, an explicit one too, and under it a bit-field's
+// type counts even in a packed struct, as with gcc.
 static int member_align(Type *ty, Member *mem) {
-  if (ty->is_packed)
-    return MAX(1, mem->attr_align);
-  return mem->align;
+  bool packed = ty->is_packed && !(ty->pack && mem->is_bitfield);
+  int align = packed ? MAX(1, mem->attr_align) : mem->align;
+  return ty->pack ? MIN(align, ty->pack) : align;
+}
+
+// In a packed struct or union, or under #pragma pack, a bit-field may
+// straddle units of its type, as with gcc.
+static bool is_loose(Type *ty) {
+  return ty->is_packed || ty->pack;
+}
+
+// Then each named bit-field's unit is the smallest one (1, 2, 4 or 8
+// bytes, unaligned if need be) that holds all of it and lies inside the
+// struct, or else the 3, 5, 6 or 7 bytes it covers, which cgen.c loads
+// and stores a byte at a time.
+static void place_loose_bitfields(Type *ty) {
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    if (!mem->is_bitfield || !mem->name)
+      continue;
+
+    int start = mem->offset * 8 + mem->bit_offset;
+    mem->offset = start / 8;
+    mem->bit_offset = start % 8;
+    mem->unit = (mem->bit_offset + mem->bit_width + 7) / 8;
+    if (mem->unit > 8)
+      error_tok(mem->name, "a packed bit-field spanning more than 8 bytes"
+                " is not supported");
+
+    for (int sz = 1; sz <= 8; sz *= 2) {
+      int off = MIN(start / 8, ty->size - sz);
+      if (off >= 0 && start + mem->bit_width <= (off + sz) * 8) {
+        mem->offset = off;
+        mem->bit_offset = start - off * 8;
+        mem->unit = sz;
+        break;
+      }
+    }
+  }
 }
 
 // struct-decl = struct-union-decl
@@ -4557,16 +4587,23 @@ static Type *struct_decl(Token **rest, Token *tok) {
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (mem->is_bitfield && mem->bit_width == 0) {
-      // Zero-width anonymous bitfield has a special meaning.
-      // It affects only alignment.
+      // A zero-width bit-field starts the next member at a unit of its
+      // type, even under #pragma pack. It leaves the struct's alignment
+      // alone, as with gcc.
       bits = align_to(bits, mem->ty->size * 8);
-    } else if (mem->is_bitfield) {
+      continue;
+    }
+
+    if (mem->is_bitfield) {
+      // One that would straddle a unit of its type starts at the next
+      // unit, unless is_loose().
       int sz = mem->ty->size;
-      if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
+      if (!is_loose(ty) && bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
         bits = align_to(bits, sz * 8);
 
       mem->offset = align_down(bits / 8, sz);
       mem->bit_offset = bits % (sz * 8);
+      mem->unit = sz;
       bits += mem->bit_width;
     } else {
       bits = align_to(bits, member_align(ty, mem) * 8);
@@ -4579,6 +4616,8 @@ static Type *struct_decl(Token **rest, Token *tok) {
   }
 
   ty->size = align_to(bits, ty->align * 8) / 8;
+  if (is_loose(ty))
+    place_loose_bitfields(ty);
   return ty;
 }
 
@@ -4592,14 +4631,19 @@ static Type *union_decl(Token **rest, Token *tok) {
 
   // If union, we don't have to assign offsets because they
   // are already initialized to zero. We need to compute the
-  // alignment and the size though.
+  // alignment and the size though. A bit-field takes the bytes its
+  // width needs, and a zero-width one nothing.
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    if (ty->align < mem->align)
-      ty->align = mem->align;
-    if (ty->size < mem->ty->size)
-      ty->size = mem->ty->size;
+    if (mem->is_bitfield && mem->bit_width == 0)
+      continue;
+    mem->unit = mem->ty->size;
+    ty->align = MAX(ty->align, member_align(ty, mem));
+    int size = mem->is_bitfield ? (mem->bit_width + 7) / 8 : mem->ty->size;
+    ty->size = MAX(ty->size, size);
   }
   ty->size = align_to(ty->size, ty->align);
+  if (is_loose(ty))
+    place_loose_bitfields(ty);
   return ty;
 }
 

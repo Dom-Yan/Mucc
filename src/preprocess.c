@@ -488,9 +488,60 @@ static Token *push_pop_macro(Token *tok) {
   return tok;
 }
 
+// #pragma pack(N) caps the alignment of the members of structs and
+// unions defined after it at N, and pack() lifts the cap. pack(push),
+// pack(push, N) and pack(pop) save and restore it, as with gcc. Each
+// token gets the cap in effect (Token.pack), for the parser.
+typedef struct SavedPack SavedPack;
+struct SavedPack {
+  SavedPack *next;
+  int pack;
+};
+
+static int pack;
+static SavedPack *saved_packs;
+
+// `tok` is "pack". Returns the token after the pragma.
+static Token *pragma_pack(Token *tok) {
+  if (tok->next->at_bol || tok->next->kind == TK_EOF) {
+    pack = 0;
+    return tok->next;
+  }
+
+  tok = skip(tok->next, "(");
+  if (equal(tok, "push") || equal(tok, "pop")) {
+    if (equal(tok, "push")) {
+      SavedPack *s = arena_alloc(sizeof(SavedPack));
+      *s = (SavedPack){saved_packs, pack};
+      saved_packs = s;
+    } else if (saved_packs) {
+      pack = saved_packs->pack;
+      saved_packs = saved_packs->next;
+    } else {
+      warn_tok(tok, "#pragma pack(pop) without a push");
+    }
+    tok = tok->next;
+    if (!consume(&tok, tok, ","))
+      return skip(tok, ")");
+    // A name, as in MSVC's `push, name, N`, is allowed and ignored.
+    if (tok->kind == TK_IDENT && equal(tok->next, ","))
+      tok = tok->next->next;
+  } else if (equal(tok, ")")) {
+    pack = 0;
+    return tok->next;
+  }
+
+  char *end;
+  long n = strtol(tok->loc, &end, 10);
+  if (tok->kind != TK_PP_NUM || end != tok->loc + tok->len || n > 16 || (n & (n - 1)))
+    error_tok(tok, "#pragma pack takes 1, 2, 4, 8 or 16");
+  pack = n;
+  return skip(tok->next, ")");
+}
+
 // C99's _Pragma("text"), which a macro can expand to: the same as
-// `#pragma text`, so, as there, push_macro and pop_macro are done and
-// other pragmas are ignored. Returns the token after the `)`.
+// `#pragma text`, so, as there, push_macro, pop_macro and pack are done
+// and other pragmas are ignored. Returns the token after the `)`.
 static Token *pragma_operator(Token *tok) {
   tok = skip(tok->next, "(");
   if (tok->kind != TK_STR)
@@ -503,6 +554,8 @@ static Token *pragma_operator(Token *tok) {
                                   format("%s\n", str->str)));
   if (equal(body, "push_macro") || equal(body, "pop_macro"))
     push_pop_macro(body);
+  else if (equal(body, "pack"))
+    pragma_pack(body);
   return tok;
 }
 
@@ -1305,6 +1358,7 @@ static Token *preprocess2(Token *tok) {
     if (!is_hash(tok)) {
       tok->line_delta = tok->file->line_delta;
       tok->filename = tok->file->display_name;
+      tok->pack = pack;
       cur = cur->next = tok;
       tok = tok->next;
       continue;
@@ -1450,6 +1504,11 @@ static Token *preprocess2(Token *tok) {
     if (equal(tok, "pragma") &&
         (equal(tok->next, "push_macro") || equal(tok->next, "pop_macro"))) {
       tok = push_pop_macro(tok->next);
+      continue;
+    }
+
+    if (equal(tok, "pragma") && equal(tok->next, "pack")) {
+      tok = skip_line(pragma_pack(tok->next));
       continue;
     }
 

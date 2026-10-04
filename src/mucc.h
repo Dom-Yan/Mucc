@@ -99,6 +99,7 @@ struct Token {
   int line_delta;   // Line number
   bool at_bol;      // True if this token is at beginning of line
   bool has_space;   // True if this token follows a space character
+  uint8_t pack;     // The #pragma pack in effect here, or 0
   Hideset *hideset; // For macro expansion
   Token *origin;    // If this is expanded from a macro, the original token
 };
@@ -428,6 +429,7 @@ struct Type {
   Member *members;
   bool is_flexible;
   bool is_packed;
+  uint8_t pack; // #pragma pack: the largest member alignment, or 0
 
   // Function type
   Type *return_ty;
@@ -451,6 +453,7 @@ struct Member {
   bool is_bitfield;
   int bit_offset;
   int bit_width;
+  int unit; // the bytes at `offset` it's loaded and stored as
 };
 
 extern Type *ty_void;
