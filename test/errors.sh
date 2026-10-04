@@ -930,6 +930,23 @@ expect_error "2:34: error: a packed bit-field spanning more than 8 bytes is not 
 struct s { char c; int a:4; long b:61; };
 EOF
 
+# An enumerator can't reuse a name from its own scope, but may hide one
+# from an outer scope.
+expect_error "2:14: error: redeclaration of 'A'" <<'EOF'
+enum E { A };
+enum E2 { B, A };
+EOF
+
+expect_error "2:8: error: redeclaration of 'x'" <<'EOF'
+int x;
+enum { x };
+EOF
+
+expect_ok 'an enumerator hiding a global' <<'EOF'
+int A;
+int f(void) { enum { A = 5 }; return A; }
+EOF
+
 # Nothing const can be modified.
 expect_error "2:16: error: cannot modify read-only variable 'x'" <<'EOF'
 const int x = 1;

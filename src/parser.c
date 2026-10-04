@@ -1518,7 +1518,11 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     if (i++ > 0)
       tok = skip(tok, ",");
 
+    // An enumerator can't reuse a name declared in the same scope, as in
+    // `enum A { X }; enum B { X };`.
     char *name = get_ident(tok);
+    if (hashmap_get(&scope->vars, name))
+      error_tok(tok, "redeclaration of '%s'", name);
     Token *val_tok = tok;
     tok = skip_attributes(tok->next);
 
