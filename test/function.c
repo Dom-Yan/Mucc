@@ -1,5 +1,11 @@
 #include "test.h"
 
+// A parameter of function type is a function pointer; `int (int)` is
+// unnamed, not a parenthesized declarator.
+static int twice(int x) { return 2 * x; }
+static int apply_fn(int fn(int), int v) { return fn(v); }
+int apply_fn2(int (int), int);
+
 int ret3(void) {
   return 3;
   return 5;
@@ -406,6 +412,9 @@ int main() {
   ASSERT(20, struct_test38().a[19]);
 
   ASSERT(5, (***add2)(2,3));
+
+  ASSERT(42, apply_fn(twice, 21));
+  ASSERT(8, sizeof(int (*)(int ())));
 
   ASSERT(3, inline_fn());
 

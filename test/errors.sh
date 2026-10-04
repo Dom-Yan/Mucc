@@ -909,6 +909,17 @@ static struct ar z = { "zip", wz };
 int g(const struct ar *p) { p = &z; return p->w(p, 1); }
 EOF
 
+# A local array's address isn't a constant, even where a global of that
+# name exists.
+expect_error "2:41: error: not a compile-time constant" <<'EOF'
+int a[3];
+int f(void) { int a[3]; static int *p = a; return p == a; }
+EOF
+
+expect_error "1:24: error: invalid argument type to unary '+'" <<'EOF'
+int f(int *p) { return +p; }
+EOF
+
 # A header found through -I is the user's code, not a system header: its
 # type errors are reported, and -MMD lists it.
 mkdir -p $tmp/inc

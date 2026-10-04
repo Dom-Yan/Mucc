@@ -157,6 +157,12 @@ int main() {
   ASSERT(2, ({ int x = 0; ({ for (int i = 0; i < 2; i++) x++; }); x; }));
   ASSERT(5, ({ int x = 5; ({ int y = 1; }); ({}); x; }));
 
+  // A comma with a constant on its right is not a constant: the left side
+  // still runs when || && ?: are folded.
+  ASSERT(0, ({ int g = 5; (g = 0, 1) || 0; g; }));
+  ASSERT(4, ({ int g = 5; (g = 4, 0) && 1; g; }));
+  ASSERT(4, ({ int k = 3; (k++, 2) ? 10 : 20; k; }));
+
   printf("OK\n");
   return 0;
 }

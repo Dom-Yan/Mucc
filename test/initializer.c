@@ -13,6 +13,13 @@ char g18[10] = "foobar";
 char g_paren[] = ("paren"); // [GNU] as gettext's N_("paren") expands to
 char g19[3] = "foobar";
 char *g20 = g17+0;
+// An element of a 2-D array, and a row of one, as addresses.
+int g2d[4][8];
+int *g2d_p = &g2d[3][6];
+char g2d_buf[3][4];
+char *g2d_rows[] = {g2d_buf[0], g2d_buf[1], g2d_buf[2]};
+// With two designators, the last names the member.
+union { int a; char b; } g_union2 = {.b = 8, .a = 7};
 char *g21 = g17+3;
 char *g22 = (char *)&g17-3;
 char *g23[] = {g17+0, g17+3, g17-3};
@@ -300,6 +307,11 @@ int main() {
   ASSERT(0, strcmp(g_paren, "paren"));
   ASSERT(4, ({ char s[] = ("abc"); sizeof(s); }));
   ASSERT(0, ({ char s[] = ("ab" "c"); strcmp(s, "abc"); }));
+
+  ASSERT(1, g2d_p == &g2d[3][6]);
+  ASSERT(1, g2d_rows[2] == g2d_buf[2]);
+  ASSERT(7, g_union2.a);
+  ASSERT(9, ({ union { int a; char b; } u = {.a = 5, .b = 9,}; u.b; }));
 
   printf("OK\n");
   return 0;

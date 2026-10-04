@@ -31,6 +31,12 @@ int main() {
   ASSERT(1, ({ char i; sizeof(++i); }));
   ASSERT(1, ({ char i; sizeof(i++); }));
 
+  // Unary + promotes, as unary - does.
+  ASSERT(4, ({ unsigned char c = 1; sizeof(+c); }));
+  ASSERT(4, ({ short s = 1; sizeof(+s); }));
+  ASSERT(8, ({ long l = 1; sizeof(+l); }));
+  ASSERT(4, sizeof(+1.0f));
+
   ASSERT(8, sizeof(int(*)[10]));
   ASSERT(8, sizeof(int(*)[][10]));
 

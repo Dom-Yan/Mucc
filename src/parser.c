@@ -1298,6 +1298,15 @@ static void set_asm_register(Obj *var, Attrs *a) {
   var->asm_reg = reg + 1;
 }
 
+// Does the "(" at `tok` start a parameter list rather than a declarator in
+// parentheses? It does if a type or ")" follows, as in the parameter
+// `int (int)`, a function taking int, or the type name `int ()`.
+static bool is_func_suffix(Token *tok) {
+  tok = tok->next;
+  return equal(tok, ")") || equal(tok, "...") ||
+         (is_typename(tok) && !is_attribute(tok));
+}
+
 // declarator = attributes pointers attributes
 //              ("(" declarator ")" | ident attributes)? type-suffix asm-label
 //              attributes
@@ -1314,7 +1323,7 @@ static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs) {
   ty = pointers(&tok, tok, ty);
   tok = attributes(tok, attrs, true);
 
-  if (equal(tok, "(")) {
+  if (equal(tok, "(") && !is_func_suffix(tok)) {
     Token *start = tok;
     Type dummy = {};
     Attrs ignored = {};
@@ -1352,7 +1361,7 @@ static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
   ty = pointers(&tok, tok, ty);
   tok = skip_attributes(tok);
 
-  if (equal(tok, "(")) {
+  if (equal(tok, "(") && !is_func_suffix(tok)) {
     Token *start = tok;
     Type dummy = {};
     abstract_declarator(&tok, start->next, &dummy);
@@ -2144,11 +2153,6 @@ static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
 
   bool first = true;
 
-  if (init->is_flexible) {
-    int len = count_array_init_elements(tok, init->ty);
-    *init = *new_initializer(array_of(init->ty->base, len), false);
-  }
-
   for (int i = 0; !consume_end(rest, tok); i++) {
     if (!first)
       tok = skip(tok, ",");
@@ -2252,10 +2256,15 @@ static void union_initializer(Token **rest, Token *tok, Initializer *init) {
   // Unlike structs, union initializers take only one initializer,
   // and that initializes the first union member by default.
   // You can initialize other member using a designated initializer.
+  // With several designators, the last one names the member, as in
+  // `{.b = 8, .a = 7}`, which sets a.
   if (equal(tok, "{") && equal(tok->next, ".")) {
-    Member *mem = struct_designator(&tok, tok->next, init->ty);
-    init->mem = mem;
-    designation(&tok, tok, init->children[mem->idx]);
+    tok = tok->next;
+    do {
+      Member *mem = struct_designator(&tok, tok, init->ty);
+      init->mem = mem;
+      designation(&tok, tok, init->children[mem->idx]);
+    } while (consume(&tok, tok, ",") && equal(tok, "."));
     *rest = skip(tok, "}");
     return;
   }
@@ -3596,6 +3605,12 @@ static int64_t eval2(Node *node, char ***label) {
   }
   case ND_ADDR:
     return eval_rval(node->lhs, label);
+  case ND_DEREF:
+    // An element that is itself an array, as `a[3]` of `int a[4][8]`, is
+    // its address.
+    if (node->ty->kind == TY_ARRAY)
+      return eval2(node->lhs, label);
+    break;
   case ND_LABEL_VAL:
     *label = &node->unique_label;
     return 0;
@@ -3615,7 +3630,7 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_VAR:
     if (node->var->is_constexpr)
       return node->var->constexpr_val;
-    if (!label)
+    if (!label || node->var->is_local)
       error_tok(node->tok, "not a compile-time constant");
     if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
       error_tok(node->tok, "invalid initializer");
@@ -3683,7 +3698,8 @@ static bool is_const_expr(Node *node) {
       return false;
     return is_const_expr(eval(node->cond) ? node->then : node->els);
   case ND_COMMA:
-    return is_const_expr(node->rhs);
+    // `(x = 0, 1)` is not a constant: folding it would drop `x = 0`.
+    return is_const_expr(node->lhs) && is_const_expr(node->rhs);
   case ND_NEG:
   case ND_NOT:
   case ND_BITNOT:
@@ -4303,8 +4319,16 @@ static Node *cast(Token **rest, Token *tok) {
 //       | "&&" ident
 //       | postfix
 static Node *unary(Token **rest, Token *tok) {
-  if (equal(tok, "+"))
-    return cast(rest, tok->next);
+  // +x is a value, promoted as for -x: sizeof(+c) is sizeof(int).
+  if (equal(tok, "+")) {
+    Node *node = cast(rest, tok->next);
+    add_type(node);
+    if (!is_numeric(node->ty))
+      error_tok(tok, "invalid argument type to unary '+'");
+    if (is_integer(node->ty) && node->ty->size < 4)
+      return new_cast(node, ty_int);
+    return new_cast(node, node->ty);
+  }
 
   if (equal(tok, "-"))
     return new_unary(ND_NEG, cast(rest, tok->next), tok);
