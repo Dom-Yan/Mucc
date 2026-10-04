@@ -419,6 +419,8 @@ func:
   # atomics and misc
   lock cmpxchg %edx, (%rdi)
   lock cmpxchg %rdx, (%rdi)
+  lock cmpxchg16b (%rdi)
+  cmpxchg16b 8(%r8)
   xchg %rax, (%rdi)
   xchg %eax, (%rdi)
   rep stosb

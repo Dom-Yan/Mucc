@@ -805,7 +805,8 @@ typedef enum {
   CVTSI,    // cvtsi2sd, cvtsi2ss (GP -> XMM)
   CVTTSI,   // cvttsd2si, cvttss2si (XMM -> GP)
   MOVQ,
-  X87,      // x87 or MXCSR memory operand: opcode op (1 or 2 bytes), /digit ext
+  X87,      // x87 or MXCSR memory operand: opcode op (1 or 2 bytes), /digit ext,
+            // with REX.W if size is 8
   FSTP,     // fstp %st(i)
   CMPXCHG,  // cmpxchg, xadd: 0F op (byte) or op + 1, from a register
   XCHG,
@@ -934,6 +935,7 @@ static Insn insns[] = {
   {"sgdt", X87, 0x0f01, .ext = 0}, {"sidt", X87, 0x0f01, .ext = 1},
   {"lgdt", X87, 0x0f01, .ext = 2}, {"lidt", X87, 0x0f01, .ext = 3},
   {"invlpg", X87, 0x0f01, .ext = 7},
+  {"cmpxchg16b", X87, 0x0fc7, 8, .ext = 1},
   {"fstp", FSTP},
   {"cmpxchg", CMPXCHG, 0xb0}, {"xadd", CMPXCHG, 0xc0},
   {"xchg", XCHG},
@@ -1501,7 +1503,7 @@ static void instruction(char *name, int len) {
     }
     if (n != 1 || ops[0].kind != OP_MEM)
       fail("expected a memory operand");
-    rex(false, 0, &ops[0], false);
+    rex(insn->size == 8, 0, &ops[0], false); // REX.W for cmpxchg16b
     if (insn->op > 0xff)
       out(insn->op >> 8);
     out(insn->op & 0xff);

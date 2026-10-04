@@ -101,10 +101,38 @@ static long sync_add_millions(void) {
   return x;
 }
 
+// Floating atomics are compare-and-swap loops on the value's bits; a long
+// double's 16 bytes take cmpxchg16b.
+static _Atomic double fsum_d;
+static _Atomic float fsum_f;
+static _Atomic long double fsum_ld;
+
+static void *fadd(void *arg) {
+  for (int i = 0; i < 100*1000; i++) {
+    fsum_d += 1;
+    fsum_f++;
+    fsum_ld += 0.5L;
+  }
+  return 0;
+}
+
+static int float_sums(void) {
+  pthread_t thr[3];
+  for (int i = 0; i < 3; i++)
+    pthread_create(&thr[i], NULL, fadd, NULL);
+  for (int i = 0; i < 3; i++)
+    pthread_join(thr[i], NULL);
+  return fsum_d == 300000 && fsum_f == 300000 && fsum_ld == 150000;
+}
+
 int main() {
   ASSERT(6*1000*1000, add_millions());
   ASSERT(1, refcount());
   ASSERT(3*1000*1000, sync_add_millions());
+  ASSERT(1, float_sums());
+  ASSERT(1, ({ _Atomic double d = 1.5; d += 2.25; d++; d == 4.75; }));
+  ASSERT(1, ({ _Atomic float f = 1; f *= 3; f-- == 3 && f == 2; }));
+  ASSERT(1, ({ _Atomic long double d = 2.5L; long double o = d++; d *= 2; o == 2.5L && d == 7; }));
 
   // The fetch_op forms return the value from before; the op_fetch and
   // op_and_fetch forms the value after.

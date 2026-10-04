@@ -1861,17 +1861,50 @@ static void gen_expr(Node *node) {
     gen_va_arg(node);
     return;
   case ND_CAS: {
+    // The values are compared and swapped as bits: a float or a double
+    // goes through %rax too. A long double, 16 bytes, goes through
+    // cmpxchg16b, which compares %rdx:%rax and stores %rcx:%rbx (%rbx
+    // may hold a register variable, so it's saved).
+    Type *ty = node->cas_addr->ty->base;
+    int sz = ty->size;
     gen_expr(node->cas_addr);
     push();
     gen_expr(node->cas_new);
+
+    if (ty->kind == TY_LDOUBLE) {
+      println("  sub $16, %%rsp");
+      println("  fstpt (%%rsp)");
+      depth += 2;
+      gen_expr(node->cas_old);
+      println("  mov %%rax, %%r8");
+      println("  mov %%rbx, %%r9");
+      println("  mov (%%rsp), %%rbx");
+      println("  mov 8(%%rsp), %%rcx");
+      println("  add $16, %%rsp");
+      depth -= 2;
+      pop("%rdi"); // addr
+      println("  mov (%%r8), %%rax");
+      println("  mov 8(%%r8), %%rdx");
+      println("  lock cmpxchg16b (%%rdi)");
+      println("  mov %%r9, %%rbx");
+      println("  sete %%cl");
+      println("  je 1f");
+      println("  mov %%rax, (%%r8)");
+      println("  mov %%rdx, 8(%%r8)");
+      println("1:");
+      println("  movzbl %%cl, %%eax");
+      return;
+    }
+
+    if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE)
+      println("  movq %%xmm0, %%rax"); // a float's bits are in %eax
     push();
     gen_expr(node->cas_old);
     println("  mov %%rax, %%r8");
-    load(node->cas_old->ty->base);
+    println("  mov (%%r8), %s", reg_ax(sz));
     pop("%rdx"); // new
     pop("%rdi"); // addr
 
-    int sz = node->cas_addr->ty->base->size;
     println("  lock cmpxchg %s, (%%rdi)", reg_dx(sz));
     println("  sete %%cl");
     println("  je 1f");
