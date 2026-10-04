@@ -869,8 +869,9 @@ static void struct_regs(Type *ty, int *ngp, int *nfp) {
 // so both use this function.
 static bool struct_in_regs(Type *ty, int gp, int fp) {
   // An empty struct (GNU) takes no register, and no stack either (its
-  // size rounds up to 0 bytes there).
-  if (ty->size > 16 || ty->size == 0)
+  // size rounds up to 0 bytes there). One holding a long double goes on
+  // the stack.
+  if (ty->size > 16 || ty->size == 0 || has_ldouble(ty))
     return false;
   int ngp, nfp;
   struct_regs(ty, &ngp, &nfp);
@@ -890,7 +891,7 @@ static void gen_va_arg(Node *node) {
 
   int ngp = 0, nfp = 0;
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
-    if (ty->size <= 16)
+    if (ty->size <= 16 && !has_ldouble(ty))
       struct_regs(ty, &ngp, &nfp);
   } else if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE) {
     nfp = 1;
@@ -1010,7 +1011,7 @@ static int push_args(Node *node) {
 
   // If the return type is a large struct/union, the caller passes
   // a pointer to a buffer as if it were the first argument.
-  if (node->ret_buffer && node->ty->size > 16)
+  if (node->ret_buffer && is_ret_in_memory(node->ty))
     gp++;
 
   // Load as many arguments to the registers as possible.
@@ -1063,7 +1064,7 @@ static int push_args(Node *node) {
 
   // If the return type is a large struct/union, the caller passes
   // a pointer to a buffer as if it were the first argument.
-  if (node->ret_buffer && node->ty->size > 16) {
+  if (node->ret_buffer && is_ret_in_memory(node->ty)) {
     addr_of_local(node->ret_buffer, "%rax");
     push();
   }
@@ -1077,6 +1078,12 @@ static void copy_ret_buffer(Obj *var) {
 
   if (!ty->size) // an empty struct (GNU) comes back in no register
     return;
+
+  // One that is only a long double comes back in %st0.
+  if (has_ldouble(ty)) {
+    println("  fstpt %d(%%rbp)", var->offset);
+    return;
+  }
 
   if (has_flonum1(ty)) {
     assert(ty->size == 4 || 8 <= ty->size);
@@ -1117,6 +1124,11 @@ static void copy_struct_reg(void) {
 
   if (!ty->size) // an empty struct (GNU) goes back in no register
     return;
+
+  if (has_ldouble(ty)) {
+    println("  fldt (%%rax)");
+    return;
+  }
 
   println("  mov %%rax, %%rdi");
 
@@ -1617,7 +1629,7 @@ static void gen_expr(Node *node) {
 
     // If the return type is a large struct/union, the caller passes
     // a pointer to a buffer as if it were the first argument.
-    if (node->ret_buffer && node->ty->size > 16)
+    if (node->ret_buffer && is_ret_in_memory(node->ty))
       pop(argreg64[gp++]);
 
     for (Node *arg = node->args; arg; arg = arg->next) {
@@ -1691,7 +1703,7 @@ static void gen_expr(Node *node) {
 
     // If the return type is a small struct, a value is returned
     // using up to two registers.
-    if (node->ret_buffer && node->ty->size <= 16) {
+    if (node->ret_buffer && !is_ret_in_memory(node->ty)) {
       copy_ret_buffer(node->ret_buffer);
       println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
     }
@@ -2408,7 +2420,7 @@ static void gen_stmt(Node *node) {
       switch (ty->kind) {
       case TY_STRUCT:
       case TY_UNION:
-        if (ty->size <= 16)
+        if (!is_ret_in_memory(ty))
           copy_struct_reg();
         else
           copy_struct_mem();

@@ -473,6 +473,8 @@ extern Type *ty_ldouble;
 bool is_integer(Type *ty);
 bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
+bool has_ldouble(Type *ty);
+bool is_ret_in_memory(Type *ty);
 bool is_compatible(Type *t1, Type *t2);
 Type *copy_type(Type *ty);
 Type *pointer_to(Type *base);

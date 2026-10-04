@@ -51,6 +51,42 @@ bool is_numeric(Type *ty) {
   return is_integer(ty) || is_flonum(ty);
 }
 
+// Counts the scalars in `ty` that are long doubles (into *nld) and that
+// aren't (into *nother).
+static void count_ldouble(Type *ty, int *nld, int *nother) {
+  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      count_ldouble(mem->ty, nld, nother);
+  } else if (ty->kind == TY_ARRAY) {
+    if (ty->array_len > 0)
+      count_ldouble(ty->base, nld, nother);
+  } else if (ty->kind == TY_LDOUBLE) {
+    (*nld)++;
+  } else {
+    (*nother)++;
+  }
+}
+
+// Does struct or union `ty` hold a long double? Then, in 16 bytes or
+// less (the psABI's X87 class), it's passed on the stack, not in
+// registers.
+bool has_ldouble(Type *ty) {
+  int nld = 0, nother = 0;
+  count_ldouble(ty, &nld, &nother);
+  return nld > 0;
+}
+
+// Is a struct or union returned through a hidden pointer? One larger than
+// 16 bytes is, and so is one holding a long double and anything else. One
+// holding only long doubles comes back in %st0.
+bool is_ret_in_memory(Type *ty) {
+  if (ty->size > 16)
+    return true;
+  int nld = 0, nother = 0;
+  count_ldouble(ty, &nld, &nother);
+  return nld > 0 && nother > 0;
+}
+
 bool is_compatible(Type *t1, Type *t2) {
   if (t1 == t2)
     return true;

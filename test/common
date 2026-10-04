@@ -149,6 +149,32 @@ long abi_call3(long (*fn)(long, long, long, long, long, long, long, Ty31, long))
   return fn(1, 2, 3, 4, 5, 6, 7, (Ty31){1, 2, 3}, 9);
 }
 
+// A struct or union of 16 bytes or less holding a long double goes on the
+// stack, and comes back in %st0 if it holds only long doubles, otherwise
+// through a hidden pointer.
+typedef struct { long double x; } Ty32;
+typedef union { long double x; long n; } Ty33;
+
+long abi_test4(long a, Ty32 s, Ty33 u, long b) {
+  return a + (long)(s.x * 10) + u.n * 100 + b * 1000;
+}
+
+Ty32 abi_ret4(void) {
+  return (Ty32){2.5L};
+}
+
+Ty33 abi_ret5(void) {
+  return (Ty33){.n = 42};
+}
+
+long abi_call4(long (*fn)(long, Ty32, Ty33, long)) {
+  return fn(1, (Ty32){2.5L}, (Ty33){.n = 3}, 4);
+}
+
+long double abi_call5(Ty32 (*f)(void), Ty33 (*g)(void)) {
+  return f().x + g().n;
+}
+
 // Calls va_kinds() in test/varargs.c, a variadic function mucc built.
 double call_va_kinds(double (*fn)(int, ...)) {
   struct { double x, y; } sd = {7.5, 8.5};

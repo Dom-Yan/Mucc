@@ -206,6 +206,27 @@ long abi_test13(long a, long b, long c, long d, long e, long f, long g, Ty31 s, 
   return g + s.a * 10 + s.b * 100 + s.c * 1000 + i * 10000;
 }
 
+// See abi_test4 in test/common: structs and unions holding a long double.
+typedef struct { long double x; } Ty32;
+typedef union { long double x; long n; } Ty33;
+long abi_test4(long a, Ty32 s, Ty33 u, long b);
+Ty32 abi_ret4(void);
+Ty33 abi_ret5(void);
+long abi_call4(long (*fn)(long, Ty32, Ty33, long));
+long double abi_call5(Ty32 (*f)(void), Ty33 (*g)(void));
+
+long abi_test14(long a, Ty32 s, Ty33 u, long b) {
+  return a + (long)(s.x * 10) + u.n * 100 + b * 1000;
+}
+
+Ty32 abi_ret14(void) {
+  return (Ty32){2.5L};
+}
+
+Ty33 abi_ret15(void) {
+  return (Ty33){.n = 42};
+}
+
 Ty4 struct_test34(void) {
   return (Ty4){10, 20, 30, 40};
 }
@@ -351,6 +372,11 @@ int main() {
   ASSERT(932, abi_call1(abi_test11));
   ASSERT(32, abi_call2(abi_test12));
   ASSERT(93217, abi_call3(abi_test13));
+  ASSERT(4326, abi_test4(1, (Ty32){2.5L}, (Ty33){.n = 3}, 4));
+  ASSERT(1, abi_ret4().x == 2.5L);
+  ASSERT(42, abi_ret5().n);
+  ASSERT(4326, abi_call4(abi_test14));
+  ASSERT(1, abi_call5(abi_ret14, abi_ret15) == 44.5L);
 
   ASSERT(10, ({ Ty7 x={10,20,30}; struct_test7(x, 0); }));
   ASSERT(20, ({ Ty7 x={10,20,30}; struct_test7(x, 1); }));
