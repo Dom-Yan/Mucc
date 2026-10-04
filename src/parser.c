@@ -2582,6 +2582,13 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     return cur;
   }
 
+  // A floating value converted as its type says: 1e19 to unsigned long.
+  add_type(init->expr);
+  if (is_flonum(init->expr->ty)) {
+    write_buf(buf + offset, eval(new_cast(init->expr, ty)), ty->size);
+    return cur;
+  }
+
   char **label = NULL;
   uint64_t val = eval2(init->expr, &label);
 
@@ -3590,6 +3597,9 @@ static int64_t eval2(Node *node, char ***label) {
     }
 
     int64_t val = eval2(node->lhs, label);
+    // 1e19 is out of int64_t's range but not of unsigned long's.
+    if (is_flonum(node->lhs->ty) && node->ty->is_unsigned)
+      val = (uint64_t)eval_double(node->lhs);
     if (is_integer(node->ty)) {
       switch (node->ty->size) {
       case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;

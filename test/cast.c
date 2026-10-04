@@ -1,6 +1,16 @@
 #include "test.h"
 
+volatile double vdm1 = -1.0;
+volatile long double vldm300 = -300.0L, vld40k = 40000.0L, vld3e9 = 3e9L;
+volatile unsigned long vu18 = 18000000000000000000UL;
+unsigned long g_u19 = 1e19;
+
 int main() {
+  volatile double d19 = 1e19;
+  volatile float f19 = 1e19f;
+  volatile long double ld19 = 1e19L;
+  unsigned long vd19 = d19, vf19 = f19, vld19 = ld19;
+
   ASSERT(131585, (int)8590066177);
   ASSERT(513, (short)8590066177);
   ASSERT(1, (char)8590066177);
@@ -53,6 +63,18 @@ int main() {
   ASSERT(3, (double)3);
   ASSERT(3, (float)3L);
   ASSERT(3, (double)3L);
+
+  // Between unsigned long and floating types from 2^63 up, where the
+  // signed conversion instructions don't reach.
+  ASSERT(1, vd19 == 10000000000000000000UL && vf19 == 9999999980506447872UL);
+  ASSERT(1, vld19 == 10000000000000000000UL && g_u19 == 10000000000000000000UL);
+  ASSERT(1, (unsigned long)(vld19 * 1.5L) == 15000000000000000000UL);
+  ASSERT(1, (unsigned long)vdm1 == 0xffffffffffffffffUL);
+  ASSERT(1, (float)vu18 == 18000000404716257280.0f);
+  ASSERT(1, (float)0xffffffffffffffffUL == 18446744073709551616.0f);
+  ASSERT(-300, (short)vldm300);
+  ASSERT(40000, (int)(unsigned short)vld40k);
+  ASSERT(1, (unsigned)vld3e9 == 3000000000U);
 
   printf("OK\n");
   return 0;

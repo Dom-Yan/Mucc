@@ -530,7 +530,12 @@ static char i64f32[] = "cvtsi2ssq %rax, %xmm0";
 static char i64f64[] = "cvtsi2sdq %rax, %xmm0";
 static char i64f80[] = "movq %rax, -8(%rsp); fildll -8(%rsp)";
 
-static char u64f32[] = "cvtsi2ssq %rax, %xmm0";
+// From 2^63 up, the signed conversions don't work: halve the value
+// (keeping the low bit, so it rounds the same), convert, and double it.
+static char u64f32[] =
+  "test %rax,%rax; js 1f; pxor %xmm0,%xmm0; cvtsi2ss %rax,%xmm0; jmp 2f; "
+  "1: mov %rax,%rdi; and $1,%eax; pxor %xmm0,%xmm0; shr %rdi; "
+  "or %rax,%rdi; cvtsi2ss %rdi,%xmm0; addss %xmm0,%xmm0; 2:";
 static char u64f64[] =
   "test %rax,%rax; js 1f; pxor %xmm0,%xmm0; cvtsi2sd %rax,%xmm0; jmp 2f; "
   "1: mov %rax,%rdi; and $1,%eax; pxor %xmm0,%xmm0; shr %rdi; "
@@ -546,7 +551,13 @@ static char f32u16[] = "cvttss2sil %xmm0, %eax; movzwl %ax, %eax";
 static char f32i32[] = "cvttss2sil %xmm0, %eax";
 static char f32u32[] = "cvttss2siq %xmm0, %rax";
 static char f32i64[] = "cvttss2siq %xmm0, %rax";
-static char f32u64[] = "cvttss2siq %xmm0, %rax";
+// From 2^63 up, which cvtt*2siq can't convert, subtract 2^63 first and put
+// it back as the top bit.
+static char f32u64[] =
+  "mov $1593835520, %eax; mov %eax, -4(%rsp); comiss -4(%rsp), %xmm0; "
+  "jae 1f; cvttss2siq %xmm0, %rax; jmp 2f; "
+  "1: subss -4(%rsp), %xmm0; cvttss2siq %xmm0, %rax; "
+  "mov $1, %edi; shl $63, %rdi; xor %rdi, %rax; 2:";
 static char f32f64[] = "cvtss2sd %xmm0, %xmm0";
 static char f32f80[] = "movss %xmm0, -4(%rsp); flds -4(%rsp)";
 
@@ -557,7 +568,11 @@ static char f64u16[] = "cvttsd2sil %xmm0, %eax; movzwl %ax, %eax";
 static char f64i32[] = "cvttsd2sil %xmm0, %eax";
 static char f64u32[] = "cvttsd2siq %xmm0, %rax";
 static char f64i64[] = "cvttsd2siq %xmm0, %rax";
-static char f64u64[] = "cvttsd2siq %xmm0, %rax";
+static char f64u64[] =
+  "mov $4890909195324358656, %rax; mov %rax, -8(%rsp); comisd -8(%rsp), %xmm0; "
+  "jae 1f; cvttsd2siq %xmm0, %rax; jmp 2f; "
+  "1: subsd -8(%rsp), %xmm0; cvttsd2siq %xmm0, %rax; "
+  "mov $1, %edi; shl $63, %rdi; xor %rdi, %rax; 2:";
 static char f64f32[] = "cvtsd2ss %xmm0, %xmm0";
 static char f64f80[] = "movsd %xmm0, -8(%rsp); fldl -8(%rsp)";
 
@@ -569,12 +584,19 @@ static char f64f80[] = "movsd %xmm0, -8(%rsp); fldl -8(%rsp)";
 
 static char f80i8[] = FROM_F80_1 "fistps" FROM_F80_2 "movsbl -24(%rsp), %eax";
 static char f80u8[] = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
-static char f80i16[] = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
-static char f80u16[] = FROM_F80_1 "fistpl" FROM_F80_2 "movswl -24(%rsp), %eax";
+static char f80i16[] = FROM_F80_1 "fistps" FROM_F80_2 "movswl -24(%rsp), %eax";
+static char f80u16[] = FROM_F80_1 "fistpl" FROM_F80_2 "movzwl -24(%rsp), %eax";
 static char f80i32[] = FROM_F80_1 "fistpl" FROM_F80_2 "mov -24(%rsp), %eax";
-static char f80u32[] = FROM_F80_1 "fistpl" FROM_F80_2 "mov -24(%rsp), %eax";
+static char f80u32[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %eax";
 static char f80i64[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %rax";
-static char f80u64[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %rax";
+// As f64u64, with x87 compares: 2^63 is 1593835520 as a float, and adding
+// -2^63 (-553648128) subtracts it.
+static char f80u64[] =
+  FROM_F80_1 "mov $1593835520, %eax; mov %eax, -4(%rsp); flds -4(%rsp); "
+  "fucomip; jbe 1f; fistpq -24(%rsp); mov -24(%rsp), %rax; jmp 2f; "
+  "1: mov $-553648128, %eax; mov %eax, -4(%rsp); fadds -4(%rsp); "
+  "fistpq -24(%rsp); mov -24(%rsp), %rax; "
+  "mov $1, %edi; shl $63, %rdi; xor %rdi, %rax; 2: fldcw -10(%rsp)";
 static char f80f32[] = "fstps -8(%rsp); movss -8(%rsp), %xmm0";
 static char f80f64[] = "fstpl -8(%rsp); movsd -8(%rsp), %xmm0";
 
