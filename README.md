@@ -12,7 +12,7 @@ Website: <https://dom-yan.github.io/Mucc/>
 
 ## Why use it
 
-- **Fast builds.** It compiles about 4.5x faster than `gcc -O0` and 17x
+- **Fast builds.** It compiles about 2.4x faster than `gcc -O0` and 10x
   faster than `gcc -O2`.
 - **Nothing to install.** One 11 MB file is the whole toolchain. It works in
   an empty container, on old distributions and on machines with no compiler.
@@ -120,12 +120,13 @@ for no `sudo`), and `make uninstall` removes it.
 | --- | --- |
 | Source | 22,103 lines of C in 13 files |
 | Released binary | about 11 MB, with musl and Linux's headers inside |
-| Compiling its own source | 0.20 s (gcc `-O0`: 0.91 s, gcc `-O2`: 3.54 s) |
+| Compiling its own source | 0.45 s (gcc `-O0`: 1.07 s, gcc `-O2`: 4.33 s) |
 | Tests | 51 programs with 2,047 assertions, 8 Linux programs with 166 checks, plus 394 command-line, error, assembler, linker and debugger checks |
 | Real programs | CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC, QuickJS (its 9 test files pass), the kilo text editor |
 | Self-hosting | a mucc built by mucc builds a byte-identical mucc |
 
-Times are from WSL 2 on Ubuntu with gcc 15.2.
+Times are for the released binary, compiling `src/*.c` to objects one file
+at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
 
 ## What it supports
 
