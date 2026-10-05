@@ -42,76 +42,97 @@ The linter idea from 2026-10-04 is dropped. The `linter` and
 Every commit passed `make test-all`. All commits are authored only by
 Dom-Yan, with no co-author lines.
 
-## Next: bugs found by the deep test (2026-10-05)
+Then, the same day:
 
-A test run with difftest (4,100 programs), hand probes and real projects
-(bzip2, cJSON, lz4, miniz, stb, SQLite) found these, each checked against
-gcc 15.2. Fix them in this order, with a test for each:
+- The deep test's ten bugs, all fixed with tests: 32-bit constant
+  folding, multi-character constants, `#if` in intmax_t, `__VA_OPT__`
+  substitution, `_Bool` bit-field initializers, `&&label` with VLAs,
+  `max_align_t`, driver flags (`-isystem`, `-v`, `-dumpversion`,
+  `-print-*-name=`, ignored optimization and hardening flags),
+  `#pragma GCC diagnostic`, -Wall-only warnings, scanf `%ms`, the `"x"`
+  asm constraint, `L ## #x`, `__FILE_NAME__`, `#x` escaping, address
+  differences in initializers.
+- Memory: sqlite3.c peaks at 430 MB, from 540 MB (gcc -O0: 297 MB).
+  Tokens are 96 bytes (were 128), AST nodes 280 (were 336), and a macro
+  expansion copies each token once (was three times). Same object code.
+- A second deep test (a subagent, about 2 hours: hand probes, mutation
+  fuzzing of test/*.c, cross-compiler ABI checks, gawk, sed, make, Lua,
+  redis, jq) found more. Fixed, with tests:
+  - Wrong code: user functions named `err`/`verr`/... were noreturn;
+    struct returns over 16 bytes left a dead address in %rax; enums
+    wider than int were cut to 32 bits; psABI classes of `__int128`
+    members, padding-only upper halves and packed structs; sizeof with
+    an initialized flexible array member; `_Alignas` on static locals.
+  - gcc's target macros (`__BYTE_ORDER__`, `__CHAR_BIT__`, limits,
+    `__FLT_*`, ...); `__STDC_NO_COMPLEX__` dropped.
+  - `defined`/`__has_c_attribute`/`__has_include` from a macro in `#if`
+    (every gnulib project failed); `#include FOO` crash; a bare
+    `#define`/`#undef`/`#ifdef` took the next line's first word.
+  - Stack overflow on wide code (a 1 GB stack for the compiler process,
+    as gcc has); 100,000 globals took 54 s (now 0.47 s).
+  - `-MD -c -o obj/x.o` target; `-g` line at function entry (gdb's
+    `break main`) and macro code on its line of use; local `.comm`
+    placement in the assembler.
+- difftest: 3,000 programs, 0 real failures. The generator no longer
+  makes `0.0 - x`, which gcc folds into `-x`.
 
-1. **Wrong code: unsigned int constant folding doesn't wrap to 32 bits.**
-   `eval2()` (parser.c, "Constant expression evaluation") computes ADD,
-   SUB, MUL, NEG, BITNOT and SHL in 64 bits without truncating to a
-   4-byte result type. SHR shifts 4-byte unsigned values arithmetically.
-   - `UINT32_MAX + 1u` gives 0x100000000.
-   - `~0u >> 4` gives all ones.
-   - `enum { F = ~0u >> 28 }` gives -1.
-   - `static double d = -1u` gives 1.8e19.
-   - `if (~4294967295U) A(); else B();` runs neither branch.
+## Decide: define `__GNUC__`?
 
-   This also explains difftest seeds 50263 and 300316.
-2. **Wrong code: multi-character constants.** `'RIFF'` gives 0x52, not
-   0x52494646. Fix `read_char_literal` (token.c).
-3. **Wrong code: `#if` arithmetic is in int, not intmax_t.**
-   `#if (2147483647 + 1) > 0` is false. `eval_pp_expr` (preprocess.c)
-   uses the parser's `const_expr`, where literals are int.
-4. **Wrong code: `_Bool` bit-fields in static initializers.**
-   `static struct { _Bool b:1; } g = {2};` gives 0. `write_bitfield`
-   needs a conversion to bool.
-5. **ABI: `max_align_t` must have 16-byte alignment** (include/stddef.h).
-6. **`__VA_OPT__(..., __VA_ARGS__)` doesn't substitute inside.** `subst()`
-   in preprocess.c copies the tokens verbatim.
-7. **`&&label` in a function with a VLA is rejected** with "jump into the
-   scope of a variable-length array".
-8. **Driver flags rejected as unknown.** Each should be handled or
-   ignored (main.c `ignored_options[]`):
-   - `-isystem`
-   - `-ffile-prefix-map=`, `-fdebug-prefix-map=` (Debian and Ubuntu
-     default CFLAGS)
-   - `-pie`, `-Xlinker`
-   - `-funroll-loops`, `-finline-functions`, `-fno-inline`,
-     `-ftree-vectorize`
-   - `-dumpversion`, `-print-file-name=`, `-print-prog-name=`,
-     `-save-temps`, `-fmax-errors=`, `-dD`
-9. **Diagnostics:**
-   - `#pragma GCC diagnostic` is unsupported. lz4hc.c gets a false
-     `-Wunused-function`, which is fatal with `-Werror`.
-   - `-Wunused-variable` is on without `-Wall`.
-   - `%ms` in scanf formats is miscounted.
-10. **Minor:**
-    - The `"x"` asm constraint is unsupported.
-    - `L ## #x` is rejected.
-    - `__FILE_NAME__` is missing.
-    - `#x` of a stray backslash is escaped.
-    - `(long)&a[1] - (long)&a[0]` in a global initializer is rejected.
-    - stb needs `-DSTBI_NO_SIMD`, since mucc defines neither `__GNUC__`
-      nor `__SSE2__`.
+mucc defines no `__GNUC__`, so headers take their non-GNU paths. That
+is now the biggest gcc drop-in gap:
+- glibc's `<glob.h>` with `-D_FILE_OFFSET_BITS=64` declares no `glob`
+  (redis 7.2.5 doesn't build), and its noreturn and other attributes
+  are hidden.
+- libtool decides mucc isn't GCC and passes `-soname` to it.
+- stb needs `-DSTBI_NO_SIMD`.
 
-Not a mucc bug: difftest seeds 51240, 100040 and 300111 come from gcc
-folding `0.0 - (double)u` into `-(double)u`. Make the generator avoid
-that pattern.
+clang and tcc define `__GNUC__` (4.2) for this reason. The risk is
+headers then using GNU features mucc lacks (vector types,
+`__builtin_*` it doesn't have), which would need checking against
+glibc, musl and real projects first.
 
-Seen in passing: compiling sqlite3.c takes 0.73 s against gcc -O0's
-2.66 s, but peaks at 532 MB of memory against gcc's 297 MB. Worth
-looking at, given the goal of being light on memory.
+## Next: the deep test's other findings
+
+In order:
+
+1. **Initializer memory** (`parser.c` "Initializers"): about 400 bytes
+   per element, also for each byte of a string or `#embed` and for
+   implicit zeros. `#embed` of 2 MB takes 2 GB (gcc: 15 MB), and
+   `int a[10000000] = {[9999999] = 1}` 1.6 GB. Bytes of strings and
+   `#embed` should go straight into the data, and children be made only
+   for elements that are given.
+2. **Conflicting redeclarations compile silently**: `int f(int); int
+   f(long);`, `extern int v; extern long v;`, a typedef or struct
+   redefined differently. autoconf and gnulib probes rely on these
+   errors (gnulib decided sed needs no ioctl wrapper).
+3. **Still rejected, accepted by gcc**: `__auto_type`; `int a[k = 3]`;
+   `char c = "xyz"[1];` at file scope; `int x = {1, 2};` (gcc warns);
+   arrays of 2 GiB or more; `__int128` constants beyond 64 bits in
+   static initializers, `__int128` bit-fields and switches; a cleanup
+   variable at the end of a statement expression; overflow builtins on
+   `__int128`.
+4. **Driver**: `@file` response files; `-MM`, `-MG`, `-dM`, `-imacros`,
+   `-iquote`, `-nostdinc`, `-fsyntax-only`, `-Xassembler`, `-specs=`,
+   `--param`, `-mcmodel=`, `-print-search-dirs`, `-x c-header`; `mucc
+   a.c -l` says `cannot find -l--library=c`; `creal`, `cimag` and
+   `conj` as builtins (gcc needs no -lm for them).
+5. **Accepted, rejected by gcc**: duplicate labels, sizeof an
+   incomplete struct or a bit-field, bad bit-field widths, `int x; int
+   x;` in a block, `&` of a register variable, `static extern`, a
+   flexible array member not last, `int f(void x)`, arrays of
+   functions, duplicate macro parameters, `#define f(` with parameters
+   on the next line.
+6. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
+   loop variable shows after its scope.
+7. **Memory, more**: implicit casts are full nodes and copy their type
+   (49 MB and 27 MB of sqlite3.c's); a function's tokens and AST could
+   be freed once it is emitted.
 
 ## Later
 
 - Optionally bootstrap releases from the previous release (`make
   CC=mucc` in `release.yml`), so gcc isn't in the release path at all.
-- Push main (it is several commits ahead of origin) once the above is
-  in.
-- The README and website test counts are stale since `__int128`
-  (test/int128.c and test/complex.c are new).
+- Push main (it is many commits ahead of origin).
 - With glibc's headers, `CMPLX` is undefined under mucc: glibc defines
   it only for gcc 4.7+ and clang. `__builtin_complex` works. musl's
   headers are fine.
