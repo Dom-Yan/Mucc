@@ -3712,13 +3712,41 @@ static bool eval_truth(Node *node) {
   return eval(node) != 0;
 }
 
+// `val` as integer type `ty` holds it: cut to its width and sign- or
+// zero-extended, as the arithmetic would wrap at run time
+static int64_t wrap_int(Type *ty, int64_t val) {
+  switch (ty->size) {
+  case 1: return ty->is_unsigned ? (uint8_t)val : (int8_t)val;
+  case 2: return ty->is_unsigned ? (uint16_t)val : (int16_t)val;
+  case 4:
+    // Not with `?:`, which would make both arms unsigned int.
+    if (ty->is_unsigned)
+      return (uint32_t)val;
+    return (int32_t)val;
+  }
+  return val;
+}
+
+static int64_t eval_wide(Node *node, char ***label);
+
 // Evaluate a given node as a constant expression.
 //
 // A constant expression is either just a number or ptr+n where ptr
 // is a pointer to a global variable and n is a postiive/negative
 // number. The latter form is accepted only as an initialization
 // expression for a global variable.
+//
+// The arithmetic is done in 64 bits by eval_wide(), and the result cut
+// to its type here, so `UINT32_MAX + 1u` is 0 and `~0u >> 4` is
+// 0x0fffffff.
 static int64_t eval2(Node *node, char ***label) {
+  int64_t val = eval_wide(node, label);
+  if (is_integer(node->ty) && node->ty->kind != TY_BOOL)
+    return wrap_int(node->ty, val);
+  return val;
+}
+
+static int64_t eval_wide(Node *node, char ***label) {
   add_type(node);
 
   if (is_int128(node->ty) && !is_const_expr(node))
@@ -3763,7 +3791,7 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_SHL:
     return eval(node->lhs) << eval(node->rhs);
   case ND_SHR:
-    if (node->ty->is_unsigned && node->ty->size == 8)
+    if (node->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) >> eval(node->rhs);
     return eval(node->lhs) >> eval(node->rhs);
   case ND_EQ:
@@ -3827,17 +3855,8 @@ static int64_t eval2(Node *node, char ***label) {
     // 1e19 is out of int64_t's range but not of unsigned long's.
     if (is_flonum(node->lhs->ty) && node->ty->is_unsigned)
       val = (uint64_t)eval_double(node->lhs);
-    if (is_integer(node->ty)) {
-      switch (node->ty->size) {
-      case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
-      case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
-      case 4:
-        // Not with `?:`, which would make both arms unsigned int.
-        if (node->ty->is_unsigned)
-          return (uint32_t)val;
-        return (int32_t)val;
-      }
-    }
+    if (is_integer(node->ty))
+      return wrap_int(node->ty, val);
     return val;
   }
   case ND_ADDR:

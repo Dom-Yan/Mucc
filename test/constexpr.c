@@ -3,6 +3,15 @@
 float g40 = 1.5;
 double g41 = 0.0 ? 55 : (0, 1 + 1 * 5.0 / 2 * (double)2 * (int)2.0);
 
+// int and unsigned int arithmetic wraps to 32 bits, as at run time.
+unsigned long g42 = 4294967295u + 1u;
+unsigned long g43 = ~0u >> 4;
+double g44 = -1u;
+long g45 = 0u - 1;
+long g46 = 0x10000u * 0x10000u;
+unsigned long g47 = 1u << 31 << 1;
+enum { E48 = ~0u >> 28, E49 = (unsigned char)~0 >> 4 };
+
 int main() {
   ASSERT(10, ({ enum { ten=1+2+3+4 }; ten; }));
   ASSERT(1, ({ int i=0; switch(3) { case 5-2+0*3: i++; } i; }));
@@ -49,6 +58,18 @@ int main() {
 
   ASSERT(1, g40==1.5);
   ASSERT(1, g41==11);
+
+  ASSERT(0, g42);
+  ASSERT(0x0fffffff, g43);
+  ASSERT(1, g44 == 4294967295.0);
+  ASSERT(1, g45 == 4294967295);
+  ASSERT(0, g46);
+  ASSERT(0, g47);
+  ASSERT(15, E48);
+  ASSERT(15, E49);
+  ASSERT(2, ({ int r = 1; if (~4294967295U) r = 3; else r = 2; r; }));
+  ASSERT(1, ({ int r = 0; switch (5) { case 0xffffffffu + 6: r = 1; } r; }));
+  ASSERT(3, ({ char x[(0u - 1) / 0x40000000]; sizeof(x); }));
 
   printf("OK\n");
   return 0;
