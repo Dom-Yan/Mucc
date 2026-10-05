@@ -912,6 +912,43 @@ expect_error "1:26: error: a 128-bit constant must be a 64-bit integer constant 
 __int128 x = (__int128)1 << 64;
 EOF
 
+# _Complex
+expect_error "1:10: error: only floating-point complex types are supported" <<'EOF'
+_Complex int x;
+EOF
+
+expect_error "1:56: error: complex numbers can't be compared with < or >" <<'EOF'
+int f(_Complex double z, _Complex double w) { return z < w; }
+EOF
+
+expect_error "1:37: error: invalid operands to a complex number" <<'EOF'
+int f(_Complex double z) { return z % 2; }
+EOF
+
+expect_error "1:42: error: invalid operands" <<'EOF'
+void f(double *p, _Complex double z) { p + z; }
+EOF
+
+expect_error "1:23: error: invalid operands" <<'EOF'
+void f(double *p) { p + 1.5; }
+EOF
+
+expect_error "1:38: error: __builtin_complex needs two floating-point numbers of the same type" <<'EOF'
+double f(_Complex double z) { return __builtin_complex(1.0, 2.0f); }
+EOF
+
+expect_error "1:32: error: a bit-field can't be complex" <<'EOF'
+struct S { _Complex double z : 3; };
+EOF
+
+expect_error "1:25: error: _Atomic _Complex is not supported" <<'EOF'
+_Atomic _Complex double z;
+EOF
+
+expect_error "1:37: error: switch on '_Complex double', which is not an integer" <<'EOF'
+void f(_Complex double z) { switch (z) {} }
+EOF
+
 # asm statements with operands
 expect_error "1:29: error: labels in an asm statement need 'asm goto'" <<'EOF'
 void f(void) { asm("" : : : : out); out:; }

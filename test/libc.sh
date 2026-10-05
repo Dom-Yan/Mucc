@@ -30,6 +30,7 @@ check 'make libc with no gcc, as, ld or ar'
 rm -f $tmp/calls
 
 cat > $tmp/prog.c <<'EOF'
+#include <complex.h>
 #include <math.h>
 #include <pthread.h>
 #include <setjmp.h>
@@ -55,12 +56,13 @@ int main(void) {
     n++;
     longjmp(jb, n);
   }
-  printf("%s %ld %d %g\n", s, (long)r, n, exp(1.0));
+  double complex z = cexp(I * 0.5) * 2;
+  printf("%s %ld %d %g %g %.3f\n", s, (long)r, n, exp(1.0), cabs(z), cimag(z));
   free(s);
   return 0;
 }
 EOF
 PATH=$tmp/bin:$PATH ./mucc --libc=mucc -o $tmp/prog $tmp/prog.c -lm -lpthread &&
     [ ! -s $tmp/calls ] && file $tmp/prog | grep -q 'statically linked' &&
-    [ "$($tmp/prog)" = "13579 1.414 1.5 8 3 2.71828" ]
+    [ "$($tmp/prog)" = "13579 1.414 1.5 8 3 2.71828 2 0.959" ]
 check 'a program built against it runs'

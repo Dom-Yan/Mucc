@@ -503,6 +503,20 @@ static void store(Type *ty) {
 // `cmp $0`. A NaN isn't zero, but compares unordered, which sets ZF too,
 // so for floating point ZF comes from (x != 0 || unordered) in %al.
 static void cmp_zero(Type *ty) {
+  // A complex number, whose address is in %rax: nonzero if either part is
+  if (is_complex(ty)) {
+    Type *part = complex_part(ty);
+    println("  mov %%rax, %%rcx");
+    load_from(part, "(%rcx)");
+    cmp_zero(part);
+    println("  setne %%r8b");
+    load_from(part, format("%d(%%rcx)", part->size));
+    cmp_zero(part);
+    println("  setne %%al");
+    println("  or %%r8b, %%al");
+    return;
+  }
+
   switch (ty->kind) {
   case TY_FLOAT:
     println("  xorps %%xmm1, %%xmm1");
@@ -1498,9 +1512,12 @@ static void copy_ret_buffer(Obj *var) {
   if (!ty->size) // an empty struct (GNU) comes back in no register
     return;
 
-  // One that is only a long double comes back in %st0.
+  // One that is only a long double comes back in %st0, a long double
+  // _Complex in %st0 and %st1.
   if (has_ldouble(ty)) {
     println("  fstpt %d(%%rbp)", var->offset);
+    if (is_complex(ty))
+      println("  fstpt %d(%%rbp)", var->offset + 16);
     return;
   }
 
@@ -1545,6 +1562,8 @@ static void copy_struct_reg(void) {
     return;
 
   if (has_ldouble(ty)) {
+    if (is_complex(ty))
+      println("  fldt 16(%%rax)");
     println("  fldt (%%rax)");
     return;
   }
@@ -3653,6 +3672,15 @@ static char *base_type_name(Type *ty, int *encoding) {
 
 static void emit_type_die(Type *ty, char *label) {
   println("%s:", label);
+
+  // A complex number is a base type, named as gcc names it
+  if (is_complex(ty)) {
+    dw_udata(AB_BASE);
+    dw_string(format("complex %s", type_name(complex_part(ty))));
+    println("  .byte 3"); // DW_ATE_complex_float
+    println("  .byte %d", ty->size);
+    return;
+  }
 
   switch (ty->kind) {
   case TY_PTR:

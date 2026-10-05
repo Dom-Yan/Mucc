@@ -300,6 +300,7 @@ typedef enum {
   ND_CAST,      // Type cast
   ND_MEMZERO,   // Zero-clear a stack variable
   ND_ASM,       // "asm"
+  ND_COMPLEX,   // __builtin_complex(lhs, rhs), until lower_complex()
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
   ND_UNREACHABLE, // __builtin_unreachable() (C23 unreachable())
@@ -446,6 +447,8 @@ struct Type {
   bool is_volatile;
   bool is_distinct;   // signed char or long long: char or long, but not
                       // compatible with them
+  bool is_complex;    // _Complex: a TY_STRUCT of the real and imaginary
+                      // parts (see complex_type())
   Type *origin;       // for type compatibility check
 
   // Pointer-to or array-of type. We intentionally use the same member
@@ -537,6 +540,9 @@ extern Type *ty_ldouble;
 
 bool is_integer(Type *ty);
 bool is_int128(Type *ty);
+bool is_complex(Type *ty);
+Type *complex_type(Type *part);
+Type *complex_part(Type *ty);
 bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
 bool has_ldouble(Type *ty);

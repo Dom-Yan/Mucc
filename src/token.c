@@ -382,7 +382,8 @@ static bool is_keyword(Token *tok) {
       "unsigned", "const", "volatile", "auto", "register", "restrict",
       "__restrict", "__restrict__", "_Noreturn", "float", "double",
       "typeof", "__typeof_unqual__", "asm", "_Thread_local", "__thread",
-      "_Atomic", "__attribute__", "_Static_assert", "__int128",
+      "_Atomic", "__attribute__", "_Static_assert", "__int128", "_Complex",
+      "__complex__", "__complex",
     };
 
     // Before C23, these are ordinary names.
@@ -678,6 +679,14 @@ static void convert_pp_number(Token *tok) {
   char *end;
   long double val = strtold(s, &end);
 
+  // [GNU] An `i` or `j` before or after the suffix makes an imaginary
+  // constant, as in 2.0i or 1.0fi: a complex number with no real part.
+  bool imag = false;
+  if (*end == 'i' || *end == 'j') {
+    imag = true;
+    end++;
+  }
+
   Type *ty;
   if (*end == 'f' || *end == 'F') {
     ty = ty_float;
@@ -689,8 +698,15 @@ static void convert_pp_number(Token *tok) {
     ty = ty_double;
   }
 
+  if (!imag && (*end == 'i' || *end == 'j')) {
+    imag = true;
+    end++;
+  }
+
   if (s + len != end)
     error_tok(tok, "invalid numeric constant");
+  if (imag)
+    ty = complex_type(ty);
 
   tok->kind = TK_NUM;
   tok->fval = val;

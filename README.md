@@ -133,7 +133,8 @@ at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
 - C17 and C23: `bool`, `nullptr`, `constexpr`, `auto`, `#embed`,
   `typeof`, `[[attributes]]`, checked arithmetic (`<stdckdint.h>`) and more
 - The full preprocessor, VLAs, `_Generic`, atomics, thread-local variables,
-  structs by value, varargs
+  structs by value, varargs, complex numbers (`_Complex` and
+  `<complex.h>`, with infinities and NaNs as gcc has them)
 - GNU extensions: `__int128`, statement expressions, computed `goto`, case
   ranges, `__attribute__`, extended `asm` and `asm goto`, and gcc's
   builtins for bit counting (`__builtin_clz`, `__builtin_popcount`, ...),
@@ -159,9 +160,8 @@ at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
 - Linux's own headers (`<linux/*.h>`, `<asm/*.h>`, ...) come with the
   bundled musl, for programs that use the kernel directly: USB through
   usbfs, input devices, netlink, ioctls
-- Not supported: C++, `_Complex`, `_BitInt`, K&R
-  function definitions, optimization beyond register allocation and
-  constant folding
+- Not supported: C++, `_BitInt`, K&R function definitions, optimization
+  beyond register allocation and constant folding
 
 ## Testing
 

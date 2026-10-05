@@ -132,9 +132,9 @@ selfhost: $(OBJNAMES:%=$(S3)/%) $(OBJNAMES:%=$(S2)/%)
 #
 # musl, from thirdparty/musl, built by mucc with musl's own configure and
 # Makefile in build/musl, archived by `mucc -ar`, and with no `as`
-# (-fno-as-fallback). Left out: musl's complex numbers and its x86-64
-# math overrides (x87 assembly and SSE asm operands, which mucc doesn't
-# have); musl's portable C math is built instead. It's built from scratch
+# (-fno-as-fallback). Left out: musl's x86-64 math overrides (x87
+# assembly and SSE asm operands, which mucc doesn't have); musl's
+# portable C math is built instead. It's built from scratch
 # whenever mucc changes, since musl's Makefile doesn't know its objects
 # depend on the compiler. MUSL_BUILD is set at the top. Its headers go in
 # $(MUSL_BUILD)/include and the rest in $(MUSL_BUILD)/lib, where
@@ -155,7 +155,6 @@ $(MUSL_BUILD)/lib/libc.a: mucc
 	cd $(MUSL_BUILD) && $(CURDIR)/thirdparty/musl/configure --target=x86_64 \
 	  --disable-shared CC=$(CURDIR)/mucc > configure.log
 	printf '%s\n' \
-	  'BASE_SRCS = $$(filter-out $$(srcdir)/src/complex/%,$$(sort $$(wildcard $$(BASE_GLOBS))))' \
 	  'ARCH_SRCS = $$(filter-out $$(srcdir)/src/math/x86_64/%,$$(sort $$(wildcard $$(ARCH_GLOBS))))' \
 	  >> $(MUSL_BUILD)/config.mak
 	$(MAKE) -C $(MUSL_BUILD) CFLAGS=-fno-as-fallback AR="$(CURDIR)/mucc -ar" \

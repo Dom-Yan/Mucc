@@ -34,7 +34,7 @@ read, and that pull request will be closed.
   or more correct. Do not add features unless the maintainer asked for one.
 - Run `make test-all` before proposing any change; it must pass.
 - mucc compiles itself, so `src/` may only use C that mucc supports: no
-  `_Complex`, K&R definitions or `asm` with operands.
+  K&R definitions or `asm` with operands.
 - Add a test in `test/` for every fix or feature.
 - Match the surrounding code's style and comment density.
 - Put new code in the section of its file where it belongs; the guide at

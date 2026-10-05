@@ -51,6 +51,10 @@ bool is_int128(Type *ty) {
   return ty->kind == TY_INT128;
 }
 
+bool is_complex(Type *ty) {
+  return ty->kind == TY_STRUCT && ty->is_complex;
+}
+
 bool is_flonum(Type *ty) {
   return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE ||
          ty->kind == TY_LDOUBLE;
@@ -87,8 +91,11 @@ bool has_ldouble(Type *ty) {
 
 // Is a struct or union returned through a hidden pointer? One larger than
 // 16 bytes is, and so is one holding a long double and anything else. One
-// holding only long doubles comes back in %st0.
+// holding only long doubles comes back in %st0, and a long double
+// _Complex in %st0 and %st1.
 bool is_ret_in_memory(Type *ty) {
+  if (is_complex(ty))
+    return false;
   if (ty->size > 16)
     return true;
   int nld = 0, nother = 0;
@@ -256,6 +263,40 @@ Type *struct_type(void) {
   return new_type(TY_STRUCT, 0, 1);
 }
 
+// _Complex float, double or long double: laid out as a struct of the real
+// and imaginary parts, which is also how the psABI passes it (and
+// returns it, but for long double; see cgen.c). The parts have no names,
+// so `z.re` is an error; parser.c reaches them through `members`. There
+// is one type for each part type, so they compare as the same.
+Type *complex_type(Type *part) {
+  static Type *types[3];
+  int i = part->kind == TY_FLOAT ? 0 : part->kind == TY_DOUBLE ? 1 : 2;
+  if (types[i])
+    return types[i];
+
+  Type *ty = new_type(TY_STRUCT, part->size * 2, part->align);
+  ty->is_complex = true;
+  Member *re = arena_alloc(sizeof(Member));
+  Member *im = arena_alloc(sizeof(Member));
+  re->ty = im->ty = part;
+  re->align = im->align = part->align;
+  re->unit = im->unit = part->size;
+  im->idx = 1;
+  im->offset = part->size;
+  re->next = im;
+  ty->members = re;
+  return types[i] = ty;
+}
+
+Type *complex_part(Type *ty) {
+  return ty->members->ty;
+}
+
+// The real type of `ty`: a complex type's part type, or `ty` itself
+static Type *real_type(Type *ty) {
+  return is_complex(ty) ? complex_part(ty) : ty;
+}
+
 //---------- Typing AST nodes ------------------------------------------------
 
 static Type *get_common_type(Type *ty1, Type *ty2) {
@@ -266,6 +307,11 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
     return pointer_to(ty1);
   if (ty2->kind == TY_FUNC)
     return pointer_to(ty2);
+
+  // With a complex operand, the result is complex, of the real types'
+  // common type.
+  if (is_complex(ty1) || is_complex(ty2))
+    return complex_type(get_common_type(real_type(ty1), real_type(ty2)));
 
   if (ty1->kind == TY_LDOUBLE || ty2->kind == TY_LDOUBLE)
     return ty_ldouble;
@@ -314,7 +360,8 @@ static void usual_arith_conv(Node **lhs, Node **rhs) {
 void check_scalar(Node *node) {
   add_type(node);
   Type *ty = node->ty;
-  if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION || ty->kind == TY_VOID))
+  if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION || ty->kind == TY_VOID) &&
+      !is_complex(ty))
     error_tok(node->tok, "'%s' used where a scalar is required", type_name(ty));
 }
 
@@ -349,6 +396,15 @@ void add_type(Node *node) {
   case ND_BITXOR:
     check_scalar(node->lhs);
     check_scalar(node->rhs);
+    // A complex result; a real operand stays real, as C wants for
+    // `z * 2.0` (see lower_complex() in parser.c).
+    if (is_complex(node->lhs->ty) || is_complex(node->rhs->ty)) {
+      if (node->kind != ND_ADD && node->kind != ND_SUB && node->kind != ND_MUL &&
+          node->kind != ND_DIV)
+        error_tok(node->tok, "invalid operands to a complex number");
+      node->ty = get_common_type(node->lhs->ty, node->rhs->ty);
+      return;
+    }
     usual_arith_conv(&node->lhs, &node->rhs);
     node->ty = node->lhs->ty;
     return;
@@ -362,7 +418,7 @@ void add_type(Node *node) {
   case ND_ASSIGN:
     if (node->lhs->ty->kind == TY_ARRAY)
       error_tok(node->lhs->tok, "not an lvalue");
-    if (node->lhs->ty->kind != TY_STRUCT)
+    if (node->lhs->ty->kind != TY_STRUCT || is_complex(node->lhs->ty))
       node->rhs = new_cast(node->rhs, node->lhs->ty);
     node->ty = unqual(node->lhs->ty);
     return;
@@ -372,6 +428,9 @@ void add_type(Node *node) {
   case ND_LE:
     check_scalar(node->lhs);
     check_scalar(node->rhs);
+    if ((node->kind == ND_LT || node->kind == ND_LE) &&
+        (is_complex(node->lhs->ty) || is_complex(node->rhs->ty)))
+      error_tok(node->tok, "complex numbers can't be compared with < or >");
     usual_arith_conv(&node->lhs, &node->rhs);
     node->ty = ty_int;
     return;
@@ -392,6 +451,9 @@ void add_type(Node *node) {
     check_scalar(node->lhs);
     if (node->rhs)
       check_scalar(node->rhs);
+    if ((node->rhs && is_complex(node->rhs->ty)) ||
+        (is_complex(node->lhs->ty) && node->kind != ND_BITNOT))
+      error_tok(node->tok, "invalid operands to a complex number");
     // Integer promotion: a char or short operand becomes int, so
     // ~c on an unsigned char is a negative int, not an unsigned char,
     // and an enum its int or unsigned int.
@@ -542,6 +604,8 @@ static char *unqual_type_name(Type *ty) {
   }
   case TY_STRUCT:
   case TY_UNION: {
+    if (ty->is_complex)
+      return format("_Complex %s", type_name(complex_part(ty)));
     char *kw = ty->kind == TY_STRUCT ? "struct" : "union";
     if (ty->tag)
       return format("%s %.*s", kw, ty->tag->len, ty->tag->loc);
@@ -650,7 +714,7 @@ void check_assign(Type *to, Node *from, char *what) {
   if (ty->kind == TY_VOID)
     error_tok(from->tok, "void value used in %s", what);
 
-  if (is_numeric(to) && is_numeric(ty))
+  if ((is_numeric(to) || is_complex(to)) && (is_numeric(ty) || is_complex(ty)))
     return;
   if (to->kind == TY_BOOL && ty->kind == TY_PTR)
     return;
