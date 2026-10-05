@@ -1,6 +1,15 @@
 #include "test.h"
 #include <stddef.h>
 
+// A quote that doesn't close on its line is fine where it isn't C: in a
+// skipped block, or an #error that isn't reached.
+#if 0
+It's skipped
+#endif
+#ifdef NOT_DEFINED
+#error don't build this
+#endif
+
 int main() {
   ASSERT(97, 'a');
   ASSERT(10, '\n');
@@ -102,6 +111,24 @@ of(char), \
   // wchar_t is int on x86-64 Linux, as with gcc and musl: L'a' has its type.
   ASSERT(1, (wchar_t)-1 < 0);
   ASSERT(1, __builtin_types_compatible_p(wchar_t, typeof(L'a')));
+
+  // Multi-character constants, one byte per character, as with gcc. One
+  // byte is a char.
+  ASSERT(0x52494646, 'RIFF');
+  ASSERT(0x6162, 'ab');
+  ASSERT(0x62636465, 'abcde');
+  ASSERT(0xff01, '\377\1');
+  ASSERT(-1, '\xff');
+  ASSERT(39, '\'');
+  ASSERT(0x6127, 'a\'');
+  ASSERT(0xc3a9, 'é');
+  ASSERT(0xe9, L'é');
+  ASSERT(0x62, L'ab');
+  ASSERT(1, ({ int r = 0;
+#if 'AB' == 0x4142 && '\377' < 0
+    r = 1;
+#endif
+    r; }));
 
   printf("OK\n");
   return 0;

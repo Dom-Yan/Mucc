@@ -541,23 +541,37 @@ static Token *read_utf32_string_literal(char *start, char *quote, Type *ty) {
   return tok;
 }
 
+// A character literal, with its opening quote at `quote`. In a plain one
+// ('a'), each character is a byte (UTF-8 text is its bytes), and several
+// make a multi-character constant, as with gcc: 'RIFF' is 0x52494646.
+// One byte is a char, so '\xff' is -1. The other kinds (L'a', u'a', ...)
+// read UTF-8 characters and, as gcc does, keep the last of several.
 static Token *read_char_literal(char *start, char *quote, Type *ty) {
+  bool is_plain = start == quote;
   char *p = quote + 1;
-  if (*p == '\0')
-    error_at(start, "unclosed char literal");
+  int64_t val = 0;
+  int len = 0;
 
-  int c;
-  if (*p == '\\')
-    c = read_escaped_char(&p, p + 1);
-  else
-    c = decode_utf8(&p, p);
+  while (*p != '\'') {
+    if (*p == '\0' || *p == '\n')
+      error_at(start, "unclosed char literal");
+    int c;
+    if (*p == '\\')
+      c = read_escaped_char(&p, p + 1);
+    else if (is_plain)
+      c = (unsigned char)*p++;
+    else
+      c = decode_utf8(&p, p);
+    val = is_plain ? (val << 8) | (c & 0xff) : c;
+    len++;
+  }
+  if (len == 0)
+    error_at(start, "empty character constant");
+  if (is_plain)
+    val = (len == 1) ? (int8_t)val : (int32_t)val;
 
-  char *end = strchr(p, '\'');
-  if (!end)
-    error_at(p, "unclosed char literal");
-
-  Token *tok = new_token(TK_NUM, start, end + 1);
-  tok->val = c;
+  Token *tok = new_token(TK_NUM, start, p + 1);
+  tok->val = val;
   tok->ty = ty;
   return tok;
 }
@@ -719,6 +733,8 @@ void convert_pp_tokens(Token *tok) {
       t->kind = TK_KEYWORD;
     else if (t->kind == TK_PP_NUM)
       convert_pp_number(t);
+    else if (t->kind == TK_PUNCT && t->len == 1 && (*t->loc == '\'' || *t->loc == '"'))
+      error_tok(t, "unclosed %s literal", *t->loc == '"' ? "string" : "char");
   }
 }
 
@@ -819,9 +835,11 @@ Token *tokenize(File *file) {
       continue;
     }
 
-    // In assembly (.S), a quote that doesn't close on its line, as in a
-    // `# don't` comment, is just a character, as with gcc.
-    if (opt_asm_cpp && (*p == '\'' || *p == '"') && !closes_on_line(p)) {
+    // A quote that doesn't close on its line is just a character, as with
+    // gcc: in `#error don't`, a skipped `#if 0` block, or a `# don't`
+    // comment in assembly (.S). In C that survives preprocessing,
+    // convert_pp_tokens() reports it.
+    if ((*p == '\'' || *p == '"') && !closes_on_line(p)) {
       cur = cur->next = new_token(TK_PUNCT, p, p + 1);
       p++;
       continue;
@@ -865,7 +883,6 @@ Token *tokenize(File *file) {
     // Character literal
     if (*p == '\'') {
       cur = cur->next = read_char_literal(p, p, ty_int);
-      cur->val = (char)cur->val;
       p += cur->len;
       continue;
     }

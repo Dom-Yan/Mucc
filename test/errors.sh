@@ -1231,6 +1231,18 @@ expect_error "1:20: error: member name omitted" <<'EOF'
 struct T { int *a, ; } t;
 EOF
 
+expect_error "1:9: error: unclosed char literal" <<'EOF'
+int x = 'abc;
+EOF
+
+expect_error "1:11: error: unclosed string literal" <<'EOF'
+char *s = "abc;
+EOF
+
+expect_error "1:9: error: empty character constant" <<'EOF'
+int x = '';
+EOF
+
 expect_error "1:1: error: unterminated attribute" <<'EOF'
 [[gnu::constr(ctor(101)]] static void f(void) {}
 EOF
