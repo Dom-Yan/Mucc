@@ -61,6 +61,24 @@ Downloads for each release are on the
 
 <h2 id="main">On main, not released yet</h2>
 <ul>
+  <li><code>-g</code>: DWARF debug info, so gdb's <code>print</code>,
+    <code>ptype</code>, <code>info locals</code> and <code>bt</code> show
+    variables, parameters, globals and their types, as on a
+    <code>gcc -g -O0</code> build.</li>
+  <li>Warnings with names, as with gcc: <code>-Wall</code> adds
+    <code>printf</code> and <code>scanf</code> format checks,
+    <code>if (x = 0)</code>, statements with no effect, comparisons with
+    string literals, unused static functions and enum values a
+    <code>switch</code> misses; returning a local's address, division by
+    zero and bad shift counts warn by default. <code>-Werror</code>,
+    <code>-Werror=&lt;name&gt;</code> and <code>-Wno-&lt;name&gt;</code>
+    work.</li>
+  <li>gcc's floating-point builtins (<code>__builtin_isnan</code>,
+    <code>__builtin_inf</code>, <code>__builtin_fabs</code>,
+    <code>__builtin_fpclassify</code>, ...), its C library builtins
+    (<code>__builtin_memcpy</code>, <code>__builtin_strlen</code>, ...),
+    <code>__builtin_choose_expr</code> and
+    <code>__builtin_object_size</code>.</li>
   <li>Fixes: <code>int x; int x;</code> (the same tentative definition
     twice, static or not) defines the variable instead of leaving it
     undefined at link time; <code>##</code> with empty arguments

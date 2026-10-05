@@ -183,6 +183,11 @@ the <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
     atomic builtins, <code>_Pragma</code>, <code>-r</code> and
     <code>-Map</code> in the linker, and port I/O, <code>cpuid</code> and
     other system instructions in the assembler</li>
+  <li>On main, not released yet: <code>-g</code> debug info, so gdb shows
+    variables and types; gcc's <code>-Wall</code> warnings with
+    <code>-Werror</code> and <code>-Wno-</code>; gcc's floating-point and C
+    library builtins (<code>__builtin_isnan</code>,
+    <code>__builtin_memcpy</code>, ...)</li>
   <li>Not supported: C++, <code>_Complex</code>, <code>__int128</code>,
     <code>_BitInt</code>, <code>asm goto</code>, K&amp;R function
     definitions, and optimization beyond register allocation and constant

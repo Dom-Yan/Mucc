@@ -50,8 +50,9 @@ mucc -o hello hello.c
 ```
 
 It takes the usual gcc flags (`-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-l`,
-`-L`, `-static`, `-std=`, ...). `-O`, `-g` and `-W` flags are accepted and
-ignored. `mucc -ar` makes static libraries.
+`-L`, `-static`, `-std=`, ...). `-g` lets gdb show variables and types,
+and `-Wall`, `-Werror` and `-Wno-<name>` work as with gcc. `-O` flags are
+accepted and ignored. `mucc -ar` makes static libraries.
 
 Programs are linked statically against the musl inside mucc, so they run on
 any x86-64 Linux. To use the system's glibc and shared libraries (OpenSSL,
@@ -135,8 +136,16 @@ Times are from WSL 2 on Ubuntu with gcc 15.2.
 - GNU extensions: statement expressions, computed `goto`, case ranges,
   `__attribute__`, extended `asm`, and gcc's builtins for bit counting
   (`__builtin_clz`, `__builtin_popcount`, ...), byte swaps, branch hints,
-  overflow checks (`__builtin_add_overflow`, ...) and atomics (`__sync_*`,
-  `__atomic_*`)
+  overflow checks (`__builtin_add_overflow`, ...), atomics (`__sync_*`,
+  `__atomic_*`), floating point (`__builtin_isnan`, `__builtin_inf`,
+  `__builtin_fabs`, ...) and the C library (`__builtin_memcpy`,
+  `__builtin_strlen`, ...)
+- Debugging: `-g` writes DWARF debug info, so gdb shows variables,
+  parameters, globals, structs and backtraces as with `gcc -g -O0`
+- gcc's warnings: `-Wall` adds format checks for `printf` and `scanf`,
+  `if (x = 0)`, statements with no effect, unhandled enum values in a
+  `switch`, unused static functions and more; `-Werror`, `-Werror=<name>`
+  and `-Wno-<name>` work as with gcc
 - Code that can't run isn't compiled, as with gcc: `if (0)`, `0 && x`,
   constant `?:` and statements after a `return`. Code like
   `if (ENABLE_FEATURE) f();` links without f.
