@@ -21,6 +21,10 @@ jobs:
       - name: Build
         run: make -j"$(nproc)" mucc
 
+      # For test/debug.sh, which runs -g programs in gdb
+      - name: Install gdb
+        run: sudo apt-get install -y gdb
+
       - name: Test and self-host
         run: make test-all
 
@@ -46,6 +50,9 @@ jobs:
 
       - name: Build mucc and musl
         run: make -j"$(nproc)" mucc && make libc
+
+      - name: Install gdb
+        run: sudo apt-get install -y gdb
 
       - name: Test and self-host on musl
         run: make test-all LIBC=mucc

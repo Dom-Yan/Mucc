@@ -1720,8 +1720,12 @@ static void directive(char *name, int len) {
         diff_hole(op.sym, op.minus, op.val, size);
       else if (op.sym && size == 8)
         hole(R_X86_64_64, op.sym, op.val, 8);
+      else if (op.sym && size == 4)
+        // A 32-bit address, as -g's .debug_info has for the offsets of
+        // .debug_abbrev and .debug_line
+        hole(R_X86_64_32, op.sym, op.val, 4);
       else if (op.sym)
-        fail("symbol in a data directive smaller than .quad");
+        fail("symbol in a data directive smaller than .long");
       else if (size == 1 && (op.val < -128 || op.val > 255))
         fail(".byte value out of range");
       else
@@ -2247,7 +2251,18 @@ static void add_line_sequence(Section *line, Section *sec) {
 }
 
 static void add_debug_info(void) {
-  Section *line = new_section(".debug_line", SHT_PROGBITS, 0);
+  // With -g, cgen.c writes .debug_info itself, naming .debug_line with
+  // nothing in it: the line table goes there, as GNU as does it.
+  Section *line = find_section(".debug_line");
+  if (find_section(".debug_info")) {
+    if (!line || line->bytes.len)
+      fail(".debug_info without an empty .debug_line");
+    add_line_table(line);
+    line->size = line->bytes.len;
+    return;
+  }
+
+  line = new_section(".debug_line", SHT_PROGBITS, 0);
   Section *abbrev = new_section(".debug_abbrev", SHT_PROGBITS, 0);
   Section *info = new_section(".debug_info", SHT_PROGBITS, 0);
   add_line_table(line);
@@ -2572,7 +2587,7 @@ bool assemble_text(char *src, char *path, char **why) {
   for (int i = 0; i < nsections; i++)
     finish_section(sections[i]);
 
-  if (nlocs && dwarf_files.len)
+  if ((nlocs && dwarf_files.len) || find_section(".debug_info"))
     add_debug_info();
 
   write_elf(path);

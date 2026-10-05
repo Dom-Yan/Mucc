@@ -1489,12 +1489,13 @@ static Type *enum_specifier(Token **rest, Token *tok) {
   Attrs a = {};
   tok = attributes(tok, &a, true);
 
-  // Read a struct tag.
+  // Read an enum tag.
   Token *tag = NULL;
   if (tok->kind == TK_IDENT) {
     tag = tok;
     tok = tok->next;
   }
+  ty->tag = tag;
 
   // C23 `enum E : type` fixes the underlying type, which gives the enum
   // its size and sign, and its constants their type. (In a struct,
@@ -6983,6 +6984,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(name, "redefinition of %s", prev->var->name);
 
     Obj *var = new_gvar(get_ident(name), ty);
+    var->tok = name;
     var->is_definition = !attr->is_extern;
     var->is_static = attr->is_static;
     var->is_tls = attr->is_tls;

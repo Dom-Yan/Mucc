@@ -21,6 +21,7 @@ typedef enum {
 StringArray include_paths;
 bool opt_w; // -w: no warnings
 StringArray opt_warnings; // -Wall, -Wno-format, ... without the -W, in order
+bool opt_g; // -g: debug info for variables and types (see cgen.c)
 bool opt_fcommon = true;
 bool opt_fpic;
 bool opt_asm_cpp; // preprocessing assembly (.S), not C
@@ -369,7 +370,7 @@ static void set_std(int argc, char **argv) {
 // a correct program doesn't depend on, so they're accepted and ignored.
 // A name ending in '*' is a prefix.
 static char *ignored_options[] = {
-  "-O*", "-W*", "-g*", "-m64", "-mno-red-zone", "-pipe",
+  "-O*", "-W", "-m64", "-mno-red-zone", "-pipe",
   "-pedantic", "-pedantic-errors",
   "-ffreestanding", "-fno-builtin*", "-fno-omit-frame-pointer",
   "-fomit-frame-pointer", "-fno-strict-aliasing", "-fstrict-aliasing",
@@ -743,6 +744,13 @@ static void parse_args(int argc, char **argv) {
     if (!strcmp(argv[i], "-hashmap-test")) {
       hashmap_test();
       exit(0);
+    }
+
+    // -g, -g3, -ggdb, ...: debug info for gdb. Line numbers are always
+    // there; -g adds variables and types. -g0 turns it off again.
+    if (!strncmp(argv[i], "-g", 2)) {
+      opt_g = strcmp(argv[i], "-g0");
+      continue;
     }
 
     // -Wall, -Werror, -Wno-unused-variable, ...: see warning_state() in

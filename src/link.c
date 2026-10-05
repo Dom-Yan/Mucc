@@ -170,8 +170,12 @@ static bool is_c_ident(char *s) {
 
 // The output section for an input section, or NULL to leave it out.
 static char *out_name(char *name, Elf64_Shdr *sh) {
+  // Debug info is kept, unless it's compressed (as GNU as on some
+  // distributions always makes it), which this linker can't read: copied
+  // as it is, gdb would find it garbled. (ld reads it.)
   if (!(sh->sh_flags & SHF_ALLOC))
-    return (!strip_all && startswith(name, ".debug_")) ? name : NULL;
+    return (!strip_all && startswith(name, ".debug_") &&
+            !(sh->sh_flags & SHF_COMPRESSED)) ? name : NULL;
   if (sh->sh_type == SHT_NOTE)
     return !strcmp(name, ".note.ABI-tag") ? ".note.ABI-tag" : NULL;
   if (startswith(name, ".gnu.warning") || !strcmp(name, ".stapsdt.base"))

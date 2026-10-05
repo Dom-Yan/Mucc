@@ -1363,10 +1363,8 @@ static void gen_discard(Node *node) {
 
 //---------- Expressions -----------------------------------------------------
 
-// Tells the assembler which source line the next instructions come
-// from, for debuggers. Most expressions share a line with the statement
-// around them, so only emit a .loc when the line actually changes.
-static void emit_loc(Token *tok) {
+// The number of the file `tok` is in, as .file and .loc name it.
+static int file_number(Token *tok) {
   int file_no = tok->file->file_no;
 
   // A name given by #line or a line marker (in -E output compiled again)
@@ -1384,7 +1382,14 @@ static void emit_loc(Token *tok) {
       println("  .file %d \"%s\"", file_no, tok->filename);
     }
   }
+  return file_no;
+}
 
+// Tells the assembler which source line the next instructions come
+// from, for debuggers. Most expressions share a line with the statement
+// around them, so only emit a .loc when the line actually changes.
+static void emit_loc(Token *tok) {
+  int file_no = file_number(tok);
   if (file_no == loc_file && tok->line_no == loc_line)
     return;
   loc_file = file_no;
@@ -3014,7 +3019,464 @@ static void emit_text(Obj *prog) {
     println("  mov %%rbp, %%rsp");
     println("  pop %%rbp");
     println("  ret");
+    if (opt_g)
+      println(".L.end.%s:", fn->name); // for the debug info's code range
   }
+}
+
+//---------- Debug info (-g): variables and types ----------------------------
+//
+// With -g, a DWARF 4 .debug_info compile unit, as gcc -gdwarf-4 writes,
+// so gdb can print variables: each function with its parameters and
+// locals, the global variables, and their types, with where each lives
+// (an offset from %rbp, a callee-saved register, an address). The line
+// table comes from the .loc directives: the assembler (asm.c, or GNU as)
+// writes it into the .debug_line named here. Numbers in LEB128 are
+// encoded here and written as .byte lists. Typedef names, qualifiers and
+// block scopes aren't recorded: gdb shows a size_t as unsigned long, and
+// all of a function's locals at once.
+
+// Abbreviation codes, for the table in emit_debug_abbrev()
+enum {
+  AB_CU = 1, AB_FUNC, AB_FUNC_VOID, AB_PARAM, AB_VAR, AB_GVAR, AB_GVAR_NOLOC,
+  AB_BASE, AB_PTR, AB_PTR_VOID, AB_STRUCT, AB_STRUCT_ANON, AB_STRUCT_DECL,
+  AB_UNION, AB_UNION_ANON, AB_UNION_DECL, AB_MEMBER, AB_MEMBER_ANON,
+  AB_BITFIELD, AB_ARRAY, AB_SUBRANGE, AB_SUBRANGE_NOCOUNT, AB_ENUM,
+  AB_ENUM_ANON, AB_ENUMERATOR, AB_SUBR, AB_SUBR_VOID, AB_SUBR_PARAM,
+  AB_VARARGS,
+};
+
+// The DWARF numbers of regs64[]'s registers: %rbx, %r12 to %r15
+static int dwarf_regs[] = {3, 12, 13, 14, 15};
+
+// `val` in LEB128, as a .byte list
+static char *leb128(int64_t val, bool is_signed) {
+  char *s = "";
+  for (;;) {
+    int byte = val & 0x7f;
+    val = is_signed ? val >> 7 : (int64_t)((uint64_t)val >> 7);
+    bool done = is_signed ? (val == 0 && !(byte & 0x40)) || (val == -1 && (byte & 0x40))
+                          : val == 0;
+    s = format("%s%s%d", s, *s ? "," : "", done ? byte : byte | 0x80);
+    if (done)
+      return s;
+  }
+}
+
+static int leb128_len(int64_t val, bool is_signed) {
+  int n = 1;
+  for (char *p = leb128(val, is_signed); *p; p++)
+    n += *p == ',';
+  return n;
+}
+
+static void dw_string(char *s) {
+  char *esc = "";
+  for (char *p = s; *p; p++)
+    esc = format(*p == '"' || *p == '\\' ? "%s\\%c" : "%s%c", esc, *p);
+  println("  .string \"%s\"", esc);
+}
+
+static void dw_udata(int64_t val) {
+  println("  .byte %s", leb128(val, false));
+}
+
+static void dw_ref(char *label) {
+  println("  .long %s - .L.dbg.info", label);
+}
+
+// Types get a DIE each, named by a label. One is asked for by type_die(),
+// which only queues it: emit_type_dies() writes the queued ones after the
+// functions, so a struct whose members point to it isn't written inside
+// itself.
+static HashMap type_labels;
+static Type **type_queue;
+static char **type_queue_labels;
+static int type_queue_len, type_queue_cap;
+
+// A name for `ty` that types gcc would describe with one DIE share.
+static char *type_key(Type *ty) {
+  switch (ty->kind) {
+  case TY_PTR:
+  case TY_VLA: // a VLA variable holds a pointer to its elements
+    return format("*%s", ty->base->kind == TY_VOID ? "void" : type_key(ty->base));
+  case TY_ARRAY:
+    return format("[%d]%s", ty->array_len, type_key(ty->base));
+  case TY_FUNC: {
+    char *s = format("(%s", ty->return_ty->kind == TY_VOID ? "void" : type_key(ty->return_ty));
+    for (Type *p = ty->params; p; p = p->next)
+      s = format("%s,%s", s, type_key(p));
+    return format("%s%s)", s, ty->is_variadic ? ",..." : "");
+  }
+  case TY_STRUCT:
+  case TY_UNION:
+  case TY_ENUM:
+    // Every qualified copy goes back to the type its declaration made.
+    while (ty->origin)
+      ty = ty->origin;
+    return format("%p", ty);
+  default:
+    return format("%d%d%d", ty->kind, ty->is_unsigned, ty->is_distinct);
+  }
+}
+
+// The label of `ty`'s DIE, or NULL for void
+static char *type_die(Type *ty) {
+  if (ty->kind == TY_VOID)
+    return NULL;
+  char *key = type_key(ty);
+  char *label = hashmap_get(&type_labels, key);
+  if (label)
+    return label;
+
+  label = format(".L.dbg.type.%d", type_labels.used);
+  hashmap_put(&type_labels, key, label);
+  if (type_queue_len == type_queue_cap) {
+    type_queue_cap = type_queue_cap ? type_queue_cap * 2 : 32;
+    type_queue = realloc(type_queue, sizeof(Type *) * type_queue_cap);
+    type_queue_labels = realloc(type_queue_labels, sizeof(char *) * type_queue_cap);
+  }
+  type_queue[type_queue_len] = ty;
+  type_queue_labels[type_queue_len++] = label;
+  return label;
+}
+
+static char *base_type_name(Type *ty, int *encoding) {
+  enum { ATE_BOOLEAN = 2, ATE_FLOAT = 4, ATE_SIGNED = 5, ATE_SIGNED_CHAR = 6,
+         ATE_UNSIGNED = 7, ATE_UNSIGNED_CHAR = 8 };
+  bool u = ty->is_unsigned;
+  *encoding = u ? ATE_UNSIGNED : ATE_SIGNED;
+  switch (ty->kind) {
+  case TY_BOOL: *encoding = ATE_BOOLEAN; return "_Bool";
+  case TY_CHAR:
+    *encoding = u ? ATE_UNSIGNED_CHAR : ATE_SIGNED_CHAR;
+    return u ? "unsigned char" : ty->is_distinct ? "signed char" : "char";
+  case TY_SHORT: return u ? "unsigned short" : "short";
+  case TY_INT: return u ? "unsigned int" : "int";
+  case TY_LONG:
+    if (ty->is_distinct)
+      return u ? "unsigned long long" : "long long";
+    return u ? "unsigned long" : "long";
+  case TY_FLOAT: *encoding = ATE_FLOAT; return "float";
+  case TY_DOUBLE: *encoding = ATE_FLOAT; return "double";
+  case TY_LDOUBLE: *encoding = ATE_FLOAT; return "long double";
+  }
+  unreachable();
+}
+
+static void emit_type_die(Type *ty, char *label) {
+  println("%s:", label);
+
+  switch (ty->kind) {
+  case TY_PTR:
+  case TY_VLA: {
+    char *base = type_die(ty->base);
+    dw_udata(base ? AB_PTR : AB_PTR_VOID);
+    println("  .byte 8");
+    if (base)
+      dw_ref(base);
+    return;
+  }
+  case TY_ARRAY:
+    dw_udata(AB_ARRAY);
+    dw_ref(type_die(ty->base));
+    if (ty->array_len >= 0) {
+      dw_udata(AB_SUBRANGE);
+      dw_udata(ty->array_len);
+    } else {
+      dw_udata(AB_SUBRANGE_NOCOUNT);
+    }
+    println("  .byte 0");
+    return;
+  case TY_FUNC: {
+    char *ret = type_die(ty->return_ty);
+    dw_udata(ret ? AB_SUBR : AB_SUBR_VOID);
+    if (ret)
+      dw_ref(ret);
+    for (Type *p = ty->params; p; p = p->next) {
+      dw_udata(AB_SUBR_PARAM);
+      dw_ref(type_die(p));
+    }
+    if (ty->is_variadic)
+      dw_udata(AB_VARARGS);
+    println("  .byte 0");
+    return;
+  }
+  case TY_STRUCT:
+  case TY_UNION: {
+    bool is_struct = ty->kind == TY_STRUCT;
+    char *name = ty->tag ? strndup(ty->tag->loc, ty->tag->len) : NULL;
+    if (ty->size < 0) {
+      // Declared, never defined here: `struct FILE_internal *`
+      dw_udata(is_struct ? AB_STRUCT_DECL : AB_UNION_DECL);
+      dw_string(name ? name : "");
+      return;
+    }
+    if (name) {
+      dw_udata(is_struct ? AB_STRUCT : AB_UNION);
+      dw_string(name);
+    } else {
+      dw_udata(is_struct ? AB_STRUCT_ANON : AB_UNION_ANON);
+    }
+    dw_udata(ty->size);
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      if (mem->is_bitfield) {
+        if (!mem->name)
+          continue; // padding, as `int : 3`
+        dw_udata(AB_BITFIELD);
+        dw_string(strndup(mem->name->loc, mem->name->len));
+        dw_ref(type_die(mem->ty));
+        dw_udata(mem->bit_width);
+        dw_udata(mem->offset * 8 + mem->bit_offset);
+        continue;
+      }
+      if (mem->name) {
+        dw_udata(AB_MEMBER);
+        dw_string(strndup(mem->name->loc, mem->name->len));
+      } else {
+        dw_udata(AB_MEMBER_ANON);
+      }
+      dw_ref(type_die(mem->ty));
+      dw_udata(mem->offset);
+    }
+    println("  .byte 0");
+    return;
+  }
+  case TY_ENUM:
+    if (ty->tag) {
+      dw_udata(AB_ENUM);
+      dw_string(strndup(ty->tag->loc, ty->tag->len));
+    } else {
+      dw_udata(AB_ENUM_ANON);
+    }
+    println("  .byte %d", MAX(ty->size, 1));
+    for (EnumConst *e = ty->enum_consts; e; e = e->next) {
+      dw_udata(AB_ENUMERATOR);
+      dw_string(strndup(e->name->loc, e->name->len));
+      println("  .byte %s", leb128(e->val, true));
+    }
+    println("  .byte 0");
+    return;
+  default: {
+    int encoding;
+    char *name = base_type_name(ty, &encoding);
+    dw_udata(AB_BASE);
+    dw_string(name);
+    println("  .byte %d", encoding);
+    println("  .byte %d", ty->size);
+  }
+  }
+}
+
+static void emit_type_dies(void) {
+  for (int i = 0; i < type_queue_len; i++)
+    emit_type_die(type_queue[i], type_queue_labels[i]);
+}
+
+// The abbreviation table: for each code, its tag, whether it has
+// children, and its attributes with their forms. All these numbers fit
+// in one LEB128 byte.
+static void emit_debug_abbrev(void) {
+  enum {
+    // Tags
+    COMPILE_UNIT = 0x11, SUBPROGRAM = 0x2e, FORMAL_PARAMETER = 0x05,
+    VARIABLE = 0x34, BASE_TYPE = 0x24, POINTER_TYPE = 0x0f,
+    STRUCTURE_TYPE = 0x13, UNION_TYPE = 0x17, MEMBER = 0x0d,
+    ARRAY_TYPE = 0x01, SUBRANGE_TYPE = 0x21, ENUMERATION_TYPE = 0x04,
+    ENUMERATOR = 0x28, SUBROUTINE_TYPE = 0x15, UNSPECIFIED_PARAMETERS = 0x18,
+    // Attributes
+    NAME = 0x03, BYTE_SIZE = 0x0b, BIT_SIZE = 0x0d, STMT_LIST = 0x10,
+    LOW_PC = 0x11, HIGH_PC = 0x12, LANGUAGE = 0x13, COMP_DIR = 0x1b,
+    CONST_VALUE = 0x1c, PRODUCER = 0x25, PROTOTYPED = 0x27, COUNT = 0x37,
+    DATA_MEMBER_LOCATION = 0x38, DECL_FILE = 0x3a, DECL_LINE = 0x3b,
+    DECLARATION = 0x3c, ENCODING = 0x3e, EXTERNAL = 0x3f, FRAME_BASE = 0x40,
+    LOCATION = 0x02, TYPE = 0x49, DATA_BIT_OFFSET = 0x6b,
+    // Forms
+    ADDR = 0x01, DATA2 = 0x05, DATA8 = 0x07, STRING = 0x08, DATA1 = 0x0b,
+    FLAG = 0x0c, SDATA = 0x0d, UDATA = 0x0f, REF4 = 0x13, SEC_OFFSET = 0x17,
+    EXPRLOC = 0x18, FLAG_PRESENT = 0x19,
+  };
+
+  static int table[] = {
+    AB_CU, COMPILE_UNIT, 1, PRODUCER, STRING, LANGUAGE, DATA2, NAME, STRING,
+      COMP_DIR, STRING, LOW_PC, ADDR, HIGH_PC, DATA8, STMT_LIST, SEC_OFFSET, 0, 0,
+    AB_FUNC, SUBPROGRAM, 1, EXTERNAL, FLAG, NAME, STRING, DECL_FILE, UDATA,
+      DECL_LINE, UDATA, PROTOTYPED, FLAG_PRESENT, TYPE, REF4, LOW_PC, ADDR,
+      HIGH_PC, DATA8, FRAME_BASE, EXPRLOC, 0, 0,
+    AB_FUNC_VOID, SUBPROGRAM, 1, EXTERNAL, FLAG, NAME, STRING, DECL_FILE, UDATA,
+      DECL_LINE, UDATA, PROTOTYPED, FLAG_PRESENT, LOW_PC, ADDR, HIGH_PC, DATA8,
+      FRAME_BASE, EXPRLOC, 0, 0,
+    AB_PARAM, FORMAL_PARAMETER, 0, NAME, STRING, DECL_FILE, UDATA, DECL_LINE,
+      UDATA, TYPE, REF4, LOCATION, EXPRLOC, 0, 0,
+    AB_VAR, VARIABLE, 0, NAME, STRING, DECL_FILE, UDATA, DECL_LINE, UDATA,
+      TYPE, REF4, LOCATION, EXPRLOC, 0, 0,
+    AB_GVAR, VARIABLE, 0, NAME, STRING, DECL_FILE, UDATA, DECL_LINE, UDATA,
+      TYPE, REF4, EXTERNAL, FLAG, LOCATION, EXPRLOC, 0, 0,
+    AB_GVAR_NOLOC, VARIABLE, 0, NAME, STRING, DECL_FILE, UDATA, DECL_LINE,
+      UDATA, TYPE, REF4, EXTERNAL, FLAG, 0, 0,
+    AB_BASE, BASE_TYPE, 0, NAME, STRING, ENCODING, DATA1, BYTE_SIZE, DATA1, 0, 0,
+    AB_PTR, POINTER_TYPE, 0, BYTE_SIZE, DATA1, TYPE, REF4, 0, 0,
+    AB_PTR_VOID, POINTER_TYPE, 0, BYTE_SIZE, DATA1, 0, 0,
+    AB_STRUCT, STRUCTURE_TYPE, 1, NAME, STRING, BYTE_SIZE, UDATA, 0, 0,
+    AB_STRUCT_ANON, STRUCTURE_TYPE, 1, BYTE_SIZE, UDATA, 0, 0,
+    AB_STRUCT_DECL, STRUCTURE_TYPE, 0, NAME, STRING, DECLARATION, FLAG_PRESENT, 0, 0,
+    AB_UNION, UNION_TYPE, 1, NAME, STRING, BYTE_SIZE, UDATA, 0, 0,
+    AB_UNION_ANON, UNION_TYPE, 1, BYTE_SIZE, UDATA, 0, 0,
+    AB_UNION_DECL, UNION_TYPE, 0, NAME, STRING, DECLARATION, FLAG_PRESENT, 0, 0,
+    AB_MEMBER, MEMBER, 0, NAME, STRING, TYPE, REF4, DATA_MEMBER_LOCATION, UDATA, 0, 0,
+    AB_MEMBER_ANON, MEMBER, 0, TYPE, REF4, DATA_MEMBER_LOCATION, UDATA, 0, 0,
+    AB_BITFIELD, MEMBER, 0, NAME, STRING, TYPE, REF4, BIT_SIZE, UDATA,
+      DATA_BIT_OFFSET, UDATA, 0, 0,
+    AB_ARRAY, ARRAY_TYPE, 1, TYPE, REF4, 0, 0,
+    AB_SUBRANGE, SUBRANGE_TYPE, 0, COUNT, UDATA, 0, 0,
+    AB_SUBRANGE_NOCOUNT, SUBRANGE_TYPE, 0, 0, 0,
+    AB_ENUM, ENUMERATION_TYPE, 1, NAME, STRING, BYTE_SIZE, DATA1, 0, 0,
+    AB_ENUM_ANON, ENUMERATION_TYPE, 1, BYTE_SIZE, DATA1, 0, 0,
+    AB_ENUMERATOR, ENUMERATOR, 0, NAME, STRING, CONST_VALUE, SDATA, 0, 0,
+    AB_SUBR, SUBROUTINE_TYPE, 1, PROTOTYPED, FLAG_PRESENT, TYPE, REF4, 0, 0,
+    AB_SUBR_VOID, SUBROUTINE_TYPE, 1, PROTOTYPED, FLAG_PRESENT, 0, 0,
+    AB_SUBR_PARAM, FORMAL_PARAMETER, 0, TYPE, REF4, 0, 0,
+    AB_VARARGS, UNSPECIFIED_PARAMETERS, 0, 0, 0,
+  };
+
+  println("  .section .debug_abbrev,\"\",@progbits");
+  println(".L.dbg.abbrev:");
+  int n = sizeof(table) / sizeof(*table);
+  for (int i = 0; i < n; i++)
+    println("  .byte %d", table[i]);
+  println("  .byte 0");
+}
+
+// A variable's location: a callee-saved register, or a place in the
+// frame, at an offset from %rbp (the frame base), which for a variable
+// aligned above 16 holds its address.
+static void emit_var_location(Obj *var) {
+  if (var->reg) {
+    println("  .byte 1,%d", 0x50 + dwarf_regs[var->reg - 1]); // DW_OP_regN
+    return;
+  }
+  int len = 1 + leb128_len(var->offset, true) + var->is_overaligned;
+  println("  .byte %d,0x91,%s%s", len, leb128(var->offset, true),  // DW_OP_fbreg
+          var->is_overaligned ? ",6" : "");                         // DW_OP_deref
+}
+
+// Name, file and line, which the DIEs of functions and variables start with
+static void emit_decl(char *name, Token *tok) {
+  dw_string(name);
+  dw_udata(file_number(tok));
+  dw_udata(tok->line_no);
+}
+
+static bool is_user_var(Obj *var) {
+  return var->tok && var->name[0] && strncmp(var->name, "__", 2) &&
+         strncmp(var->name, ".L", 2);
+}
+
+static void emit_function_die(Obj *fn) {
+  char *ret = type_die(fn->ty->return_ty);
+  dw_udata(ret ? AB_FUNC : AB_FUNC_VOID);
+  println("  .byte %d", !fn->is_static);
+  emit_decl(fn->name, fn->tok);
+  if (ret)
+    dw_ref(ret);
+  println("  .quad %s", fn->name);
+  println("  .quad .L.end.%s - %s", fn->name, fn->name);
+  println("  .byte 2,0x76,0"); // frame base: DW_OP_breg6 (%rbp) + 0
+
+  // Parameters have no token of their own: they're shown at the
+  // function's line.
+  for (Obj *var = fn->params; var; var = var->next) {
+    if (!var->name[0])
+      continue;
+    dw_udata(AB_PARAM);
+    emit_decl(var->name, fn->tok);
+    dw_ref(type_die(var->ty));
+    emit_var_location(var);
+  }
+
+  // Locals, in the order they're declared (the list is newest first)
+  int n = 0;
+  for (Obj *var = fn->locals; var; var = var->next)
+    n++;
+  Obj **vars = calloc(n, sizeof(Obj *));
+  int i = n;
+  for (Obj *var = fn->locals; var; var = var->next)
+    vars[--i] = var;
+  for (i = 0; i < n; i++) {
+    Obj *var = vars[i];
+    if (!is_user_var(var) || is_param(fn, var))
+      continue;
+    dw_udata(AB_VAR);
+    emit_decl(var->name, var->tok);
+    dw_ref(type_die(var->ty));
+    emit_var_location(var);
+  }
+  println("  .byte 0");
+}
+
+static void emit_debug_info(Obj *prog) {
+  emit_debug_abbrev();
+
+  char cwd[4096];
+  if (!getcwd(cwd, sizeof(cwd)))
+    strcpy(cwd, ".");
+
+  println("  .section .debug_info,\"\",@progbits");
+  println(".L.dbg.info:");
+  println("  .long .L.dbg.info.end - .L.dbg.info.start");
+  println(".L.dbg.info.start:");
+  println("  .value 4");
+  println("  .long .L.dbg.abbrev");
+  println("  .byte 8");
+
+  dw_udata(AB_CU);
+  dw_string("mucc");
+  println("  .value 0x1d"); // DW_LANG_C11
+  dw_string(base_file);
+  dw_string(cwd);
+  println("  .quad .L.text.start");
+  println("  .quad .L.text.end - .L.text.start");
+  println("  .long .L.dbg.line");
+
+  // Functions in the order they're defined (the list is newest first)
+  int n = 0;
+  for (Obj *var = prog; var; var = var->next)
+    n++;
+  Obj **objs = calloc(n, sizeof(Obj *));
+  int i = n;
+  for (Obj *var = prog; var; var = var->next)
+    objs[--i] = var;
+
+  for (i = 0; i < n; i++) {
+    Obj *fn = objs[i];
+    if (fn->is_function && fn->is_definition && fn->is_live && fn->tok)
+      emit_function_die(fn);
+  }
+
+  for (i = 0; i < n; i++) {
+    Obj *var = objs[i];
+    if (var->is_function || !var->is_definition || var->is_string ||
+        !is_user_var(var))
+      continue;
+    // A thread-local variable's place depends on the thread; it's
+    // described without one.
+    dw_udata(var->is_tls ? AB_GVAR_NOLOC : AB_GVAR);
+    emit_decl(var->name, var->tok);
+    dw_ref(type_die(var->ty));
+    println("  .byte %d", !var->is_static);
+    if (!var->is_tls) {
+      println("  .byte 9,3"); // DW_OP_addr
+      println("  .quad %s", var->name);
+    }
+  }
+
+  emit_type_dies();
+  println("  .byte 0"); // the end of the compile unit's children
+  println(".L.dbg.info.end:");
+
+  // The assembler puts the line table here.
+  println("  .section .debug_line,\"\",@progbits");
+  println(".L.dbg.line:");
 }
 
 //---------- Entry point -----------------------------------------------------
@@ -3035,7 +3497,16 @@ void codegen(Obj *prog, FILE *out) {
   for (Obj *var = prog; var; var = var->next)
     has_weak |= var->is_weak;
   emit_data(prog);
+  if (opt_g) {
+    println("  .text");
+    println(".L.text.start:");
+  }
   emit_text(prog);
+  if (opt_g) {
+    println("  .text");
+    println(".L.text.end:");
+    emit_debug_info(prog);
+  }
   emit_init_arrays(prog);
   emit_aliases(prog);
   emit_weak_refs(prog);

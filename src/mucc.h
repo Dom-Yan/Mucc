@@ -613,6 +613,7 @@ bool in_system_header(Token *tok);
 
 extern StringArray include_paths;
 extern bool opt_w;
+extern bool opt_g;
 extern StringArray opt_warnings;
 extern bool opt_fpic;
 extern bool opt_asm_cpp;
