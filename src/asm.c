@@ -122,6 +122,12 @@ static HashMap symbols;
 static Sym **symlist;       // every symbol, in order of creation
 static int nsyms, capsyms;
 
+// Local common symbols (`.local x` then `.comm x, size, align`), which go
+// at the end of .bss once all of it is read, as GNU as puts them
+static Sym **lcomms;
+static int *lcomm_aligns;
+static int nlcomms;
+
 static char *file_name;     // from `.file "name"`
 static StringArray dwarf_files; // from `.file N "name"`: [N - 1]
 static Loc *locs;
@@ -1865,13 +1871,11 @@ static void directive(char *name, int len) {
     expect_comma();
     int align = read_int();
     if (sym->is_local) {
-      // A local common symbol is simply allocated in .bss, as GNU as does.
-      Section *saved = cur;
-      cur = find_section(".bss");
-      align_to_n(align);
-      define_sym(sym);
-      out_zeros(size);
-      cur = saved;
+      // A local common symbol is allocated in .bss at the end.
+      lcomms = realloc(lcomms, (nlcomms + 1) * sizeof(Sym *));
+      lcomm_aligns = realloc(lcomm_aligns, (nlcomms + 1) * sizeof(int));
+      lcomms[nlcomms] = sym;
+      lcomm_aligns[nlcomms++] = align;
     } else {
       sym->common_align = align;
       sym->is_global = true;
@@ -2546,6 +2550,7 @@ static void reset(void) {
   symbols = (HashMap){0};
   symlist = NULL;
   nsyms = capsyms = 0;
+  nlcomms = 0;
   file_name = NULL;
   dwarf_files = (StringArray){0};
   locs = NULL;
@@ -2574,6 +2579,13 @@ bool assemble_text(char *src, char *path, char **why) {
   new_section(".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE);
   cur = text;
   read_input(src);
+
+  cur = find_section(".bss");
+  for (int i = 0; i < nlcomms; i++) {
+    align_to_n(lcomm_aligns[i]);
+    define_sym(lcomms[i]);
+    out_zeros(lcomms[i]->size);
+  }
 
   // Mark the stack as not executable, as gcc does. mucc's own output
   // already asks for this section; a hand-written .s file may not.
