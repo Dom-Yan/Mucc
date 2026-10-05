@@ -605,6 +605,41 @@ check -std=
 [ "$($mucc -dumpmachine)" = x86_64-linux-gnu ]
 check -dumpmachine
 
+# -dumpversion, -print-multiarch, -print-file-name= and -print-prog-name=,
+# which build tools ask
+$mucc -dumpversion | grep -q '^[0-9][0-9.]*$'
+check -dumpversion
+[ "$($mucc -print-multiarch)" = x86_64-linux-gnu ]
+check -print-multiarch
+[ "$($mucc -print-file-name=libfoo.a)" = libfoo.a ]
+check -print-file-name=
+[ "$($mucc -print-prog-name=ld)" = ld ]
+check -print-prog-name=
+
+# -v prints the version, and with no input files, does nothing else
+$mucc -v 2>&1 | grep -q '^mucc version [0-9]'
+check '-v'
+echo 'int main() { return 0; }' > $tmp/v.c
+$mucc -v -o $tmp/v $tmp/v.c 2> /dev/null && $tmp/v
+check '-v with a file'
+
+# -isystem: searched after -I, as a system directory
+mkdir -p $tmp/isys1 $tmp/isys2
+echo foo > $tmp/isys1/isys
+echo bar > $tmp/isys2/isys
+echo '#include "isys"' | $mucc -isystem $tmp/isys1 -I$tmp/isys2 -E -xc - | grep -q bar
+check -isystem
+echo '#include <isys>' | $mucc -isystem $tmp/isys1 -E -xc - | grep -q foo
+check -isystem
+
+# Flags for optimizations, debug paths and hardening are accepted and
+# ignored, as in Debian's default CFLAGS
+$mucc -funroll-loops -finline-functions -fno-inline -ftree-vectorize \
+    -ffile-prefix-map=/a=/b -fdebug-prefix-map=/a=/b -pie -static-libgcc \
+    -ftrivial-auto-var-init=zero -fmax-errors=5 -save-temps \
+    -o $tmp/v $tmp/v.c && $tmp/v
+check 'ignored flags'
+
 # -march= and -mtune= are accepted and ignored
 echo 'int main() { return 0; }' > $tmp/march.c
 $mucc -march=native -mtune=generic -o $tmp/march $tmp/march.c && $tmp/march

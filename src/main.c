@@ -274,8 +274,8 @@ static void usage(int status) {
 
 static bool take_arg(char *arg) {
   char *x[] = {
-    "-o", "-I", "-L", "-D", "-U", "-idirafter", "-include", "-x", "-MF",
-    "-MT", "-Xlinker",
+    "-o", "-I", "-L", "-D", "-U", "-idirafter", "-isystem", "-include", "-x",
+    "-MF", "-MT", "-Xlinker",
   };
 
   for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
@@ -386,7 +386,20 @@ static char *ignored_options[] = {
   "-fno-lto", "-flto*", "-fno-pie", "-fno-PIE", "-no-pie",
   // mucc makes non-PIE executables, which -fPIE objects would only be
   // linked into anyway.
-  "-fpie", "-fPIE",
+  "-fpie", "-fPIE", "-pie",
+  // Optimizations, which mucc doesn't do
+  "-funroll-*", "-fno-unroll-*", "-finline*", "-fno-inline*", "-ftree-*",
+  "-fno-tree-*", "-fexcess-precision=*", "-mfpmath=sse",
+  // Paths in debug info and __FILE__, kept as they are
+  "-ffile-prefix-map=*", "-fdebug-prefix-map=*", "-fmacro-prefix-map=*",
+  // Hardening that has nothing to do in mucc's code, or that only gives
+  // a value to what C leaves uninitialized
+  "-fzero-call-used-regs=*", "-ftrivial-auto-var-init=*", "-mshstk",
+  "-fstrict-flex-arrays*",
+  // mucc needs no libgcc, and makes no LTO objects or record of options
+  "-static-libgcc", "-ffat-lto-objects", "-fno-fat-lto-objects",
+  "-frecord-gcc-switches", "-grecord-gcc-switches",
+  "-save-temps*", "-fmax-errors=*",
 };
 
 static bool is_ignored_option(char *arg) {
@@ -443,6 +456,8 @@ static void parse_args(int argc, char **argv) {
         usage(1);
 
   StringArray idirafter = {};
+  StringArray isystem = {};
+  bool opt_v = false;
 
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-###")) {
@@ -450,10 +465,30 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
-    // Build tools ask which system the compiler targets.
-    if (!strcmp(argv[i], "-dumpmachine")) {
+    // Build tools ask which system the compiler targets, and its version.
+    if (!strcmp(argv[i], "-dumpmachine") || !strcmp(argv[i], "-print-multiarch")) {
       printf("x86_64-linux-gnu\n");
       exit(0);
+    }
+
+    if (!strcmp(argv[i], "-dumpversion") || !strcmp(argv[i], "-dumpfullversion")) {
+      printf("%s\n", MUCC_VERSION);
+      exit(0);
+    }
+
+    // mucc has no separate files or programs to find, so the name is the
+    // answer, as gcc gives it for one it doesn't have.
+    if (!strncmp(argv[i], "-print-file-name=", 17) ||
+        !strncmp(argv[i], "-print-prog-name=", 17)) {
+      printf("%s\n", argv[i] + 17);
+      exit(0);
+    }
+
+    // Prints the version, as configure scripts ask for. With no input
+    // files, that's all.
+    if (!strcmp(argv[i], "-v")) {
+      opt_v = true;
+      continue;
     }
 
     if (!strcmp(argv[i], "-cc1")) {
@@ -670,6 +705,13 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    // -isystem dir: searched after the -I directories, as a system
+    // directory, whose headers get no warnings
+    if (!strcmp(argv[i], "-isystem")) {
+      strarray_push(&isystem, argv[++i]);
+      continue;
+    }
+
     if (!strcmp(argv[i], "-static")) {
       opt_static = true;
       strarray_push(&ld_extra_args, "-static");
@@ -774,8 +816,18 @@ static void parse_args(int argc, char **argv) {
     add_input(argv[i]);
   }
 
+  for (int i = 0; i < isystem.len; i++) {
+    strarray_push(&include_paths, isystem.data[i]);
+    strarray_push(&std_include_paths, isystem.data[i]);
+  }
   for (int i = 0; i < idirafter.len; i++)
     strarray_push(&include_paths, idirafter.data[i]);
+
+  if (opt_v && !opt_cc1) {
+    fprintf(stderr, "mucc version %s\nTarget: x86_64-linux-gnu\n", MUCC_VERSION);
+    if (input_paths.len == 0)
+      exit(0);
+  }
 
   if (input_paths.len == 0)
     error("no input files");
