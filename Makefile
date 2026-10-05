@@ -80,7 +80,11 @@ test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	$(call test_scripts,./mucc)
 
-test-all: test test-stage2 selfhost test-libc test-single test-programs
+# test-libc runs its own `make libc` into $(MUSL_BUILD), which test-single
+# and test-programs build from too, so they wait for it: with `make -j`,
+# two builds of musl in one directory would break each other.
+test-all: test test-stage2 selfhost test-libc
+	$(MAKE) test-single test-programs
 
 # Differential testing: random programs compiled by mucc and gcc must print
 # the same thing. `make difftest N=2000` for more. See test/difftest.sh.
