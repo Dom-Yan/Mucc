@@ -16,7 +16,7 @@ Website: <https://dom-yan.github.io/Mucc/>
   faster than `gcc -O2`.
 - **Nothing to install.** One 11 MB file is the whole toolchain. It works in
   an empty container, on old distributions and on machines with no compiler.
-- **Small enough to read.** About 18,000 lines of C that you can understand
+- **Small enough to read.** About 20,000 lines of C that you can understand
   end to end.
 - **Real C.** C17 by default, C23 with `-std=c23`. It builds CPython, Git,
   SQLite and Lua, which then pass their own test suites.

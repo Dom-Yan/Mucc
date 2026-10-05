@@ -59,6 +59,33 @@
 Downloads for each release are on the
 <a href="https://github.com/Dom-Yan/Mucc/releases">releases page</a>.</p>
 
+<h2 id="main">On main, not released yet</h2>
+<ul>
+  <li>Fixes: <code>int x; int x;</code> (the same tentative definition
+    twice, static or not) defines the variable instead of leaving it
+    undefined at link time; <code>##</code> with empty arguments
+    (<code>x##y##z</code> with <code>x</code> and <code>y</code> empty)
+    and <code>##</code> in object-like macros paste as C says;
+    <code>typeof_unqual</code> drops <code>const</code>,
+    <code>volatile</code> and <code>_Atomic</code>; a compound literal
+    keeps its type's qualifiers.</li>
+  <li>Fixes in code generation: conversions between <code>unsigned
+    long</code> and floating types from 2<sup>63</sup> up,
+    compare-and-swap for <code>_Atomic</code> floating types, and structs
+    holding a <code>long double</code> passed as the psABI says.</li>
+  <li><code>const</code>, <code>volatile</code>, <code>long long</code>
+    and <code>signed char</code> are types of their own, struct layouts
+    with <code>#pragma pack</code> match gcc's, and
+    <code>wchar_t</code> is <code>int</code>, as with gcc and musl.</li>
+  <li>Errors instead of wrong code or a crash: a struct used as a number
+    (<code>if (s)</code>, <code>s * 2</code>, <code>s[0]</code>,
+    <code>(int)s</code>), a variable defined twice, and an enumerator
+    redeclaring a name.</li>
+  <li><code>__builtin_offsetof</code> and
+    <code>__PRETTY_FUNCTION__</code>.</li>
+  <li><code>make -j test-all</code> works.</li>
+</ul>
+
 <h2 id="v1.1.0">Mucc 1.1.0 (October 1, 2026)</h2>
 <ul>
   <li>Fixes: atomics' fetch operations return the value from before, and
