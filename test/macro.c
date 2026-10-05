@@ -481,6 +481,41 @@ int main() {
 #define join(c, d) in_between(c hash_hash d)
   ASSERT(0, strcmp(join(x, y), "x ## y"));
 
+  // Parameters inside __VA_OPT__ are replaced, # and ## work there.
+#define VO1(a, ...) (a __VA_OPT__(+ __VA_ARGS__ + a))
+#define VO2(x, ...) #x __VA_OPT__(" " #x)
+#define VO3(x, ...) __VA_OPT__(x ## x)
+  ASSERT(5, VO1(5));
+  ASSERT(16, VO1(5, 6));
+  ASSERT(0, strcmp(VO2(q, 1), "q q"));
+  ASSERT(0, strcmp(VO2(q), "q"));
+  ASSERT(9, ({ int yy = 9; VO3(y, 1); }));
+
+  // #if arithmetic is in intmax_t and uintmax_t.
+  ASSERT(127, ({ int r = 0;
+#if (2147483647 + 1) > 0
+    r |= 1;
+#endif
+#if 0xffffffffu + 1 == 0x100000000
+    r |= 2;
+#endif
+#if -1 > 0u
+    r |= 4;
+#endif
+#if (1 << 40) != 0 && (1 << 63) < 0
+    r |= 8;
+#endif
+#if ~0u == 18446744073709551615u
+    r |= 16;
+#endif
+#if 'ab' == 0x6162
+    r |= 32;
+#endif
+#if -2147483648 < 0 && 4294967295 > 0
+    r |= 64;
+#endif
+    r; }));
+
   printf("OK\n");
   return 0;
 }

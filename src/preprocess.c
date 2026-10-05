@@ -400,8 +400,12 @@ static long eval_pp_expr(Token *start, Token *expr) {
     }
   }
 
-  // Convert pp-numbers to regular numbers
+  // Convert pp-numbers to regular numbers. Each integer is an intmax_t
+  // or uintmax_t (C11 6.10.1p4), so `2147483647 + 1` doesn't wrap.
   convert_pp_tokens(expr);
+  for (Token *t = expr; t->kind != TK_EOF; t = t->next)
+    if (t->kind == TK_NUM && is_integer(t->ty) && t->ty->size < 8)
+      t->ty = t->ty->is_unsigned ? ty_ulong : ty_long;
 
   Token *rest2;
   long val = const_expr(&rest2, expr);
@@ -857,11 +861,12 @@ static Token *subst(Token *tok, MacroArg *args) {
     }
 
     // If __VA_ARG__ is empty, __VA_OPT__(x) is expanded to the
-    // empty token list. Otherwise, __VA_OPT__(x) is expanded to x.
+    // empty token list. Otherwise, __VA_OPT__(x) is expanded to x, with
+    // the parameters in x replaced too.
     if (equal(tok, "__VA_OPT__") && equal(tok->next, "(")) {
       MacroArg *arg = read_macro_arg_one(&tok, tok->next->next, true);
       if (has_varargs(args))
-        for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next)
+        for (Token *t = subst(arg->tok, args); t->kind != TK_EOF; t = t->next)
           cur = cur->next = t;
       tok = skip(tok, ")");
       continue;
