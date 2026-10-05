@@ -59,6 +59,11 @@ long neg1 = (int)-4;
 unsigned long neg2 = (int)-4;
 unsigned long neg3 = (unsigned)-4;
 
+// The distance between two addresses in one object, as integers
+int g_dist_a[10];
+long g_dist1 = (long)&g_dist_a[3] - (long)&g_dist_a[0];
+long g_dist2 = (unsigned long)&g_dist_a[9] - (unsigned long)g_dist_a;
+
 int main() {
   ASSERT(1, neg1 == -4);
   ASSERT(1, neg2 == -4UL);
@@ -312,6 +317,9 @@ int main() {
   ASSERT(1, g2d_rows[2] == g2d_buf[2]);
   ASSERT(7, g_union2.a);
   ASSERT(9, ({ union { int a; char b; } u = {.a = 5, .b = 9,}; u.b; }));
+
+  ASSERT(12, g_dist1);
+  ASSERT(36, g_dist2);
 
   printf("OK\n");
   return 0;

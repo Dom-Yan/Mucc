@@ -3785,17 +3785,24 @@ static int64_t eval_wide(Node *node, char ***label) {
   switch (node->kind) {
   case ND_ADD:
     return eval2(node->lhs, label) + eval(node->rhs);
-  case ND_SUB:
+  case ND_SUB: {
     // p - q is a number if both point into the same object, or neither
-    // does (as in `(char *)&((T *)0)->m - (char *)0`, an offsetof).
-    if (node->lhs->ty->base && node->rhs->ty->base) {
-      char **l1 = NULL, **l2 = NULL;
-      int64_t val = eval2(node->lhs, &l1) - eval2(node->rhs, &l2);
+    // does (as in `(char *)&((T *)0)->m - (char *)0`, an offsetof), also
+    // as integers: `(long)&a[1] - (long)&a[0]`.
+    char **l1 = NULL, **l2 = NULL;
+    int64_t val = eval2(node->lhs, &l1) - eval2(node->rhs, &l2);
+    if (l2) {
       if (l1 != l2)
         error_tok(node->tok, "not a compile-time constant");
       return val;
     }
-    return eval2(node->lhs, label) - eval(node->rhs);
+    if (l1) {
+      if (!label)
+        error_tok(node->tok, "not a compile-time constant");
+      *label = l1;
+    }
+    return val;
+  }
   case ND_MUL:
     return eval(node->lhs) * eval(node->rhs);
   case ND_DIV:
