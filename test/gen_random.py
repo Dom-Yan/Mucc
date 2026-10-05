@@ -20,6 +20,7 @@
 # allowed: mucc and gcc agree on it for x86-64 Linux. So when the two
 # compilers print different things, one of them has a bug.
 import random
+import re
 import sys
 
 R = random.Random(int(sys.argv[1]))
@@ -81,6 +82,14 @@ def int_lit(t):
     if t not in suffix:
         return f'(({t}){v})'
     return f'({v}{suffix[t]})' if v < 0 else f'{v}{suffix[t]}'
+
+
+TYPE_WORDS = {'double', 'float', 'unsigned', 'signed', 'char', 'short', 'int', 'long'}
+
+def is_constant(code):
+    """Has no variable in it. gcc folds `0.0 - x` into `-x`, which is
+    -0.0 where x is 0.0, so a constant isn't made the left side of `-`."""
+    return all(w in TYPE_WORDS for w in re.findall(r'\b[A-Za-z_]\w*', code))
 
 
 def dbl_lit():
@@ -324,6 +333,8 @@ class Gen:
         r = R.random()
         if r < 0.75:
             op = R.choice(['+', '-', '*', '/'])
+            if op == '-' and is_constant(a):
+                op = '+'
             if op == '/':
                 return f'(({b}) != 0.0 ? ({a}) / ({b}) : ({a}))'
             return f'(({a}) {op} ({b}))'
