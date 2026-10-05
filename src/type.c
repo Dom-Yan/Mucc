@@ -24,6 +24,8 @@ Type *ty_ushort = &(Type){TY_SHORT, 2, 2, true};
 Type *ty_uint = &(Type){TY_INT, 4, 4, true};
 Type *ty_ulong = &(Type){TY_LONG, 8, 8, true};
 Type *ty_ullong = &(Type){TY_LONG, 8, 8, true, .is_distinct = true};
+Type *ty_int128 = &(Type){TY_INT128, 16, 16};
+Type *ty_uint128 = &(Type){TY_INT128, 16, 16, true};
 
 Type *ty_float = &(Type){TY_FLOAT, 4, 4};
 Type *ty_double = &(Type){TY_DOUBLE, 8, 8};
@@ -42,7 +44,11 @@ static Type *new_type(TypeKind kind, int size, int align) {
 bool is_integer(Type *ty) {
   TypeKind k = ty->kind;
   return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT ||
-         k == TY_INT  || k == TY_LONG || k == TY_ENUM;
+         k == TY_INT  || k == TY_LONG || k == TY_INT128 || k == TY_ENUM;
+}
+
+bool is_int128(Type *ty) {
+  return ty->kind == TY_INT128;
 }
 
 bool is_flonum(Type *ty) {
@@ -111,6 +117,7 @@ static bool is_compatible_unqual(Type *t1, Type *t2) {
   case TY_SHORT:
   case TY_INT:
   case TY_LONG:
+  case TY_INT128:
     return t1->is_unsigned == t2->is_unsigned &&
            t1->is_distinct == t2->is_distinct;
   case TY_FLOAT:
@@ -516,6 +523,7 @@ static char *unqual_type_name(Type *ty) {
   case TY_SHORT: return format("%sshort", u);
   case TY_INT: return format("%sint", u);
   case TY_LONG: return format("%slong%s", u, ty->is_distinct ? " long" : "");
+  case TY_INT128: return format("%s__int128", u);
   case TY_FLOAT: return "float";
   case TY_DOUBLE: return "double";
   case TY_LDOUBLE: return "long double";

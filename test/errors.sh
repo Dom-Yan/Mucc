@@ -895,6 +895,23 @@ expect_error "1:16: error: constructor priorities must be from 0 to 65535" <<'EO
 __attribute__((constructor(70000))) void f(void) {}
 EOF
 
+# __int128
+expect_error "1:18: error: _Atomic __int128 is not supported" <<'EOF'
+_Atomic __int128 x;
+EOF
+
+expect_error "1:25: error: a bit-field of type __int128 is not supported" <<'EOF'
+struct S { __int128 a : 3; };
+EOF
+
+expect_error "1:30: error: switch on __int128 is not supported" <<'EOF'
+void f(__int128 x) { switch (x) {} }
+EOF
+
+expect_error "1:26: error: a 128-bit constant must be a 64-bit integer constant converted to __int128" <<'EOF'
+__int128 x = (__int128)1 << 64;
+EOF
+
 # asm statements with operands
 expect_error "1:29: error: labels in an asm statement need 'asm goto'" <<'EOF'
 void f(void) { asm("" : : : : out); out:; }

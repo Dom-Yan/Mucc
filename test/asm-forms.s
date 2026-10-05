@@ -148,6 +148,12 @@ func:
   shl %cl, %rax
   shr %cl, %eax
   sar %cl, %rax
+  shld %cl, %rax, %rdx
+  shrd %cl, %rdx, %rax
+  shld $5, %r8, %r9
+  shrd $1, %edx, %eax
+  shldq %cl, %rax, 8(%rsp)
+  shrd %cl, %r10w, %r11w
   shr $8, %rdi
 
   # test and set

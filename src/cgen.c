@@ -45,6 +45,8 @@ static int loc_line;
 static void gen_expr(Node *node);
 static void gen_discard(Node *node);
 static void gen_stmt(Node *node);
+static void cast_int128(Type *from, Type *to);
+static char *high_half(char *addr);
 
 //---------- Output and stack helpers ----------------------------------------
 
@@ -383,6 +385,11 @@ static void load_from(Type *ty, char *addr) {
   case TY_LDOUBLE:
     println("  fldt %s", addr);
     return;
+  case TY_INT128:
+    // The high half first: `addr` may be based on %rax.
+    println("  mov %s, %%rdx", high_half(addr));
+    println("  mov %s, %%rax", addr);
+    return;
   }
 
   char *insn = ty->is_unsigned ? "movz" : "movs";
@@ -429,6 +436,10 @@ static void store_to(Type *ty, char *addr) {
   case TY_LDOUBLE:
     println("  fstpt %s", addr);
     println("  fldt %s", addr);
+    return;
+  case TY_INT128:
+    println("  mov %%rax, %s", addr);
+    println("  mov %%rdx, %s", high_half(addr));
     return;
   }
 
@@ -506,6 +517,10 @@ static void cmp_zero(Type *ty) {
     println("  fucomip");
     println("  fstp %%st(0)");
     break;
+  case TY_INT128:
+    println("  mov %%rax, %%rcx");
+    println("  or %%rdx, %%rcx");
+    return;
   default:
     if (is_integer(ty) && ty->size <= 4)
       println("  cmp $0, %%eax");
@@ -663,10 +678,367 @@ static void cast(Type *from, Type *to) {
     return;
   }
 
+  if (is_int128(from) || is_int128(to)) {
+    cast_int128(from, to);
+    return;
+  }
+
   int t1 = getTypeId(from);
   int t2 = getTypeId(to);
   if (cast_table[t1][t2])
     println("  %s", cast_table[t1][t2]);
+}
+
+//---------- 128-bit integers ------------------------------------------------
+//
+// An __int128 value is in %rdx:%rax, the high half in %rdx, where the
+// psABI returns one. Pushed, it takes two slots, %rdx first, so that its
+// halves are in memory order. Most operators are a few instructions on
+// the halves. Division and conversions to and from floating point are
+// routines, emitted at the end of each file that uses them (see
+// emit_int128_routines()): mucc never calls libgcc's.
+
+static bool uses_int128_routines;
+
+// Memory operand `addr` 8 bytes on: "(%rax)" -> "8(%rax)", "-16(%rbp)" ->
+// "-8(%rbp)". The high half of an __int128 is there.
+static char *high_half(char *addr) {
+  char *rest;
+  long offset = strtol(addr, &rest, 10);
+  return format("%ld%s", offset + 8, rest);
+}
+
+static void push128(void) {
+  println("  push %%rdx");
+  depth++;
+  push();
+}
+
+static void neg128(char *lo, char *hi) {
+  println("  neg %s", lo);
+  println("  adc $0, %s", hi);
+  println("  neg %s", hi);
+}
+
+static void cast_int128(Type *from, Type *to) {
+  if (is_int128(from) && is_int128(to))
+    return;
+
+  if (is_int128(to)) {
+    if (is_flonum(from)) {
+      if (from->kind != TY_LDOUBLE)
+        cast(from, ty_ldouble);
+      uses_int128_routines = true;
+      println("  call .L.int128.from_f80%s", to->is_unsigned ? "u" : "");
+      return;
+    }
+    // An integer or a pointer: as 64 bits, extended
+    cast(from, from->is_unsigned ? ty_ulong : ty_long);
+    if (from->is_unsigned)
+      println("  xor %%edx, %%edx");
+    else
+      println("  cqo");
+    return;
+  }
+
+  // To floating point, through a long double. One for float or double
+  // keeps the bits that matter for rounding to them once (see
+  // emit_int128_routines()).
+  if (is_flonum(to)) {
+    uses_int128_routines = true;
+    char *u = from->is_unsigned ? "u" : "";
+    if (to->kind == TY_LDOUBLE) {
+      println("  call .L.int128.to_f80%s", u);
+    } else {
+      println("  call .L.int128.to_f80%s_sticky", u);
+      cast(ty_ldouble, to);
+    }
+    return;
+  }
+
+  // To a narrower integer or a pointer: the low half, cut down as a long
+  cast(from->is_unsigned ? ty_ulong : ty_long, to);
+}
+
+// Binary operator `node` on __int128 operands. A shift's count may be
+// any integer; it goes in %cl.
+static void gen_int128_binary(Node *node) {
+  bool u = node->lhs->ty->is_unsigned;
+
+  if (node->kind == ND_SHL || node->kind == ND_SHR) {
+    gen_expr(node->rhs);
+    push();
+    gen_expr(node->lhs);
+    pop("%rcx");
+    if (node->kind == ND_SHL) {
+      println("  shld %%cl, %%rax, %%rdx");
+      println("  shl %%cl, %%rax");
+      println("  test $64, %%cl");
+      println("  jz 1f");
+      println("  mov %%rax, %%rdx");
+      println("  xor %%eax, %%eax");
+    } else {
+      println("  shrd %%cl, %%rdx, %%rax");
+      println("  %s %%cl, %%rdx", u ? "shr" : "sar");
+      println("  test $64, %%cl");
+      println("  jz 1f");
+      println("  mov %%rdx, %%rax");
+      if (u)
+        println("  xor %%edx, %%edx");
+      else
+        println("  sar $63, %%rdx");
+    }
+    println("1:");
+    return;
+  }
+
+  // The left side in %rdx:%rax, the right in %rsi:%rdi
+  gen_expr(node->rhs);
+  push128();
+  gen_expr(node->lhs);
+  pop("%rdi");
+  pop("%rsi");
+
+  switch (node->kind) {
+  case ND_ADD:
+    println("  add %%rdi, %%rax");
+    println("  adc %%rsi, %%rdx");
+    return;
+  case ND_SUB:
+    println("  sub %%rdi, %%rax");
+    println("  sbb %%rsi, %%rdx");
+    return;
+  case ND_MUL:
+    // The low halves' full product, with the cross products added to
+    // its high half
+    println("  mov %%rdx, %%rcx");
+    println("  imul %%rdi, %%rcx");
+    println("  mov %%rax, %%r8");
+    println("  imul %%rsi, %%r8");
+    println("  add %%r8, %%rcx");
+    println("  mul %%rdi");
+    println("  add %%rcx, %%rdx");
+    return;
+  case ND_DIV:
+  case ND_MOD:
+    uses_int128_routines = true;
+    println("  call .L.int128.%sdivmod", u ? "u" : "");
+    if (node->kind == ND_MOD) {
+      println("  mov %%rdi, %%rax");
+      println("  mov %%rsi, %%rdx");
+    }
+    return;
+  case ND_BITAND:
+  case ND_BITOR:
+  case ND_BITXOR: {
+    char *op = node->kind == ND_BITAND ? "and" :
+               node->kind == ND_BITOR ? "or" : "xor";
+    println("  %s %%rdi, %%rax", op);
+    println("  %s %%rsi, %%rdx", op);
+    return;
+  }
+  case ND_EQ:
+  case ND_NE:
+    println("  xor %%rdi, %%rax");
+    println("  xor %%rsi, %%rdx");
+    println("  or %%rdx, %%rax");
+    println("  set%s %%al", node->kind == ND_EQ ? "e" : "ne");
+    println("  movzb %%al, %%rax");
+    return;
+  case ND_LT:
+    // The flags of left - right, in 128 bits
+    println("  cmp %%rdi, %%rax");
+    println("  sbb %%rsi, %%rdx");
+    println("  set%s %%al", u ? "b" : "l");
+    println("  movzb %%al, %%rax");
+    return;
+  case ND_LE:
+    // right - left >= 0
+    println("  cmp %%rax, %%rdi");
+    println("  sbb %%rdx, %%rsi");
+    println("  set%s %%al", u ? "ae" : "ge");
+    println("  movzb %%al, %%rax");
+    return;
+  }
+  error_tok(node->tok, "invalid expression");
+}
+
+// The routines take a value in %rdx:%rax or on the x87 stack, and use
+// only caller-saved registers and the red zone.
+static void emit_int128_routines(void) {
+  if (!uses_int128_routines)
+    return;
+  println("  .text");
+
+  // udivmod: %rdx:%rax / %rsi:%rdi, unsigned. The quotient goes in
+  // %rdx:%rax, the remainder in %rsi:%rdi. A divisor below 2^64 takes
+  // two div instructions (dividing by 0 traps, as with gcc); a larger
+  // one, a bit at a time: each of the dividend's bits is shifted into
+  // the remainder, which is above the divisor if that carries out of it.
+  println(".L.int128.udivmod:");
+  println("  test %%rsi, %%rsi");
+  println("  jnz 1f");
+  println("  mov %%rax, %%r8");
+  println("  mov %%rdx, %%rax");
+  println("  xor %%edx, %%edx");
+  println("  div %%rdi");
+  println("  mov %%rax, %%r9");
+  println("  mov %%r8, %%rax");
+  println("  div %%rdi");
+  println("  mov %%rdx, %%rdi");
+  println("  mov %%r9, %%rdx");
+  println("  ret");
+  println("1:");
+  println("  xor %%r10, %%r10");
+  println("  xor %%r11, %%r11");
+  println("  mov $128, %%ecx");
+  println("2:");
+  println("  add %%rax, %%rax");
+  println("  adc %%rdx, %%rdx");
+  println("  adc %%r10, %%r10");
+  println("  adc %%r11, %%r11");
+  println("  jc 3f");
+  println("  cmp %%rdi, %%r10");
+  println("  mov %%r11, %%r8");
+  println("  sbb %%rsi, %%r8");
+  println("  jb 4f");
+  println("3:");
+  println("  sub %%rdi, %%r10");
+  println("  sbb %%rsi, %%r11");
+  println("  or $1, %%rax");
+  println("4:");
+  println("  dec %%ecx");
+  println("  jnz 2b");
+  println("  mov %%r10, %%rdi");
+  println("  mov %%r11, %%rsi");
+  println("  ret");
+
+  // divmod: signed, on the magnitudes. The quotient is negative if the
+  // signs differ; the remainder has the dividend's sign.
+  println(".L.int128.divmod:");
+  println("  push %%rdx");
+  println("  mov %%rdx, %%r8");
+  println("  xor %%rsi, %%r8");
+  println("  push %%r8");
+  println("  test %%rdx, %%rdx");
+  println("  jns 1f");
+  neg128("%rax", "%rdx");
+  println("1:");
+  println("  test %%rsi, %%rsi");
+  println("  jns 2f");
+  neg128("%rdi", "%rsi");
+  println("2:");
+  println("  call .L.int128.udivmod");
+  println("  pop %%r8");
+  println("  test %%r8, %%r8");
+  println("  jns 3f");
+  neg128("%rax", "%rdx");
+  println("3:");
+  println("  pop %%r8");
+  println("  test %%r8, %%r8");
+  println("  jns 4f");
+  neg128("%rdi", "%rsi");
+  println("4:");
+  println("  ret");
+
+  // to_f80u: to long double, the high half times 2^64 (a float at
+  // -12(%rsp)), exactly, plus the low half, rounded once
+  println(".L.int128.to_f80u:");
+  println("  movl $1602224128, -12(%%rsp)");
+  println("  mov %%rdx, -8(%%rsp)");
+  println("  fildq -8(%%rsp)");
+  println("  test %%rdx, %%rdx");
+  println("  jns 1f");
+  println("  fadds -12(%%rsp)");
+  println("1:");
+  println("  flds -12(%%rsp)");
+  println("  fmulp");
+  println("  mov %%rax, -8(%%rsp)");
+  println("  fildq -8(%%rsp)");
+  println("  test %%rax, %%rax");
+  println("  jns 2f");
+  println("  fadds -12(%%rsp)");
+  println("2:");
+  println("  faddp");
+  println("  ret");
+
+  println(".L.int128.to_f80:");
+  println("  test %%rdx, %%rdx");
+  println("  jns .L.int128.to_f80u");
+  neg128("%rax", "%rdx");
+  println("  call .L.int128.to_f80u");
+  println("  fchs");
+  println("  ret");
+
+  // to_f80u_sticky: for float and double, which a long double rounded
+  // from 128 bits would round a second time. A value of 2^64 or more is
+  // shifted right to 64 bits, keeping whether any one bits were shifted
+  // out in its lowest bit (the sticky bit), converted exactly, and
+  // scaled back up by a float power of two built in %ecx.
+  println(".L.int128.to_f80u_sticky:");
+  println("  test %%rdx, %%rdx");
+  println("  jz .L.int128.to_f80u");
+  println("  bsr %%rdx, %%rcx");
+  println("  mov $-2, %%r8");
+  println("  shl %%cl, %%r8");
+  println("  not %%r8");
+  println("  and %%rax, %%r8");
+  println("  shrd $1, %%rdx, %%rax");
+  println("  shr $1, %%rdx");
+  println("  shrd %%cl, %%rdx, %%rax");
+  println("  test %%r8, %%r8");
+  println("  setne %%r8b");
+  println("  movzbl %%r8b, %%r8d");
+  println("  or %%r8, %%rax");
+  println("  xor %%edx, %%edx");
+  println("  call .L.int128.to_f80u");
+  println("  add $128, %%ecx");
+  println("  shl $23, %%ecx");
+  println("  mov %%ecx, -4(%%rsp)");
+  println("  flds -4(%%rsp)");
+  println("  fmulp");
+  println("  ret");
+
+  println(".L.int128.to_f80_sticky:");
+  println("  test %%rdx, %%rdx");
+  println("  jns .L.int128.to_f80u_sticky");
+  neg128("%rax", "%rdx");
+  println("  call .L.int128.to_f80u_sticky");
+  println("  fchs");
+  println("  ret");
+
+  // from_f80u: the long double on the x87 stack, from 0 up to 2^128,
+  // truncated. The high half is the value times 2^-64 (exact),
+  // truncated; the low half is the rest, value - high * 2^64 (exact
+  // too). The value waits at -48(%rsp), below what the casts use.
+  println(".L.int128.from_f80u:");
+  println("  fstpt -48(%%rsp)");
+  println("  fldt -48(%%rsp)");
+  println("  movl $528482304, -32(%%rsp)");
+  println("  flds -32(%%rsp)");
+  println("  fmulp");
+  cast(ty_ldouble, ty_ulong);
+  println("  mov %%rax, -56(%%rsp)");
+  cast(ty_ulong, ty_ldouble);
+  println("  movl $1602224128, -32(%%rsp)");
+  println("  flds -32(%%rsp)");
+  println("  fmulp");
+  println("  fldt -48(%%rsp)");
+  println("  fsubrp");
+  println("  fchs");
+  cast(ty_ldouble, ty_ulong);
+  println("  mov -56(%%rsp), %%rdx");
+  println("  ret");
+
+  // from_f80: a negative value's magnitude, negated
+  println(".L.int128.from_f80:");
+  println("  fldz");
+  println("  fucomip");
+  println("  jbe .L.int128.from_f80u");
+  println("  fchs");
+  println("  call .L.int128.from_f80u");
+  neg128("%rax", "%rdx");
+  println("  ret");
 }
 
 //---------- Constant folding ------------------------------------------------
@@ -684,7 +1056,7 @@ static bool is_foldable(Node *node) {
   if (!node->ty)
     return false;
   bool is_ptr_cast = node->kind == ND_CAST && node->ty->kind == TY_PTR;
-  if (!is_integer(node->ty) && !is_ptr_cast)
+  if ((!is_integer(node->ty) && !is_ptr_cast) || is_int128(node->ty))
     return false;
 
   switch (node->kind) {
@@ -755,8 +1127,10 @@ static int64_t fold(Node *node) {
 
 //---------- Simple operands -------------------------------------------------
 
+// An integer or a pointer in %rax alone
 static bool is_int_or_ptr(Type *ty) {
-  return (is_integer(ty) && ty->kind != TY_BOOL) || ty->kind == TY_PTR;
+  return (is_integer(ty) && ty->kind != TY_BOOL && !is_int128(ty)) ||
+         ty->kind == TY_PTR;
 }
 
 // A local scalar variable, whose value can be read straight from the
@@ -928,7 +1302,7 @@ static void gen_va_arg(Node *node) {
   } else if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE) {
     nfp = 1;
   } else if (ty->kind != TY_LDOUBLE) {
-    ngp = 1;
+    ngp = is_int128(ty) ? 2 : 1;
   }
 
   if (ngp + nfp) {
@@ -1008,6 +1382,9 @@ static void push_args2(Node *args, bool first_pass) {
     println("  fstpt (%%rsp)");
     depth += 2;
     break;
+  case TY_INT128:
+    push128();
+    break;
   default:
     push();
   }
@@ -1076,6 +1453,16 @@ static int push_args(Node *node) {
       arg->pass_by_stack = true;
       arg->stack_pad = stack % 2;
       stack += arg->stack_pad + 2;
+      break;
+    case TY_INT128:
+      // Both halves in registers, or all of it on the stack
+      if (gp + 2 <= GP_MAX) {
+        gp += 2;
+      } else {
+        arg->pass_by_stack = true;
+        arg->stack_pad = stack % 2;
+        stack += arg->stack_pad + 2;
+      }
       break;
     default:
       if (gp++ >= GP_MAX) {
@@ -1314,7 +1701,7 @@ static void gen_branch(Node *cond, bool when, char *label) {
   case ND_NE:
   case ND_LT:
   case ND_LE:
-    if (is_flonum(cond->lhs->ty))
+    if (is_flonum(cond->lhs->ty) || is_int128(cond->lhs->ty))
       break;
     gen_operands(cond);
     if (is_64bit(cond->lhs->ty))
@@ -1441,6 +1828,8 @@ static void gen_expr(Node *node) {
     }
 
     println("  mov $%ld, %%rax", node->val);
+    if (is_int128(node->ty))
+      println("  cqo");
     return;
   }
   case ND_NEG:
@@ -1461,6 +1850,9 @@ static void gen_expr(Node *node) {
       return;
     case TY_LDOUBLE:
       println("  fchs");
+      return;
+    case TY_INT128:
+      neg128("%rax", "%rdx");
       return;
     }
 
@@ -1622,6 +2014,8 @@ static void gen_expr(Node *node) {
   case ND_BITNOT:
     gen_expr(node->lhs);
     println("  not %%rax");
+    if (is_int128(node->ty))
+      println("  not %%rdx");
     return;
   case ND_LOGAND: {
     int c = count();
@@ -1704,6 +2098,12 @@ static void gen_expr(Node *node) {
           popf(fp++);
         break;
       case TY_LDOUBLE:
+        break;
+      case TY_INT128:
+        if (!arg->pass_by_stack) {
+          pop(argreg64[gp++]);
+          pop(argreg64[gp++]);
+        }
         break;
       default:
         if (gp < GP_MAX)
@@ -2096,6 +2496,11 @@ static void gen_expr(Node *node) {
 
     error_tok(node->tok, "invalid expression");
   }
+  }
+
+  if (is_int128(node->lhs->ty)) {
+    gen_int128_binary(node);
+    return;
   }
 
   // Binary operators on integers and pointers
@@ -2660,7 +3065,7 @@ static void scan_uses(Node *node, int weight) {
 static bool can_be_in_register(Obj *fn, Obj *var) {
   Type *ty = var->ty;
   return !var->is_addr_taken && var != fn->alloca_bottom && !ty->is_atomic &&
-         (is_integer(ty) || ty->kind == TY_PTR);
+         ((is_integer(ty) && !is_int128(ty)) || ty->kind == TY_PTR);
 }
 
 // Gives the most used eligible variables of `fn` a register each.
@@ -2736,6 +3141,12 @@ static void assign_lvar_offsets(Obj *prog) {
           continue;
         break;
       case TY_LDOUBLE:
+        break;
+      case TY_INT128:
+        if (gp + 2 <= GP_MAX) {
+          gp += 2;
+          continue;
+        }
         break;
       default:
         if (gp++ < GP_MAX)
@@ -3049,6 +3460,10 @@ static void emit_text(Obj *prog) {
       case TY_DOUBLE:
         store_fp(fp++, var->offset, ty->size);
         break;
+      case TY_INT128:
+        store_gp(gp++, var->offset, 8);
+        store_gp(gp++, var->offset + 8, 8);
+        break;
       default:
         store_gp(gp++, var->offset, ty->size);
       }
@@ -3228,6 +3643,7 @@ static char *base_type_name(Type *ty, int *encoding) {
     if (ty->is_distinct)
       return u ? "unsigned long long" : "long long";
     return u ? "unsigned long" : "long";
+  case TY_INT128: return u ? "__int128 unsigned" : "__int128"; // as gcc names them
   case TY_FLOAT: *encoding = ATE_FLOAT; return "float";
   case TY_DOUBLE: *encoding = ATE_FLOAT; return "double";
   case TY_LDOUBLE: *encoding = ATE_FLOAT; return "long double";
@@ -3573,6 +3989,7 @@ void codegen(Obj *prog, FILE *out) {
     println(".L.text.start:");
   }
   emit_text(prog);
+  emit_int128_routines();
   if (opt_g) {
     println("  .text");
     println(".L.text.end:");

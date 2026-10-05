@@ -923,6 +923,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     OTHER    = 1 << 16,
     SIGNED   = 1 << 17,
     UNSIGNED = 1 << 18,
+    INT128   = 1 << 19,
   };
 
   Type *ty = ty_int;
@@ -1079,6 +1080,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       counter += INT;
     else if (equal(tok, "long"))
       counter += LONG;
+    else if (equal(tok, "__int128"))
+      counter += INT128;
     else if (equal(tok, "float"))
       counter += FLOAT;
     else if (equal(tok, "double"))
@@ -1154,6 +1157,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     case LONG + DOUBLE:
       ty = ty_ldouble;
       break;
+    case INT128:
+    case SIGNED + INT128:
+      ty = ty_int128;
+      break;
+    case UNSIGNED + INT128:
+      ty = ty_uint128;
+      break;
     default:
       error_tok(tok, "invalid type");
     }
@@ -1165,6 +1175,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     ty = copy_type(ty);
     ty->is_atomic = true;
   }
+  if (ty->is_atomic && is_int128(ty))
+    error_tok(tok, "_Atomic __int128 is not supported");
   ty = qualified(ty, is_const, is_volatile);
 
   *rest = tok;
@@ -2642,8 +2654,22 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     return cur;
   }
 
-  // A floating value converted as its type says: 1e19 to unsigned long.
+  // A 128-bit integer: a 64-bit value (see is_const_expr()), extended as
+  // its type says.
   add_type(init->expr);
+  if (is_int128(ty)) {
+    Type *from = init->expr->ty;
+    if (!is_integer(from))
+      error_tok(init->expr->tok, "a 128-bit constant must be a 64-bit integer "
+                                 "constant converted to __int128");
+    uint64_t val = eval(init->expr);
+    bool zero_ext = from->is_unsigned && !is_int128(from);
+    write_buf(buf + offset, val, 8);
+    write_buf(buf + offset + 8, !zero_ext && (int64_t)val < 0 ? -1 : 0, 8);
+    return cur;
+  }
+
+  // A floating value converted as its type says: 1e19 to unsigned long.
   if (is_flonum(init->expr->ty)) {
     write_buf(buf + offset, eval(new_cast(init->expr, ty)), ty->size);
     return cur;
@@ -2687,10 +2713,10 @@ static bool is_typename(Token *tok) {
 
   if (map.capacity == 0) {
     static char *kw[] = {
-      "void", "_Bool", "char", "short", "int", "long", "struct", "union",
-      "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
-      "const", "volatile", "auto", "register", "restrict", "__restrict",
-      "__restrict__", "_Noreturn", "float", "double", "typeof",
+      "void", "_Bool", "char", "short", "int", "long", "__int128", "struct",
+      "union", "typedef", "enum", "static", "extern", "_Alignas", "signed",
+      "unsigned", "const", "volatile", "auto", "register", "restrict",
+      "__restrict", "__restrict__", "_Noreturn", "float", "double", "typeof",
       "__typeof_unqual__", "inline",
       "_Thread_local", "__thread", "_Atomic", "constexpr", "__attribute__",
       "__attribute",
@@ -3210,6 +3236,8 @@ static Node *stmt(Token **rest, Token *tok) {
     if (!is_integer(node->cond->ty))
       error_tok(node->cond->tok, "switch on '%s', which is not an integer",
                 type_name(node->cond->ty));
+    if (is_int128(node->cond->ty))
+      error_tok(node->cond->tok, "switch on __int128 is not supported");
     tok = skip(tok, ")");
 
     Node *sw = current_switch;
@@ -3623,6 +3651,10 @@ static bool eval_truth(Node *node) {
 static int64_t eval2(Node *node, char ***label) {
   add_type(node);
 
+  if (is_int128(node->ty) && !is_const_expr(node))
+    error_tok(node->tok, "a 128-bit constant must be a 64-bit integer constant "
+                         "converted to __int128");
+
   if (is_flonum(node->ty))
     return eval_double(node);
 
@@ -3793,6 +3825,14 @@ static bool is_const_lvalue(Node *node) {
 
 static bool is_const_expr(Node *node) {
   add_type(node);
+
+  // A 128-bit constant is an integer constant converted to one, with a
+  // value that fits in 64 bits, which eval() computes exactly.
+  if (is_int128(node->ty))
+    return node->kind == ND_CAST && is_integer(node->lhs->ty) &&
+           !is_int128(node->lhs->ty) && is_const_expr(node->lhs) &&
+           (!node->lhs->ty->is_unsigned || node->lhs->ty->size < 8 ||
+            eval(node->lhs) >= 0);
 
   switch (node->kind) {
   case ND_ADDR:
@@ -4585,6 +4625,8 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       mem->idx = idx++;
 
       if (consume(&tok, tok, ":")) {
+        if (is_int128(mem->ty))
+          error_tok(tok, "a bit-field of type __int128 is not supported");
         mem->is_bitfield = true;
         mem->bit_width = const_expr(&tok, tok);
         tok = attributes(tok, &all, true);
@@ -7115,6 +7157,10 @@ static void declare_builtin_functions(void) {
   va_elem_ty->size = 24;
   va_elem_ty->align = 8;
   push_scope("__builtin_va_list")->type_def = array_of(va_elem_ty, 1);
+
+  // gcc's names for the 128-bit integers
+  push_scope("__int128_t")->type_def = ty_int128;
+  push_scope("__uint128_t")->type_def = ty_uint128;
 }
 
 // A token the parser sees in place of `at`. Its text lives in a

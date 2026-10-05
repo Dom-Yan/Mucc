@@ -382,7 +382,7 @@ static bool is_keyword(Token *tok) {
       "unsigned", "const", "volatile", "auto", "register", "restrict",
       "__restrict", "__restrict__", "_Noreturn", "float", "double",
       "typeof", "__typeof_unqual__", "asm", "_Thread_local", "__thread",
-      "_Atomic", "__attribute__", "_Static_assert",
+      "_Atomic", "__attribute__", "_Static_assert", "__int128",
     };
 
     // Before C23, these are ordinary names.

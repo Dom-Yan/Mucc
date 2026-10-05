@@ -175,9 +175,9 @@ the <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
     <code>typeof</code>, <code>[[attributes]]</code> and more</li>
   <li>The full preprocessor, VLAs, <code>_Generic</code>, atomics,
     thread-local variables, structs by value, varargs</li>
-  <li>GNU extensions: statement expressions, computed <code>goto</code>,
-    case ranges, <code>__attribute__</code>, extended <code>asm</code> and
-    <code>asm goto</code></li>
+  <li>GNU extensions: <code>__int128</code>, statement expressions,
+    computed <code>goto</code>, case ranges, <code>__attribute__</code>,
+    extended <code>asm</code> and <code>asm goto</code></li>
   <li>New in 1.1.0: Linux's own
     headers (<code>&lt;linux/*.h&gt;</code>), <code>.S</code> files,
     <code>&lt;stdckdint.h&gt;</code>, gcc's bit-counting, overflow and
@@ -188,11 +188,11 @@ the <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
     variables and types; gcc's <code>-Wall</code> warnings with
     <code>-Werror</code> and <code>-Wno-</code>; gcc's floating-point and C
     library builtins (<code>__builtin_isnan</code>,
-    <code>__builtin_memcpy</code>, ...)</li>
-  <li>Not supported: C++, <code>_Complex</code>, <code>__int128</code>,
-    <code>_BitInt</code>, K&amp;R function
-    definitions, and optimization beyond register allocation and constant
-    folding</li>
+    <code>__builtin_memcpy</code>, ...); <code>__int128</code> and
+    <code>asm goto</code></li>
+  <li>Not supported: C++, <code>_Complex</code>, <code>_BitInt</code>,
+    K&amp;R function definitions, and optimization beyond register
+    allocation and constant folding</li>
 </ul>
 
 <h2 id="stats">Statistics</h2>

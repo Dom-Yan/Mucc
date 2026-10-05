@@ -781,6 +781,7 @@ static void out_imm(Operand *imm, int size) {
 typedef enum {
   ALU,      // add or adc sbb and sub xor cmp: op is the /digit
   SHIFT,    // rol ror rcl rcr shl shr sar: op is the /digit
+  SHXD,     // shld, shrd: 0F op by %cl, 0F op-1 by an imm8
   UNARY,    // not neg mul div idiv (F6/F7): op is the /digit
   INCDEC,   // inc dec (FE/FF): op is the /digit
   IMUL,     // imul, one or two operands
@@ -827,6 +828,7 @@ static Insn insns[] = {
   {"and", ALU, 4}, {"sub", ALU, 5}, {"xor", ALU, 6}, {"cmp", ALU, 7},
   {"rol", SHIFT, 0}, {"ror", SHIFT, 1}, {"rcl", SHIFT, 2}, {"rcr", SHIFT, 3},
   {"shl", SHIFT, 4}, {"sal", SHIFT, 4}, {"shr", SHIFT, 5}, {"sar", SHIFT, 7},
+  {"shld", SHXD, 0xa5}, {"shrd", SHXD, 0xad},
   {"not", UNARY, 2}, {"neg", UNARY, 3}, {"mul", UNARY, 4},
   {"div", UNARY, 6}, {"idiv", UNARY, 7},
   {"inc", INCDEC, 0}, {"dec", INCDEC, 1},
@@ -986,7 +988,7 @@ static Insn *find_insn(char *name, int len) {
   switch (insn->kind) {
   case ALU: case SHIFT: case UNARY: case INCDEC: case IMUL: case MOV:
   case LEA: case PUSH: case TEST: case CMPXCHG: case XCHG: case REG_RM:
-  case BSWAP: case IO: {
+  case BSWAP: case IO: case SHXD: {
     Insn *sized = calloc(1, sizeof(Insn));
     *sized = *insn;
     sized->size = 1 << (s - suffix);
@@ -1279,6 +1281,23 @@ static void instruction(char *name, int len) {
   case SHIFT:
     encode_shift(insn, ops, n);
     return;
+  case SHXD: {
+    // shld count, src, dst: dst shifted, filled from src, by %cl or an imm8
+    if (n != 3 || !is_gp(&ops[1]))
+      fail("unsupported operands");
+    bool by_cl = is_gp(&ops[0]) && ops[0].reg->num == 1 && ops[0].reg->size == 1;
+    if (!by_cl && (ops[0].kind != OP_IMM || ops[0].sym))
+      fail("expected %%cl or a number as the count");
+    int size = op_size(insn, &ops[1], 2);
+    operand_prefixes(ops, n, size);
+    rex(size == 8, ops[1].reg->num, &ops[2], false);
+    out(0x0f);
+    out(by_cl ? insn->op : insn->op - 1);
+    modrm(ops[1].reg->num, &ops[2], by_cl ? 0 : 1);
+    if (!by_cl)
+      out(ops[0].val & 0xff);
+    return;
+  }
   case UNARY:
     encode_unary(insn, ops, n, 0xf6, insn->op);
     return;

@@ -423,6 +423,7 @@ typedef enum {
   TY_SHORT,
   TY_INT,
   TY_LONG,
+  TY_INT128, // __int128, in %rdx:%rax as a value (see cgen.c)
   TY_FLOAT,
   TY_DOUBLE,
   TY_LDOUBLE,
@@ -527,12 +528,15 @@ extern Type *ty_ushort;
 extern Type *ty_uint;
 extern Type *ty_ulong;
 extern Type *ty_ullong;
+extern Type *ty_int128;
+extern Type *ty_uint128;
 
 extern Type *ty_float;
 extern Type *ty_double;
 extern Type *ty_ldouble;
 
 bool is_integer(Type *ty);
+bool is_int128(Type *ty);
 bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
 bool has_ldouble(Type *ty);
