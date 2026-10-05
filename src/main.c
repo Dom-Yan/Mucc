@@ -32,6 +32,7 @@ static bool opt_E;
 static bool opt_P;
 static bool opt_M;
 static bool opt_MD;
+static bool opt_MD_driver; // -MD or -MMD itself, not through -Wp,
 static bool opt_MMD;
 static bool opt_MP;
 static bool opt_S;
@@ -627,7 +628,7 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strcmp(argv[i], "-MD")) {
-      opt_MD = true;
+      opt_MD = opt_MD_driver = true;
       continue;
     }
 
@@ -640,7 +641,7 @@ static void parse_args(int argc, char **argv) {
     }
 
     if (!strcmp(argv[i], "-MMD")) {
-      opt_MD = opt_MMD = true;
+      opt_MD = opt_MMD = opt_MD_driver = true;
       continue;
     }
 
@@ -1092,8 +1093,13 @@ static void print_dependencies(void) {
     path = "-";
 
   FILE *out = open_file(path);
+  // The target: -MT's, or with -MD, -c and -o, the object, as gcc's
+  // driver has it (`-c -o obj/x.o` is `obj/x.o:`), else the source's
+  // name as an object, as the preprocessor's own -MD (-Wp,-MD) has it
   if (opt_MT)
     fprintf(out, "%s:", opt_MT);
+  else if (opt_MD_driver && opt_o && opt_c)
+    fprintf(out, "%s:", quote_makefile(opt_o));
   else
     fprintf(out, "%s:", quote_makefile(replace_extn(base_file, ".o")));
 
@@ -1636,6 +1642,18 @@ int main(int argc, char **argv) {
     return run_ar(argc - 2, argv + 2);
   if (argc >= 2 && !strcmp(argv[1], "-ranlib"))
     return run_ranlib(argc - 2, argv + 2);
+
+  // The parser and code generator recurse as deep as code nests, and a
+  // chain like `a + a + ... + a` nests as deep as it is long, so the
+  // compiler, run as a new process below, gets a stack of up to 1 GB, as
+  // gcc's does. Only what it uses takes memory.
+  struct rlimit rl;
+  if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur != RLIM_INFINITY &&
+      rl.rlim_cur < (1UL << 30)) {
+    rl.rlim_cur = (rl.rlim_max != RLIM_INFINITY && rl.rlim_max < (1UL << 30))
+                    ? rl.rlim_max : (1UL << 30);
+    setrlimit(RLIMIT_STACK, &rl);
+  }
 
   atexit(cleanup);
   set_std(argc, argv);

@@ -62,6 +62,7 @@
 #include <stdnoreturn.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>

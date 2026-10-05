@@ -7374,17 +7374,27 @@ static void warn_switch(Node *sw) {
 
 // -Wunused-function: a static function that is defined and never used,
 // in the order they were defined (the list is newest first).
-static void warn_unused_functions(Obj *fn) {
-  if (!fn)
-    return;
-  warn_unused_functions(fn->next);
-  if (fn->is_function && fn->is_definition && fn->is_static && !fn->is_inline &&
-      !fn->is_used && !fn->is_kept && !fn->is_ctor && !fn->is_dtor && fn->tok) {
+static void warn_unused_functions(Obj *globals) {
+  int n = 0;
+  for (Obj *fn = globals; fn; fn = fn->next)
+    n++;
+  Obj **fns = calloc(n, sizeof(Obj *));
+  int i = n;
+  for (Obj *fn = globals; fn; fn = fn->next)
+    fns[--i] = fn;
+
+  for (i = 0; i < n; i++) {
+    Obj *fn = fns[i];
+    if (!fn->is_function || !fn->is_definition || !fn->is_static || fn->is_inline ||
+        fn->is_used || fn->is_kept || fn->is_ctor || fn->is_dtor || !fn->tok)
+      continue;
+    bool aliased = false;
     for (Obj *var = globals; var; var = var->next)
-      if (var->alias_target && !strcmp(var->alias_target, fn->name))
-        return;
-    warn_opt("unused-function", fn->tok, "'%s' defined but not used", fn->name);
+      aliased |= var->alias_target && !strcmp(var->alias_target, fn->name);
+    if (!aliased)
+      warn_opt("unused-function", fn->tok, "'%s' defined but not used", fn->name);
   }
+  free(fns);
 }
 
 // Warns about each local variable that is declared but never named
@@ -7862,36 +7872,31 @@ static bool is_function(Token *tok, Type *basety) {
   return ty->kind == TY_FUNC || (ty == &dummy && basety->kind == TY_FUNC);
 }
 
-// Remove redundant tentative definitions.
+// Remove redundant tentative definitions: a tentative one is dropped if
+// the same name has a definition with an initializer, or a tentative one
+// kept already (`int x; int x;` keeps the first, so exactly one of them
+// is emitted). Names are looked up in hash maps, as a file may have
+// 100,000 globals.
 static void scan_globals(void) {
+  HashMap real = {};  // names with a definition that isn't tentative
+  HashMap first = {}; // each name's first definition in `globals`
+  for (Obj *var = globals; var; var = var->next) {
+    if (!var->is_definition)
+      continue;
+    if (!var->is_tentative)
+      hashmap_put(&real, var->name, var);
+    if (!hashmap_get(&first, var->name))
+      hashmap_put(&first, var->name, var);
+  }
+
   Obj head;
   Obj *cur = &head;
-
   for (Obj *var = globals; var; var = var->next) {
-    if (!var->is_tentative) {
-      cur = cur->next = var;
+    if (var->is_tentative &&
+        (hashmap_get(&real, var->name) ||
+         (var->is_definition && hashmap_get(&first, var->name) != var)))
       continue;
-    }
-
-    // Find another definition of the same identifier: one with an
-    // initializer, or a tentative one kept already (`int x; int x;`
-    // keeps the first, so exactly one of them is emitted).
-    Obj *var2 = globals;
-    bool is_before = true;
-    for (; var2; var2 = var2->next) {
-      if (var2 == var) {
-        is_before = false;
-        continue;
-      }
-      if (var2->is_definition && !strcmp(var->name, var2->name) &&
-          (!var2->is_tentative || is_before))
-        break;
-    }
-
-    // If there's another definition, the tentative definition
-    // is redundant
-    if (!var2)
-      cur = cur->next = var;
+    cur = cur->next = var;
   }
 
   cur->next = NULL;

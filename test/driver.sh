@@ -640,6 +640,28 @@ $mucc -funroll-loops -finline-functions -fno-inline -ftree-vectorize \
     -o $tmp/v $tmp/v.c && $tmp/v
 check 'ignored flags'
 
+# Wide code: a chain of 50,000 `+` nests that deep in the parser, and
+# 50,000 globals must not take quadratic time
+{
+    printf 'int f(int a) { return a'
+    for i in $(seq 50000); do printf '+a'; done
+    printf '; }\nint main() { return f(1) != 50001; }\n'
+} > $tmp/wide.c
+$mucc -o $tmp/wide $tmp/wide.c && $tmp/wide
+check 'a chain of 50,000 operators'
+{
+    for i in $(seq 50000); do echo "int g$i;"; done
+    echo 'int main() { return g7; }'
+} > $tmp/globals.c
+timeout 10 $mucc -o $tmp/globals $tmp/globals.c && $tmp/globals
+check '50,000 globals'
+
+# -MD with -c -o: the target is the object, as with gcc
+mkdir -p $tmp/obj
+echo 'int x;' > $tmp/md.c
+$mucc -MD -c -o $tmp/obj/md.o $tmp/md.c && grep -q "^$tmp/obj/md.o:" $tmp/obj/md.d
+check '-MD target with -o'
+
 # -march= and -mtune= are accepted and ignored
 echo 'int main() { return 0; }' > $tmp/march.c
 $mucc -march=native -mtune=generic -o $tmp/march $tmp/march.c && $tmp/march
