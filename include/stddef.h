@@ -6,7 +6,11 @@
 typedef unsigned long size_t;
 typedef long ptrdiff_t;
 typedef int wchar_t;
-typedef long max_align_t;
+// As gcc has it: 32 bytes, aligned to 16, like long double
+typedef struct {
+  long long __max_align_ll __attribute__((__aligned__(__alignof__(long long))));
+  long double __max_align_ld __attribute__((__aligned__(__alignof__(long double))));
+} max_align_t;
 #if __STDC_VERSION__ >= 202311L
 typedef typeof(nullptr) nullptr_t;
 #endif

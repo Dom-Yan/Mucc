@@ -41,6 +41,10 @@ int main() {
   ASSERT(1, 0);
 #endif
 
+  // max_align_t as gcc has it, so malloc-style allocators align to 16
+  ASSERT(16, _Alignof(max_align_t));
+  ASSERT(32, sizeof(max_align_t));
+
   printf("OK\n");
   return 0;
 }
