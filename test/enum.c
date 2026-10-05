@@ -17,6 +17,11 @@ enum fwd *fwd_ptr;
 enum fwd { FWD_A, FWD_B = 7 };
 enum fwd fwd_var = FWD_B;
 
+// An enum wider than int keeps its width in arithmetic and comparisons.
+enum { WIDE_BIG = 0x7fffffffffffLL };
+enum WideC { WIDE_C1 = 0x100000000LL, WIDE_C3 = -0x100000000LL };
+enum WideU { WIDE_U1 = 0xffffffffffffffffULL };
+
 int main() {
   ASSERT(0, ({ enum { zero, one, two }; zero; }));
   ASSERT(1, ({ enum { zero, one, two }; one; }));
@@ -51,6 +56,14 @@ int main() {
 
   ASSERT(7, fwd_var);
   ASSERT(1, ({ fwd_ptr = &fwd_var; *fwd_ptr == FWD_B; }));
+
+  ASSERT(1, WIDE_BIG * 2 == 281474976710654LL);
+  ASSERT(1, WIDE_C1 > 0);
+  ASSERT(1, WIDE_C3 < 0);
+  ASSERT(1, ({ enum WideC c = WIDE_C3; c < 0; }));
+  ASSERT(1, WIDE_U1 > 0);
+  ASSERT(8, sizeof(WIDE_C1 + 0));
+  ASSERT(1, ~WIDE_C1 == -4294967297LL);
 
   printf("OK\n");
   return 0;

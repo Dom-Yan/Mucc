@@ -1252,7 +1252,31 @@ static bool has_flonum(Type *ty, int lo, int hi, int offset) {
     return true;
   }
 
-  return offset < lo || hi <= offset || ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
+  // A scalar outside the range, or a float or double. (A 16-byte one,
+  // like __int128, reaches into the upper half from offset 0.)
+  return offset + ty->size <= lo || hi <= offset ||
+         ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
+}
+
+// Does `ty` have anything (not only padding) in its byte range [lo, hi)?
+static bool has_data(Type *ty, int lo, int hi, int offset) {
+  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      if (has_data(mem->ty, lo, hi, offset + mem->offset))
+        return true;
+    return false;
+  }
+  if (ty->kind == TY_ARRAY)
+    return ty->array_len > 0 && offset < hi &&
+           offset + ty->size > lo; // its elements fill it
+  return offset < hi && offset + ty->size > lo;
+}
+
+// Is a struct or union of 16 bytes or less passed in two registers? Not
+// if its upper 8 bytes are only padding, as in
+// `struct { float f; } __attribute__((aligned(16)))`: they take none.
+static bool has_two_parts(Type *ty) {
+  return ty->size > 8 && has_data(ty, 8, 16, 0);
 }
 
 static bool has_flonum1(Type *ty) {
@@ -1273,7 +1297,7 @@ static void struct_regs(Type *ty, int *ngp, int *nfp) {
   else
     (*ngp)++;
 
-  if (ty->size > 8) {
+  if (has_two_parts(ty)) {
     if (has_flonum2(ty))
       (*nfp)++;
     else
@@ -1291,7 +1315,7 @@ static bool struct_in_regs(Type *ty, int gp, int fp) {
   // An empty struct (GNU) takes no register, and no stack either (its
   // size rounds up to 0 bytes there). One holding a long double goes on
   // the stack.
-  if (ty->size > 16 || ty->size == 0 || has_ldouble(ty))
+  if (ty->size > 16 || ty->size == 0 || has_ldouble(ty) || has_unaligned_member(ty))
     return false;
   int ngp, nfp;
   struct_regs(ty, &ngp, &nfp);
@@ -1311,7 +1335,7 @@ static void gen_va_arg(Node *node) {
 
   int ngp = 0, nfp = 0;
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
-    if (ty->size <= 16 && !has_ldouble(ty))
+    if (ty->size <= 16 && ty->size && !has_ldouble(ty) && !has_unaligned_member(ty))
       struct_regs(ty, &ngp, &nfp);
   } else if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE) {
     nfp = 1;
@@ -1331,7 +1355,8 @@ static void gen_va_arg(Node *node) {
     }
 
     // Each 8-byte part, from a general-purpose or an XMM register
-    int nparts = ty->size > 8 ? 2 : 1;
+    int nparts = (ty->kind == TY_STRUCT || ty->kind == TY_UNION) ? 1 + has_two_parts(ty)
+                                                                  : ngp + nfp;
     for (int i = 0; i < nparts; i++) {
       bool fp = ty->kind == TY_STRUCT || ty->kind == TY_UNION
                   ? has_flonum(ty, i * 8, i * 8 + 8, 0) : nfp > 0;
@@ -1366,7 +1391,12 @@ static void push_struct(Type *ty) {
   println("  sub $%d, %%rsp", sz);
   depth += sz / 8;
 
-  for (int i = 0; i < ty->size; i++) {
+  int i = 0;
+  for (; i + 8 <= ty->size; i += 8) {
+    println("  mov %d(%%rax), %%r10", i);
+    println("  mov %%r10, %d(%%rsp)", i);
+  }
+  for (; i < ty->size; i++) {
     println("  mov %d(%%rax), %%r10b", i);
     println("  mov %%r10b, %d(%%rsp)", i);
   }
@@ -1536,7 +1566,7 @@ static void copy_ret_buffer(Obj *var) {
     gp++;
   }
 
-  if (ty->size > 8) {
+  if (has_two_parts(ty)) {
     if (has_flonum2(ty)) {
       assert(ty->size == 12 || ty->size == 16);
       if (ty->size == 12)
@@ -1586,7 +1616,7 @@ static void copy_struct_reg(void) {
     gp++;
   }
 
-  if (ty->size > 8) {
+  if (has_two_parts(ty)) {
     if (has_flonum(ty, 8, 16, 0)) {
       assert(ty->size == 12 || ty->size == 16);
       if (ty->size == 4)
@@ -1611,10 +1641,19 @@ static void copy_struct_mem(void) {
 
   println("  mov %s, %%rdi", var_operand(var));
 
-  for (int i = 0; i < ty->size; i++) {
+  int i = 0;
+  for (; i + 8 <= ty->size; i += 8) {
+    println("  mov %d(%%rax), %%rdx", i);
+    println("  mov %%rdx, %d(%%rdi)", i);
+  }
+  for (; i < ty->size; i++) {
     println("  mov %d(%%rax), %%dl", i);
     println("  mov %%dl, %d(%%rdi)", i);
   }
+
+  // As the psABI says, the buffer's address comes back in %rax: a caller
+  // reads the value from there.
+  println("  mov %%rdi, %%rax");
 }
 
 static void builtin_alloca(void) {
@@ -2104,11 +2143,15 @@ static void gen_expr(Node *node) {
         else
           pop(argreg64[gp++]);
 
-        if (ty->size > 8) {
+        if (has_two_parts(ty)) {
           if (has_flonum2(ty))
             popf(fp++);
           else
             pop(argreg64[gp++]);
+        } else if (ty->size > 8) {
+          // Padding, pushed but in no register
+          println("  add $8, %%rsp");
+          depth--;
         }
         break;
       case TY_FLOAT:
@@ -3354,14 +3397,15 @@ static void emit_data(Obj *prog) {
       else
         println(ro ? "  .section .rodata" : "  .data");
 
+      int size = var->ty->size + var->flex_size;
       println("  .type %s, @object", var->name);
-      println("  .size %s, %d", var->name, var->ty->size);
+      println("  .size %s, %d", var->name, size);
       println("  .align %d", align);
       println("%s:", var->name);
 
       Relocation *rel = var->rel;
       int pos = 0;
-      while (pos < var->ty->size) {
+      while (pos < size) {
         if (rel && rel->offset == pos) {
           println("  .quad %s%+ld", *rel->label, rel->addend);
           rel = rel->next;
@@ -3494,7 +3538,7 @@ static void emit_text(Obj *prog) {
         else
           store_gp(gp++, var->offset, MIN(8, ty->size));
 
-        if (ty->size > 8) {
+        if (has_two_parts(ty)) {
           if (has_flonum(ty, 8, 16, 0))
             store_fp(fp++, var->offset + 8, ty->size - 8);
           else

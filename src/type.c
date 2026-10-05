@@ -80,6 +80,21 @@ static void count_ldouble(Type *ty, int *nld, int *nother) {
   }
 }
 
+// Does `ty` have a member at an offset its type's alignment doesn't
+// divide, as a packed struct may? The psABI passes and returns such a
+// struct in memory.
+bool has_unaligned_member(Type *ty) {
+  if (ty->kind == TY_ARRAY)
+    return has_unaligned_member(ty->base);
+  if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
+    return false;
+  for (Member *mem = ty->members; mem; mem = mem->next)
+    if (!mem->is_bitfield &&
+        (mem->offset % mem->ty->align || has_unaligned_member(mem->ty)))
+      return true;
+  return false;
+}
+
 // Does struct or union `ty` hold a long double? Then, in 16 bytes or
 // less (the psABI's X87 class), it's passed on the stack, not in
 // registers.
@@ -96,7 +111,7 @@ bool has_ldouble(Type *ty) {
 bool is_ret_in_memory(Type *ty) {
   if (is_complex(ty))
     return false;
-  if (ty->size > 16)
+  if (ty->size > 16 || has_unaligned_member(ty))
     return true;
   int nld = 0, nother = 0;
   count_ldouble(ty, &nld, &nother);
@@ -299,6 +314,17 @@ static Type *real_type(Type *ty) {
 
 //---------- Typing AST nodes ------------------------------------------------
 
+// The integer type an enum of 4 or 8 bytes is stored as: int or unsigned,
+// or for a wider one (`enum { BIG = 1LL << 40 }`, `enum : long long`),
+// long or long long
+static Type *enum_int_type(Type *ty) {
+  if (ty->size == 8 && ty->is_distinct)
+    return ty->is_unsigned ? ty_ullong : ty_llong;
+  if (ty->size == 8)
+    return ty->is_unsigned ? ty_ulong : ty_long;
+  return ty->is_unsigned ? ty_uint : ty_int;
+}
+
 static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
     return pointer_to(ty1->base);
@@ -320,15 +346,15 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT)
     return ty_float;
 
-  // Integer promotion: an enum is its int or unsigned int.
+  // Integer promotion: an enum is the integer type it is stored as.
   if (ty1->size < 4)
     ty1 = ty_int;
   else if (ty1->kind == TY_ENUM)
-    ty1 = ty1->is_unsigned ? ty_uint : ty_int;
+    ty1 = enum_int_type(ty1);
   if (ty2->size < 4)
     ty2 = ty_int;
   else if (ty2->kind == TY_ENUM)
-    ty2 = ty2->is_unsigned ? ty_uint : ty_int;
+    ty2 = enum_int_type(ty2);
 
   if (ty1->size != ty2->size)
     return unqual(ty1->size < ty2->size ? ty2 : ty1);

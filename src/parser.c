@@ -1589,6 +1589,7 @@ static Type *enum_specifier(Token **rest, Token *tok) {
   int i = 0;
   int64_t val = 0;
   int64_t min = 0, max = 0;
+  bool huge = false; // a value of 2^63 or more, as unsigned long
   EnumConst head = {};
   EnumConst *last = &head;
   while (!consume_end(rest, tok)) {
@@ -1606,7 +1607,10 @@ static Type *enum_specifier(Token **rest, Token *tok) {
 
     if (equal(tok, "=")) {
       val_tok = tok->next;
-      val = const_expr(&tok, tok->next);
+      Node *e = conditional(&tok, tok->next);
+      add_type(e);
+      val = eval(e);
+      huge |= e->ty->is_unsigned && e->ty->size == 8 && val < 0;
     }
 
     if (fixed && !fits_in(val, fixed))
@@ -1617,11 +1621,15 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     max = (i == 1) ? val : MAX(max, val);
     if (!fixed)
       set_enum_type(ty, min, max);
+    if (!fixed && huge) {
+      ty->size = ty->align = 8;
+      ty->is_unsigned = true;
+    }
 
     // A constant is an int if its value fits one, and otherwise has the
     // enum's type, as with gcc.
     VarScope *sc = push_scope(name);
-    sc->enum_ty = (fixed || val != (int)val) ? ty : ty_int;
+    sc->enum_ty = (fixed || huge || val != (int)val) ? ty : ty_int;
     sc->enum_val = val;
 
     last = last->next = arena_alloc(sizeof(EnumConst));
@@ -1981,6 +1989,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
         ty = peek_auto_type(tok->next);
       Obj *var = new_anon_gvar(ty);
       var->align = MAX(var->align, all.align);
+      if (attr->align) // _Alignas
+        var->align = MAX(var->align, attr->align);
       push_scope(get_ident(name))->var = var;
       if (is_constexpr)
         peek_constexpr_value(var, tok->next);
@@ -2766,13 +2776,22 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
 // objects to a flat byte array. It is a compile error if an
 // initializer list contains a non-constant expression.
 static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
-  Initializer *init = initializer(rest, tok, var->ty, &var->ty);
+  Type *decl_ty = var->ty;
+  Type *ty;
+  Initializer *init = initializer(rest, tok, decl_ty, &ty);
 
   Relocation head = {};
-  char *buf = calloc(1, var->ty->size);
-  write_gvar_data(&head, init, var->ty, buf, 0);
+  char *buf = calloc(1, ty->size);
+  write_gvar_data(&head, init, ty, buf, 0);
   var->init_data = buf;
   var->rel = head.next;
+
+  // An initialized flexible array member makes the object larger than
+  // its type, which sizeof still gives, as with gcc.
+  if ((decl_ty->kind == TY_STRUCT || decl_ty->kind == TY_UNION) && decl_ty->is_flexible)
+    var->flex_size = ty->size - decl_ty->size;
+  else
+    var->ty = ty;
 }
 
 //---------- Type names and _Static_assert -----------------------------------
@@ -6973,8 +6992,9 @@ static void eval_complex(Node *node, long double *re, long double *im) {
 // code: here are the functions it calls. None is given in system
 // headers or with -w.
 
-// C library functions that never return. glibc marks them with
-// __attribute__((noreturn)), which mucc doesn't read, so they're listed.
+// C library functions that never return, when a system header declares
+// them. glibc marks them with __attribute__((noreturn)), which it hides
+// from compilers other than gcc, so they're listed.
 static bool is_libc_noreturn(char *name) {
   static char *names[] = {
     "abort", "exit", "_exit", "_Exit", "quick_exit", "longjmp", "_longjmp",
@@ -7621,7 +7641,10 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn->is_static = attr->is_static ||
                     (attr->is_inline && !attr->is_extern && !da.gnu_inline_tok);
     fn->is_inline = attr->is_inline;
-    fn->is_noreturn = is_noreturn || is_libc_noreturn(name_str);
+    // A program's own function named like one (gawk has an err()) may
+    // return, so only the C library's declaration counts.
+    fn->is_noreturn = is_noreturn ||
+                      (is_libc_noreturn(name_str) && in_system_header(ty->name));
   }
 
   // Where it's defined (or first declared), for warnings

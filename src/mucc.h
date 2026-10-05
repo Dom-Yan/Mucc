@@ -217,6 +217,8 @@ struct Obj {
   bool is_tls;
   bool is_string; // a string literal, which goes in .rodata
   char *init_data;
+  int flex_size;      // the bytes an initialized flexible array member
+                      // adds after the type's size
   Relocation *rel;
 
   // C23 constexpr scalar: its value, for use in constant expressions
@@ -562,6 +564,7 @@ bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
 bool has_ldouble(Type *ty);
 bool is_ret_in_memory(Type *ty);
+bool has_unaligned_member(Type *ty);
 bool is_compatible(Type *t1, Type *t2);
 Type *copy_type(Type *ty);
 Type *qualified(Type *ty, bool is_const, bool is_volatile);

@@ -263,6 +263,53 @@ long double to_ldouble(int x) {
   return x;
 }
 
+// A program's own function named like a C library one that doesn't
+// return (gawk has an err()) returns.
+static int err_calls;
+static void err(int x) { err_calls += x; }
+static int after_err(int x) {
+  if (x) {
+    err(x);
+    return 2;
+  }
+  return 3;
+}
+
+// A struct of more than 16 bytes comes back through the hidden pointer,
+// which is also returned in %rax, so a call can be an argument.
+struct Big { long a[4]; };
+struct Odd { char c[41]; };
+static struct Big make_big(void) { struct Big b = {{1, 2, 3, 4}}; return b; }
+static struct Odd make_odd(int k) {
+  struct Odd o;
+  for (int i = 0; i < 41; i++)
+    o.c[i] = i * k;
+  return o;
+}
+static long sum_big(struct Big b) { return b.a[0] * 1000 + b.a[1] * 100 + b.a[2] * 10 + b.a[3]; }
+static int sum_odd(struct Odd o) {
+  int s = 0;
+  for (int i = 0; i < 41; i++)
+    s += o.c[i];
+  return s;
+}
+
+// Struct shapes the psABI classifies with care: an __int128 member is
+// two INTEGER halves, an upper half of padding takes no register, and a
+// packed struct with a misaligned member goes in memory.
+typedef struct { __int128 i; } S128;
+typedef struct { float f; } __attribute__((aligned(16))) SA16;
+typedef struct __attribute__((packed)) { char a; double d; } P9;
+typedef struct __attribute__((packed)) { char a; int b; long c; } P13;
+static long s128_arg(S128 s, long x) { return (long)(s.i >> 64) * 1000 + (long)s.i + x; }
+static S128 s128_ret(long x) { S128 s = {((__int128)x << 64) | 7}; return s; }
+static double sa16_arg(SA16 s, double d) { return s.f + d; }
+static SA16 sa16_ret(float f) { SA16 s = {f * 2}; return s; }
+static double p9_arg(P9 p, long x) { return p.a + p.d + x; }
+static P9 p9_ret(double d) { P9 p = {3, d}; return p; }
+static long p13_arg(P13 p, long x) { return p.a * 100 + p.b * 10 + p.c + x; }
+static P13 p13_ret(long c) { P13 p = {1, 2, c}; return p; }
+
 int main() {
   ASSERT(3, ret3());
   ASSERT(8, add2(3, 5));
@@ -459,6 +506,20 @@ int main() {
 
   ASSERT(1, to_ldouble(5.0) == 5.0);
   ASSERT(0, to_ldouble(5.0) == 5.2);
+
+  ASSERT(2, after_err(5));
+  ASSERT(5, err_calls);
+  ASSERT(1234, sum_big(make_big()));
+  ASSERT(3, make_big().a[2]);
+  ASSERT(1640, sum_odd(make_odd(2)));
+  ASSERT(5010, ({ S128 s = {((__int128)5 << 64) | 9}; s128_arg(s, 1); }));
+  ASSERT(18, ({ S128 r = s128_ret(11); (long)(r.i >> 64) + (long)r.i; }));
+  ASSERT(5, ({ SA16 a = {1.5f}; (int)(sa16_arg(a, 1.0) * 2); }));
+  ASSERT(9, (int)(sa16_ret(2.25f).f * 2));
+  ASSERT(21, ({ P9 p = {2, 0.25}; (int)(p9_arg(p, 3) * 4); }));
+  ASSERT(30, ({ P9 r = p9_ret(7.5); (int)(r.a * r.d * 4 / 3); }));
+  ASSERT(463, ({ P13 q = {4, 5, 6}; p13_arg(q, 7); }));
+  ASSERT(9, p13_ret(9).c);
 
   printf("OK\n");
 }

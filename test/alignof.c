@@ -44,6 +44,11 @@ int main() {
   ASSERT(0, ({ char x[100]; (unsigned long)&x % 16; }));
   ASSERT(0, ({ char x[101]; (unsigned long)&x % 16; }));
 
+  // _Alignas on a static local, in any of its places
+  ASSERT(0, ({ static _Alignas(128) int a; (long)&a % 128; }));
+  ASSERT(0, ({ _Alignas(128) static int b; (long)&b % 128; }));
+  ASSERT(0, ({ static int _Alignas(128) c; (long)&c % 128; }));
+
   printf("OK\n");
   return 0;
 }

@@ -64,6 +64,13 @@ int g_dist_a[10];
 long g_dist1 = (long)&g_dist_a[3] - (long)&g_dist_a[0];
 long g_dist2 = (unsigned long)&g_dist_a[9] - (unsigned long)g_dist_a;
 
+// An initialized flexible array member makes the object bigger, but not
+// its sizeof, which is its type's.
+struct FlexInit { int n; char s[]; };
+static struct FlexInit flex_init = {3, "flex"};
+struct FlexInit flex_init2 = {1, "abcdefgh"};
+int after_flex_init = 77;
+
 int main() {
   ASSERT(1, neg1 == -4);
   ASSERT(1, neg2 == -4UL);
@@ -218,8 +225,8 @@ int main() {
   ASSERT(3, sizeof(g60));
   ASSERT(6, sizeof(g61));
 
-  ASSERT(4, sizeof(g65));
-  ASSERT(7, sizeof(g66));
+  ASSERT(1, sizeof(g65));
+  ASSERT(1, sizeof(g66));
   ASSERT(0, strcmp(g65.b, "oo"));
   ASSERT(0, strcmp(g66.b, "oobar"));
 
@@ -250,8 +257,8 @@ int main() {
   ASSERT(3, sizeof(g60));
   ASSERT(6, sizeof(g61));
 
-  ASSERT(4, sizeof(g65));
-  ASSERT(7, sizeof(g66));
+  ASSERT(1, sizeof(g65));
+  ASSERT(1, sizeof(g66));
   ASSERT(0, strcmp(g65.b, "oo"));
   ASSERT(0, strcmp(g66.b, "oobar"));
 
@@ -320,6 +327,12 @@ int main() {
 
   ASSERT(12, g_dist1);
   ASSERT(36, g_dist2);
+
+  ASSERT(4, sizeof flex_init);
+  ASSERT(4, sizeof flex_init2);
+  ASSERT(0, strcmp(flex_init2.s, "abcdefgh"));
+  ASSERT(0, strcmp(flex_init.s, "flex"));
+  ASSERT(77, after_flex_init);
 
   printf("OK\n");
   return 0;
