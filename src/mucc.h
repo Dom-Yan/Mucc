@@ -341,8 +341,13 @@ typedef struct {
 } AsmOperand;
 
 // AST node type
+// There is one for each part of every expression and statement, which is
+// hundreds of thousands for a big file, so what only a few kinds use
+// shares space in the union at the end.
 struct Node {
   NodeKind kind; // Node kind
+  bool pass_by_stack; // Function call: see below
+  bool stack_pad;
   Node *next;    // Next node
   Type *ty;      // Type, e.g. int or pointer to int
   Token *tok;    // Representative token
@@ -367,11 +372,10 @@ struct Node {
   // Struct member access
   Member *member;
 
-  // Function call
+  // Function call. `pass_by_stack` (at the top) says it goes on the stack,
+  // and `stack_pad`, with 8 bytes of padding before it.
   Type *func_ty;
   Node *args;
-  bool pass_by_stack;
-  bool stack_pad;     // 8 bytes of padding before it on the stack
   Obj *ret_buffer;
 
   // Goto or labeled statement, or labels-as-values. A goto, break or
@@ -386,34 +390,37 @@ struct Node {
   Node *case_next;
   Node *default_case;
 
-  // Case
-  long begin;
-  long end;
-
-  // "asm" string literal. With operands (or any ':'), `%` in it refers to
-  // them; `body` computes their values and addresses first.
-  char *asm_str;
-  bool asm_extended;
-  AsmOperand *asm_ops; // outputs, then inputs
-  int asm_nops;
-  int asm_scratch;     // a register free after the asm, to store outputs
-  Node *asm_labels;    // asm goto's labels: ND_GOTOs, linked by `next`
 
   // Atomic compare-and-swap
   Node *cas_addr;
   Node *cas_old;
   Node *cas_new;
 
-  // Atomic op= operators
-  Obj *atomic_addr;
-  Node *atomic_expr;
-
   // Variable
   Obj *var;
 
   // Numeric literal
   int64_t val;
-  long double fval;
+  long double *fval; // of a floating type
+
+  union {
+    // Case: `case begin ... end:`
+    struct {
+      long begin;
+      long end;
+    };
+
+    // "asm" string literal. With operands (or any ':'), `%` in it refers
+    // to them; `body` computes their values and addresses first.
+    struct {
+      char *asm_str;
+      AsmOperand *asm_ops; // outputs, then inputs
+      Node *asm_labels;    // asm goto's labels: ND_GOTOs, linked by `next`
+      int asm_nops;
+      int asm_scratch;     // a register free after the asm, to store outputs
+      bool asm_extended;
+    };
+  };
 };
 
 Node *new_cast(Node *expr, Type *ty);

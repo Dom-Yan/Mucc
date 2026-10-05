@@ -1822,22 +1822,22 @@ static void gen_expr(Node *node) {
   case ND_NUM: {
     switch (node->ty->kind) {
     case TY_FLOAT: {
-      union { float f32; uint32_t u32; } u = { node->fval };
-      println("  mov $%u, %%eax  # float %Lf", u.u32, node->fval);
+      union { float f32; uint32_t u32; } u = { *node->fval };
+      println("  mov $%u, %%eax  # float %Lf", u.u32, *node->fval);
       println("  movq %%rax, %%xmm0");
       return;
     }
     case TY_DOUBLE: {
-      union { double f64; uint64_t u64; } u = { node->fval };
-      println("  mov $%lu, %%rax  # double %Lf", u.u64, node->fval);
+      union { double f64; uint64_t u64; } u = { *node->fval };
+      println("  mov $%lu, %%rax  # double %Lf", u.u64, *node->fval);
       println("  movq %%rax, %%xmm0");
       return;
     }
     case TY_LDOUBLE: {
       union { long double f80; uint64_t u64[2]; } u;
       memset(&u, 0, sizeof(u));
-      u.f80 = node->fval;
-      println("  mov $%lu, %%rax  # long double %Lf", u.u64[0], node->fval);
+      u.f80 = *node->fval;
+      println("  mov $%lu, %%rax  # long double %Lf", u.u64[0], *node->fval);
       println("  mov %%rax, -16(%%rsp)");
       println("  mov $%lu, %%rax", u.u64[1]);
       println("  mov %%rax, -8(%%rsp)");

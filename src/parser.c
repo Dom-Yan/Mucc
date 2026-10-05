@@ -3866,7 +3866,7 @@ static int64_t eval_wide(Node *node, char ***label) {
       eval_complex(node->lhs, &re, &im);
       if (node->ty->kind == TY_BOOL)
         return re != 0 || im != 0;
-      Node tmp = {.kind = ND_NUM, .tok = node->tok, .ty = complex_part(node->lhs->ty), .fval = re};
+      Node tmp = {.kind = ND_NUM, .tok = node->tok, .ty = complex_part(node->lhs->ty), .fval = &re};
       Node cast = *node;
       cast.lhs = &tmp;
       return eval2(&cast, label);
@@ -4099,7 +4099,7 @@ static long double eval_double(Node *node) {
     }
     return to_flonum(node->ty, eval_double(node->lhs));
   case ND_NUM:
-    return to_flonum(node->ty, node->fval);
+    return to_flonum(node->ty, *node->fval);
   case ND_VAR:
     if (node->var->is_constexpr)
       return node->var->constexpr_fval;
@@ -5714,7 +5714,8 @@ static int fp_builtin_index(Token *tok) {
 
 static Node *new_flonum(long double val, Type *ty, Token *tok) {
   Node *node = new_node(ND_NUM, tok);
-  node->fval = val;
+  node->fval = arena_alloc(sizeof(long double));
+  *node->fval = val;
   node->ty = ty;
   return node;
 }
@@ -6448,7 +6449,7 @@ static Node *primary(Token **rest, Token *tok) {
     Node *node;
     if (is_flonum(tok->ty) || is_complex(tok->ty)) { // an imaginary constant: fval i
       node = new_node(ND_NUM, tok);
-      node->fval = *tok->fval;
+      node->fval = tok->fval;
     } else {
       node = new_num(tok->val, tok);
     }
@@ -6820,7 +6821,7 @@ static Node *lowered(Node *node) {
     if (!is_complex(ty))
       return NULL;
     return make_complex(NULL, new_flonum(0, complex_part(ty), tok),
-                        new_flonum(node->fval, complex_part(ty), tok), ty, tok);
+                        new_flonum(*node->fval, complex_part(ty), tok), ty, tok);
   case ND_COMPLEX:
     return make_complex(NULL, new_cast(node->lhs, complex_part(ty)),
                         new_cast(node->rhs, complex_part(ty)), ty, tok);
@@ -6923,7 +6924,7 @@ static void eval_complex(Node *node, long double *re, long double *im) {
   switch (node->kind) {
   case ND_NUM:
     *re = 0;
-    *im = node->fval;
+    *im = *node->fval;
     return;
   case ND_COMPLEX:
     *re = eval_double(node->lhs);
