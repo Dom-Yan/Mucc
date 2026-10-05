@@ -2936,15 +2936,35 @@ static int asm_clobbers(Token **rest, Token *tok) {
   return regs;
 }
 
-// asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal
-//            (":" asm-operands (":" asm-operands (":" clobbers)?)?)? ")"
+// asm-labels = ":" ident ("," ident)*
+// asm goto's labels, each a goto, matched with its label and given the
+// cleanups to run on the way there in resolve_goto_labels(). Each node's
+// token is the one before the label, as for `goto label`.
+static Token *asm_labels(Token *tok, Node *node) {
+  Node head = {};
+  Node *cur = &head;
+  do {
+    Node *g = cur = cur->next = new_node(ND_GOTO, tok);
+    g->label = get_ident(tok->next);
+    g->cleanups = cleanups;
+    g->goto_next = gotos;
+    gotos = g;
+    tok = tok->next->next;
+  } while (equal(tok, ","));
+  node->asm_labels = head.next;
+  return tok;
+}
+
+// asm-stmt = "asm" ("volatile" | "inline" | "goto")* "(" string-literal
+//            (":" asm-operands (":" asm-operands (":" clobbers
+//            asm-labels?)?)?)? ")"
 static Node *asm_stmt(Token **rest, Token *tok) {
   Node *node = new_node(ND_ASM, tok);
   tok = tok->next;
 
+  bool is_goto = false;
   while (equal(tok, "volatile") || equal(tok, "inline") || equal(tok, "goto")) {
-    if (equal(tok, "goto"))
-      error_tok(tok, "asm goto is not supported");
+    is_goto |= equal(tok, "goto");
     tok = tok->next;
   }
 
@@ -2970,8 +2990,11 @@ static Node *asm_stmt(Token **rest, Token *tok) {
     if (consume(&tok, tok, ":"))
       clobbered = asm_clobbers(&tok, tok);
   }
-  if (equal(tok, ":"))
-    error_tok(tok, "asm goto is not supported");
+  if (equal(tok, ":")) {
+    if (!is_goto)
+      error_tok(tok, "labels in an asm statement need 'asm goto'");
+    tok = asm_labels(tok, node);
+  }
   *rest = skip(tok, ")");
 
   // Each operand's kind and type, and the temporaries its value or

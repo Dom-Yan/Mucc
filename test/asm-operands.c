@@ -173,6 +173,50 @@ static long sys_sigprocmask(void) {
   return ret;
 }
 
+// asm goto jumps to one of its labels, numbered after the operands, or
+// falls through.
+static int asm_goto(int x) {
+  asm goto("cmp $1, %0; je %l1" : : "r"(x) : : one);
+  return 0;
+one:
+  return 1;
+}
+
+static int asm_goto_loop(int n) {
+  int i = 0;
+again:
+  i++;
+  asm goto("cmp %1, %0; jl %l[again]; jmp %l[done]"
+           : : "r"(i), "r"(n) : "cc" : again, done);
+  return -1;
+done:
+  return i;
+}
+
+// With outputs, as gcc 11 allows: stored on every path out of the asm.
+static int asm_goto_output(int x) {
+  int y;
+  asm goto("mov %1, %0; add $1, %0; cmp $1, %1; je %l[one]"
+           : "=r"(y) : "r"(x) : : one);
+  return y * 10;
+one:
+  return y + 100;
+}
+
+// A jump out of a cleanup variable's scope runs its cleanup.
+static int cleaned;
+static void add_cleaned(int *p) { cleaned += *p; }
+
+static int asm_goto_cleanup(void) {
+  {
+    int c __attribute__((cleanup(add_cleaned))) = 5;
+    asm goto("jmp %l0" : : : : out);
+    cleaned = -100;
+  }
+out:
+  return cleaned;
+}
+
 int main() {
   ASSERT(12, add(5, 7));
   ASSERT(1, add(0x100000000, 5) == 0x100000005);
@@ -200,6 +244,12 @@ int main() {
   ASSERT(4, att_alternative(3));
   ASSERT(21, sys_write(1, "written by a syscall\n", 21));
   ASSERT(0, sys_sigprocmask());
+  ASSERT(1, asm_goto(1));
+  ASSERT(0, asm_goto(2));
+  ASSERT(5, asm_goto_loop(5));
+  ASSERT(102, asm_goto_output(1));
+  ASSERT(30, asm_goto_output(2));
+  ASSERT(5, asm_goto_cleanup());
 
   printf("OK\n");
   return 0;

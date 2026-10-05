@@ -2242,10 +2242,38 @@ static char *asm_operand_text(Node *node, AsmOperand *op, char mod) {
   return format("%s%s%+ld", dollar, *op->label, val);
 }
 
+// asm goto's label `%l0` or `%l[name]`, at `*p`, as its index in
+// `asm_labels`. Labels are numbered after the operands.
+static int asm_label_index(Node *node, char **p) {
+  int i = 0;
+  Node *g = node->asm_labels;
+  if (isdigit(**p)) {
+    int n = strtol(*p, p, 10) - node->asm_nops;
+    (*p)--;
+    for (; g && i < n; g = g->next)
+      i++;
+    if (n < 0)
+      g = NULL;
+  } else if (**p == '[') {
+    char *end = strchr(*p, ']');
+    if (!end)
+      error_tok(node->tok, "missing ']' in asm template");
+    int len = end - *p - 1;
+    for (; g; g = g->next, i++)
+      if (strlen(g->label) == len && !strncmp(g->label, *p + 1, len))
+        break;
+    *p = end;
+  }
+  if (!g)
+    error_tok(node->tok, "%%l in an asm template must name one of its goto labels");
+  return i;
+}
+
 // The template with its operands filled in: `%0` or `%[name]`, maybe
-// with a modifier (`%k0`), `%=` (a number unique to this asm), `%%`.
-// `{att|intel}` picks the first alternative, as for AT&T syntax.
-static char *asm_template(Node *node) {
+// with a modifier (`%k0`), `%=` (a number unique to this asm), `%%`,
+// and asm goto's labels as `targets` says. `{att|intel}` picks the first
+// alternative, as for AT&T syntax.
+static char *asm_template(Node *node, char **targets) {
   static int id;
   id++;
 
@@ -2288,6 +2316,11 @@ static char *asm_template(Node *node) {
     if (isalpha(*p))
       mod = *p++;
 
+    if (mod == 'l') {
+      fputs(targets[asm_label_index(node, &p)], out);
+      continue;
+    }
+
     AsmOperand *op = NULL;
     if (isdigit(*p)) {
       int i = strtol(p, &p, 10);
@@ -2328,6 +2361,18 @@ static void asm_load(Type *ty, char *src, int reg) {
   println("  mov %s, %s", src, reg64(reg));
 }
 
+// Stores the outputs in registers through their addresses.
+static void store_asm_outputs(Node *node) {
+  for (int i = 0; i < node->asm_nops; i++) {
+    AsmOperand *op = &node->asm_ops[i];
+    if (!op->is_output || op->kind != 'r')
+      continue;
+    println("  mov %d(%%rbp), %s", op->addr->offset, reg64(node->asm_scratch));
+    println("  mov %s, (%s)", asm_reg_text(node, op->reg, op->ty->size, 0),
+            reg64(node->asm_scratch));
+  }
+}
+
 static void gen_asm(Node *node) {
   // The operands' values and addresses, into their temporaries
   for (Node *n = node->body; n; n = n->next)
@@ -2345,16 +2390,42 @@ static void gen_asm(Node *node) {
     }
   }
 
-  println("  %s", asm_template(node));
-
-  for (int i = 0; i < node->asm_nops; i++) {
-    AsmOperand *op = &node->asm_ops[i];
-    if (!op->is_output || op->kind != 'r')
-      continue;
-    println("  mov %d(%%rbp), %s", op->addr->offset, reg64(node->asm_scratch));
-    println("  mov %s, (%s)", asm_reg_text(node, op->reg, op->ty->size, 0),
-            reg64(node->asm_scratch));
+  // asm goto jumps straight to a label, or, when there are register
+  // outputs to store or cleanups to run on the way, to a stub that does
+  // that first.
+  int c = count(), nlabels = 0;
+  bool outputs = false, stubs = false;
+  for (int i = 0; i < node->asm_nops; i++)
+    outputs |= node->asm_ops[i].is_output && node->asm_ops[i].kind == 'r';
+  for (Node *g = node->asm_labels; g; g = g->next)
+    nlabels++;
+  char **targets = calloc(nlabels + 1, sizeof(char *));
+  int i = 0;
+  for (Node *g = node->asm_labels; g; g = g->next, i++) {
+    targets[i] = g->unique_label;
+    if (outputs || g->lhs) {
+      targets[i] = format(".L.asm_goto.%d.%d", c, i);
+      stubs = true;
+    }
   }
+
+  println("  %s", asm_template(node, targets));
+  store_asm_outputs(node);
+  if (!stubs)
+    return;
+
+  println("  jmp .L.asm_goto.%d", c);
+  i = 0;
+  for (Node *g = node->asm_labels; g; g = g->next, i++) {
+    if (targets[i] == g->unique_label)
+      continue;
+    println("%s:", targets[i]);
+    store_asm_outputs(node);
+    if (g->lhs)
+      gen_stmt(g->lhs);
+    println("  jmp %s", g->unique_label);
+  }
+  println(".L.asm_goto.%d:", c);
 }
 
 //---------- Statements ------------------------------------------------------

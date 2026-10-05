@@ -896,8 +896,16 @@ __attribute__((constructor(70000))) void f(void) {}
 EOF
 
 # asm statements with operands
-expect_error "1:20: error: asm goto is not supported" <<'EOF'
-void f(void) { asm goto("jmp %l0" :::: out); out:; }
+expect_error "1:29: error: labels in an asm statement need 'asm goto'" <<'EOF'
+void f(void) { asm("" : : : : out); out:; }
+EOF
+
+expect_error "1:36: error: use of undeclared label" <<'EOF'
+void f(void) { asm goto("" : : : : nowhere); }
+EOF
+
+expect_error "1:16: error: %l in an asm template must name one of its goto labels" <<'EOF'
+void f(void) { asm goto("jmp %l1" : : : : out); out:; }
 EOF
 
 expect_error "1:26: error: asm constraint 'x' is not supported" <<'EOF'

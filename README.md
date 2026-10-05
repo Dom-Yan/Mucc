@@ -135,8 +135,9 @@ at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
 - The full preprocessor, VLAs, `_Generic`, atomics, thread-local variables,
   structs by value, varargs
 - GNU extensions: statement expressions, computed `goto`, case ranges,
-  `__attribute__`, extended `asm`, and gcc's builtins for bit counting
-  (`__builtin_clz`, `__builtin_popcount`, ...), byte swaps, branch hints,
+  `__attribute__`, extended `asm` and `asm goto`, and gcc's builtins for
+  bit counting (`__builtin_clz`, `__builtin_popcount`, ...), byte swaps,
+  branch hints,
   overflow checks (`__builtin_add_overflow`, ...), atomics (`__sync_*`,
   `__atomic_*`), floating point (`__builtin_isnan`, `__builtin_inf`,
   `__builtin_fabs`, ...) and the C library (`__builtin_memcpy`,
@@ -159,7 +160,7 @@ at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
 - Linux's own headers (`<linux/*.h>`, `<asm/*.h>`, ...) come with the
   bundled musl, for programs that use the kernel directly: USB through
   usbfs, input devices, netlink, ioctls
-- Not supported: C++, `_Complex`, `__int128`, `_BitInt`, `asm goto`, K&R
+- Not supported: C++, `_Complex`, `__int128`, `_BitInt`, K&R
   function definitions, optimization beyond register allocation and
   constant folding
 

@@ -388,6 +388,7 @@ struct Node {
   AsmOperand *asm_ops; // outputs, then inputs
   int asm_nops;
   int asm_scratch;     // a register free after the asm, to store outputs
+  Node *asm_labels;    // asm goto's labels: ND_GOTOs, linked by `next`
 
   // Atomic compare-and-swap
   Node *cas_addr;
