@@ -76,20 +76,31 @@ Then, the same day:
 - difftest: 3,000 programs, 0 real failures. The generator no longer
   makes `0.0 - x`, which gcc folds into `-x`.
 
-## Decide: define `__GNUC__`?
+## In progress: define `__GNUC__` (decided 2026-10-05)
 
 mucc defines no `__GNUC__`, so headers take their non-GNU paths. That
-is now the biggest gcc drop-in gap:
+is the biggest gcc drop-in gap:
 - glibc's `<glob.h>` with `-D_FILE_OFFSET_BITS=64` declares no `glob`
   (redis 7.2.5 doesn't build), and its noreturn and other attributes
   are hidden.
 - libtool decides mucc isn't GCC and passes `-soname` to it.
 - stb needs `-DSTBI_NO_SIMD`.
 
-clang and tcc define `__GNUC__` (4.2) for this reason. The risk is
-headers then using GNU features mucc lacks (vector types,
-`__builtin_*` it doesn't have), which would need checking against
-glibc, musl and real projects first.
+The maintainer decided to define it, as clang does (`__GNUC__` 4,
+`__GNUC_MINOR__` 2, `__GNUC_PATCHLEVEL__` 1), so glibc takes its gcc
+paths but none newer than gcc 4.2. Steps:
+
+1. What glibc's headers then need: asm labels on function and variable
+   declarations (`__REDIRECT`, `extern int x __asm__("y")`), which mucc
+   rejects now, and any `__builtin_*` or attribute they use.
+2. Define the macros, plus `__GNUC_STDC_INLINE__`. Keep `__mucc__`.
+   Not `__SSE2__` and the like: mucc has no `<emmintrin.h>`.
+3. Check every standard and POSIX header compiles under glibc and musl
+   with `_GNU_SOURCE`, `_FILE_OFFSET_BITS=64` and `-std=c99/c11/c23`,
+   then `make test-all`, then the real projects (sqlite, Lua, make,
+   sed, gawk, redis, stb, bzip2, cJSON, lz4, miniz, libtool builds).
+4. Update the README and website: mucc says it is gcc 4.2, as clang
+   does.
 
 ## Next: the deep test's other findings
 
