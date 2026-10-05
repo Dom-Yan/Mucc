@@ -117,17 +117,21 @@ typedef struct {
   int line_delta;
 } File;
 
-// Token type
+// Token type. There is one for each token of every file and macro
+// expansion, which is millions for a big file, so it is kept small: 96
+// bytes.
 typedef struct Token Token;
 struct Token {
   TokenKind kind;   // Token kind
+  int len;          // Token length
   Token *next;      // Next token
   int64_t val;      // If kind is TK_NUM, its value
-  long double fval; // If kind is TK_NUM, its value
   char *loc;        // Token location
-  int len;          // Token length
   Type *ty;         // Used if TK_NUM or TK_STR
-  char *str;        // String literal contents including terminating '\0'
+  union {
+    char *str;         // TK_STR: its contents including terminating '\0'
+    long double *fval; // TK_NUM of a floating type: its value
+  };
 
   File *file;       // Source location
   char *filename;   // Filename

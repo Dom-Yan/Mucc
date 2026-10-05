@@ -786,7 +786,8 @@ static void convert_pp_number(Token *tok) {
     ty = complex_type(ty);
 
   tok->kind = TK_NUM;
-  tok->fval = val;
+  tok->fval = arena_alloc(sizeof(long double));
+  *tok->fval = val;
   tok->ty = ty;
 }
 

@@ -131,18 +131,6 @@ static Hideset *hideset_intersection(Hideset *hs1, Hideset *hs2) {
   return head.next;
 }
 
-static Token *add_hideset(Token *tok, Hideset *hs) {
-  Token head = {};
-  Token *cur = &head;
-
-  for (; tok; tok = tok->next) {
-    Token *t = copy_token(tok);
-    t->hideset = hideset_union(t->hideset, hs);
-    cur = cur->next = t;
-  }
-  return head.next;
-}
-
 // Append tok2 to the end of tok1.
 static Token *append(Token *tok1, Token *tok2) {
   if (tok1->kind == TK_EOF)
@@ -922,6 +910,25 @@ static Token *subst(Token *tok, MacroArg *args) {
   return head.next;
 }
 
+// A macro's expansion: the tokens of `body` up to its EOF, with `hs`
+// added to their hidesets and `origin` as their origin, followed by
+// `rest`. They are copies, but for a `fresh` body (subst()'s, which
+// belongs to this expansion alone), changed in place: a token is copied
+// once per expansion, not three times.
+static Token *expansion(Token *body, Hideset *hs, Token *origin, Token *rest,
+                        bool fresh) {
+  Token head = {};
+  Token *cur = &head;
+  for (Token *t = body; t->kind != TK_EOF; t = t->next) {
+    Token *u = fresh ? t : copy_token(t);
+    u->hideset = hideset_union(u->hideset, hs);
+    u->origin = origin;
+    cur = cur->next = u;
+  }
+  cur->next = rest;
+  return head.next;
+}
+
 // If tok is a macro, expand it and return true.
 // Otherwise, do nothing and return false.
 static bool expand_macro(Token **rest, Token *tok) {
@@ -950,10 +957,7 @@ static bool expand_macro(Token **rest, Token *tok) {
   // Object-like macro application
   if (m->is_objlike) {
     Hideset *hs = hideset_union(tok->hideset, new_hideset(m->name));
-    Token *body = add_hideset(m->body, hs);
-    for (Token *t = body; t->kind != TK_EOF; t = t->next)
-      t->origin = tok;
-    *rest = append(body, tok->next);
+    *rest = expansion(m->body, hs, tok, tok->next, false);
     (*rest)->at_bol = tok->at_bol;
     (*rest)->has_space = tok->has_space;
     return true;
@@ -977,11 +981,7 @@ static bool expand_macro(Token **rest, Token *tok) {
   Hideset *hs = hideset_intersection(macro_token->hideset, rparen->hideset);
   hs = hideset_union(hs, new_hideset(m->name));
 
-  Token *body = subst(m->body, args);
-  body = add_hideset(body, hs);
-  for (Token *t = body; t->kind != TK_EOF; t = t->next)
-    t->origin = macro_token;
-  *rest = append(body, tok->next);
+  *rest = expansion(subst(m->body, args), hs, macro_token, tok->next, true);
   (*rest)->at_bol = macro_token->at_bol;
   (*rest)->has_space = macro_token->has_space;
   return true;

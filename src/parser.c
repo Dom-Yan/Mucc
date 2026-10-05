@@ -6448,7 +6448,7 @@ static Node *primary(Token **rest, Token *tok) {
     Node *node;
     if (is_flonum(tok->ty) || is_complex(tok->ty)) { // an imaginary constant: fval i
       node = new_node(ND_NUM, tok);
-      node->fval = tok->fval;
+      node->fval = *tok->fval;
     } else {
       node = new_num(tok->val, tok);
     }
