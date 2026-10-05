@@ -13,6 +13,11 @@ struct ts { long sec; int :0; long nsec; int :0; };
 struct ts g47 = {5, 6};
 struct { int a:3; int :5; int b:4; int :0; int c; } g48 = {1, 2, 3}, g49 = {.c = 9};
 
+// A global's bit-field gets its value converted to its type: 2 in a
+// _Bool bit-field is 1, and 2.7 in an int one is 2.
+struct { _Bool b : 1; _Bool c : 1; int i : 5; unsigned u : 3; _Bool d : 1; } bool_bf = {2, 0.5, 2.7, 9, 256};
+struct { long l : 40; unsigned long ul : 50; } long_bf = {-1.5, 1e15};
+
 int main() {
   ASSERT(4, sizeof(struct {int x:1; }));
   ASSERT(8, sizeof(struct {long x:1; }));
@@ -104,6 +109,14 @@ int main() {
   ASSERT(12, ({ struct ts t = {.nsec = 2}; t.nsec += 10; t.nsec; }));
   ASSERT(6, ({ struct { int a:3; int :5; int b:4; int :0; int c; } s = {.b = 5, 6}; s.c; }));
   ASSERT(8, ({ struct { int x; union { int u; float f; }; int y; } s = {.u = 7, 8}; s.y; }));
+
+  ASSERT(1, bool_bf.b);
+  ASSERT(1, bool_bf.c);
+  ASSERT(2, bool_bf.i);
+  ASSERT(1, bool_bf.u);
+  ASSERT(1, bool_bf.d);
+  ASSERT(-1, long_bf.l);
+  ASSERT(1, long_bf.ul == 1000000000000000);
 
   printf("OK\n");
   return 0;

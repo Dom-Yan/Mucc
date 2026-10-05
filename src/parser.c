@@ -2634,13 +2634,14 @@ static void write_buf(char *buf, uint64_t val, int sz) {
     buf[i] = val >> (i * 8);
 }
 
-// Puts bit-field `mem`'s value from `init` into the struct at `buf`.
+// Puts bit-field `mem`'s value from `init` into the struct at `buf`,
+// converted to its type first: 2 in a _Bool bit-field is 1.
 static void write_bitfield(Initializer *init, Member *mem, char *buf) {
   if (!init->expr)
     return;
   char *loc = buf + mem->offset;
   uint64_t mask = mem->bit_width == 64 ? -1 : (1UL << mem->bit_width) - 1;
-  uint64_t val = (eval(init->expr) & mask) << mem->bit_offset;
+  uint64_t val = (eval(new_cast(init->expr, mem->ty)) & mask) << mem->bit_offset;
   write_buf(loc, read_buf(loc, mem->unit) | val, mem->unit);
 }
 
