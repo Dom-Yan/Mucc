@@ -491,6 +491,30 @@ int main() {
   ASSERT(0, strcmp(VO2(q), "q"));
   ASSERT(9, ({ int yy = 9; VO3(y, 1); }));
 
+  // gcc's description of the target
+#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__ || defined __STDC_NO_COMPLEX__ || __CHAR_BIT__ != 8
+  ASSERT(0, 1);
+#endif
+  ASSERT(1, __INT_MAX__ == 2147483647 && __LONG_MAX__ == 9223372036854775807L);
+  ASSERT(4, sizeof(__WCHAR_TYPE__));
+  ASSERT(1, __DBL_EPSILON__ == 0x1p-52 && __FLT_MAX__ == 0x1.fffffep127f);
+
+  // defined, __has_include and __has_c_attribute that a macro expands to
+#define HAS_C_ATTR(attr) __has_c_attribute (__##attr##__)
+#define DEF_NOPE defined(NOT_DEFINED_ANYWHERE)
+#define HAS_INC(x) __has_include(x)
+  ASSERT(7, ({ int r = 0;
+#if HAS_C_ATTR(maybe_unused)
+    r |= 1;
+#endif
+#if !DEF_NOPE
+    r |= 2;
+#endif
+#if HAS_INC(<stddef.h>) && !HAS_INC(<no_such_header_here.h>)
+    r |= 4;
+#endif
+    r; }));
+
   // #if arithmetic is in intmax_t and uintmax_t.
   ASSERT(127, ({ int r = 0;
 #if (2147483647 + 1) > 0

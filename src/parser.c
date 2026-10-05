@@ -6049,6 +6049,9 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
       error_tok(res->tok, "pointer to an integer type expected");
     if (overflow_ty && res->ty->base->size != overflow_ty->size)
       error_tok(res->tok, "pointer to '%s' expected", type_name(overflow_ty));
+    // (They're checked in 64 bits.)
+    if (is_int128(a->ty) || is_int128(b->ty) || is_int128(res->ty->base))
+      error_tok(start, "overflow builtins on __int128 are not supported");
 
     Node *node = new_node(ND_OVERFLOW, start);
     node->lhs = new_cast(a, a->ty->is_unsigned ? ty_ulong : ty_long);

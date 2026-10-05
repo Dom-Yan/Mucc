@@ -10,7 +10,6 @@
 
 #include "mucc.h"
 
-#define MUCC_VERSION "1.1.0"
 
 //---------- Command-line options --------------------------------------------
 

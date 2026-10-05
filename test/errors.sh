@@ -951,6 +951,20 @@ expect_error "1:26: error: a 128-bit constant must be a 64-bit integer constant 
 __int128 x = (__int128)1 << 64;
 EOF
 
+# #include of a name that isn't a header name
+expect_error "1:10: error: expected a filename" <<'EOF'
+#include foo
+EOF
+
+expect_error "2:10: error: expected a filename" <<'EOF'
+#define H int
+#include H
+EOF
+
+expect_error "1:40: error: overflow builtins on __int128 are not supported" <<'EOF'
+int f(__int128 a) { __int128 r; return __builtin_add_overflow(a, a, &r); }
+EOF
+
 # _Complex
 expect_error "1:10: error: only floating-point complex types are supported" <<'EOF'
 _Complex int x;

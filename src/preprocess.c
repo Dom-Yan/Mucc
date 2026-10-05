@@ -248,9 +248,11 @@ static bool has_feature(Token **rest, Token *tok) {
                                          : is_known_builtin(name);
 }
 
-static Token *read_const_expr(Token **rest, Token *tok) {
-  tok = copy_line(rest, tok);
-
+// Replaces the operators only #if has in EOF-terminated `tok`: defined,
+// __has_include and the other __has_ ones. This is done before macros are
+// expanded, and again after, for those a macro expands to, as in
+// gnulib's `#define _GL_HAS_C_ATTRIBUTE(attr) __has_c_attribute (__##attr##__)`.
+static Token *pp_operators(Token *tok) {
   Token head = {};
   Token *cur = &head;
 
@@ -356,6 +358,10 @@ static Token *read_const_expr(Token **rest, Token *tok) {
   return head.next;
 }
 
+static Token *read_const_expr(Token **rest, Token *tok) {
+  return pp_operators(copy_line(rest, tok));
+}
+
 // Evaluates `expr`, an EOF-terminated copy of the tokens of an #if
 // expression (or of an #embed limit). `start` is for error messages.
 static long eval_pp_expr(Token *start, Token *expr) {
@@ -364,16 +370,9 @@ static long eval_pp_expr(Token *start, Token *expr) {
   if (expr->kind == TK_EOF)
     error_tok(start, "no expression");
 
-  // __has_attribute and __has_builtin from a macro, like glibc's
+  // The operators a macro expanded to, like glibc's
   // `#define __glibc_has_attribute(attr) __has_attribute (attr)`
-  for (Token *t = expr; t->kind != TK_EOF; t = t->next) {
-    if (equal(t, "__has_attribute") || equal(t, "__has_builtin")) {
-      Token *next;
-      bool found = has_feature(&next, t);
-      *t = *new_num_token(found, t);
-      t->next = next;
-    }
-  }
+  expr = pp_operators(expr);
 
   // [https://www.sigbus.info/n1570#6.10.1p4] The standard requires
   // we replace remaining non-macro identifiers with "0" before
@@ -1069,8 +1068,11 @@ static char *read_include_filename(Token **rest, Token *tok, bool *is_dquote) {
   // Pattern 3: #include FOO
   // In this case FOO must be macro-expanded to either
   // a single string token or a sequence of "<" ... ">".
+  // (FOO that isn't a macro, or is one for another name, stays a name.)
   if (tok->kind == TK_IDENT) {
     Token *tok2 = preprocess2(copy_line(rest, tok));
+    if (tok2->kind == TK_IDENT)
+      error_tok(tok, "expected a filename");
     return read_include_filename(&tok2, tok2, is_dquote);
   }
 
@@ -1729,7 +1731,6 @@ void init_macros(void) {
   define_macro("__SIZEOF_SIZE_T__", "8");
   define_macro("__SIZE_TYPE__", "unsigned long");
   define_macro("__STDC_HOSTED__", "1");
-  define_macro("__STDC_NO_COMPLEX__", "1");
   define_macro("__STDC_UTF_16__", "1");
   define_macro("__STDC_UTF_32__", "1");
   define_macro("__STDC__", "1");
@@ -1756,6 +1757,69 @@ void init_macros(void) {
   define_macro("__volatile__", "volatile");
   define_macro("__x86_64", "1");
   define_macro("__x86_64__", "1");
+  define_macro("__VERSION__", "\"mucc " MUCC_VERSION "\"");
+
+  // What gcc says of the target, which code tests in #if: the byte order,
+  // the limits and sizes of the types, the floating-point formats, and
+  // which atomics never take a lock.
+  define_macro("__ORDER_LITTLE_ENDIAN__", "1234");
+  define_macro("__ORDER_BIG_ENDIAN__", "4321");
+  define_macro("__ORDER_PDP_ENDIAN__", "3412");
+  define_macro("__BYTE_ORDER__", "__ORDER_LITTLE_ENDIAN__");
+  define_macro("__FLOAT_WORD_ORDER__", "__ORDER_LITTLE_ENDIAN__");
+  define_macro("__CHAR_BIT__", "8");
+  define_macro("__SCHAR_MAX__", "0x7f");
+  define_macro("__SHRT_MAX__", "0x7fff");
+  define_macro("__INT_MAX__", "0x7fffffff");
+  define_macro("__LONG_MAX__", "0x7fffffffffffffffL");
+  define_macro("__LONG_LONG_MAX__", "0x7fffffffffffffffLL");
+  define_macro("__WCHAR_MAX__", "0x7fffffff");
+  define_macro("__WCHAR_MIN__", "(-__WCHAR_MAX__ - 1)");
+  define_macro("__WINT_MAX__", "0xffffffffU");
+  define_macro("__WINT_MIN__", "0U");
+  define_macro("__SIZE_MAX__", "0xffffffffffffffffUL");
+  define_macro("__PTRDIFF_MAX__", "0x7fffffffffffffffL");
+  define_macro("__INTMAX_MAX__", "0x7fffffffffffffffL");
+  define_macro("__UINTMAX_MAX__", "0xffffffffffffffffUL");
+  define_macro("__INTPTR_MAX__", "0x7fffffffffffffffL");
+  define_macro("__UINTPTR_MAX__", "0xffffffffffffffffUL");
+  define_macro("__SIZEOF_WCHAR_T__", "4");
+  define_macro("__SIZEOF_WINT_T__", "4");
+  define_macro("__PTRDIFF_TYPE__", "long int");
+  define_macro("__WCHAR_TYPE__", "int");
+  define_macro("__WINT_TYPE__", "unsigned int");
+  define_macro("__INTMAX_TYPE__", "long int");
+  define_macro("__UINTMAX_TYPE__", "long unsigned int");
+  define_macro("__INTPTR_TYPE__", "long int");
+  define_macro("__UINTPTR_TYPE__", "long unsigned int");
+  define_macro("__CHAR16_TYPE__", "short unsigned int");
+  define_macro("__CHAR32_TYPE__", "unsigned int");
+  define_macro("__FLT_EVAL_METHOD__", "0");
+  define_macro("__FLT_RADIX__", "2");
+  define_macro("__FLT_MANT_DIG__", "24");
+  define_macro("__FLT_DIG__", "6");
+  define_macro("__FLT_MAX__", "3.40282346638528859811704183484516925e+38F");
+  define_macro("__FLT_MIN__", "1.17549435082228750796873653862224568e-38F");
+  define_macro("__FLT_EPSILON__", "1.19209289550781250000000000000000000e-7F");
+  define_macro("__DBL_MANT_DIG__", "53");
+  define_macro("__DBL_DIG__", "15");
+  define_macro("__DBL_MAX__", "((double)1.79769313486231570814527423731704357e+308L)");
+  define_macro("__DBL_MIN__", "((double)2.22507385850720138309023271733240406e-308L)");
+  define_macro("__DBL_EPSILON__", "((double)2.22044604925031308084726333618164062e-16L)");
+  define_macro("__LDBL_MANT_DIG__", "64");
+  define_macro("__LDBL_DIG__", "18");
+  define_macro("__DECIMAL_DIG__", "21");
+  define_macro("__GCC_ATOMIC_BOOL_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_CHAR_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_CHAR16_T_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_CHAR32_T_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_WCHAR_T_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_SHORT_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_INT_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_LONG_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_LLONG_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_POINTER_LOCK_FREE", "2");
+  define_macro("__GCC_ATOMIC_TEST_AND_SET_TRUEVAL", "1");
   define_macro("linux", "1");
   define_macro("unix", "1");
 

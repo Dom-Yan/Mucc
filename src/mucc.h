@@ -43,6 +43,8 @@
 
 //---------- System headers and small utilities ------------------------------
 
+#define MUCC_VERSION "1.1.0"
+
 // POSIX 2008 with its XSI part, which has realpath() (with musl, only then)
 #define _XOPEN_SOURCE 700
 #include <assert.h>
