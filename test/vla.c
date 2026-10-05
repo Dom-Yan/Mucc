@@ -77,6 +77,18 @@ int vla_free_many(void) {
   return 1;
 }
 
+// Labels-as-values in a function with a VLA: taking a label's address
+// is no jump into its scope.
+static int vla_label(int n) {
+  int a[n];
+  void *p = &&set;
+  a[0] = 0;
+  goto *p;
+set:
+  a[0] = n * 2;
+  return a[0];
+}
+
 int main() {
   ASSERT(1, vla_free_loop(1000));
   ASSERT(1, vla_free_goto(1000));
@@ -112,6 +124,8 @@ int main() {
   ASSERT(5*16+2, ({ int n=10; int x[n+1][n+6]; int *p=(int *)x; for (int i = 0; i<sizeof(x)/4; i++) p[i]=i; x[5][2]; }));
 
   ASSERT(10, ({ int n=5; sizeof(char[2][n]); }));
+
+  ASSERT(6, vla_label(3));
 
   printf("OK\n");
   return 0;

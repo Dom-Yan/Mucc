@@ -7499,7 +7499,10 @@ static void resolve_goto_labels(void) {
       if (!strcmp(x->label, y->label)) {
         x->unique_label = y->unique_label;
         // Leaving the scope of cleanup variables and VLAs runs their
-        // cleanups. Entering one is an error.
+        // cleanups. Entering one is an error. `&&label` is no jump, and
+        // a computed goto runs no cleanups, as with gcc.
+        if (x->kind == ND_LABEL_VAL)
+          break;
         if (!is_scope_of(y->cleanups, x->cleanups))
           jump_into_scope(y->cleanups, x->tok);
         if (x->cleanups != y->cleanups)
