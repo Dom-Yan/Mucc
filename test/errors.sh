@@ -951,6 +951,29 @@ expect_error "1:26: error: a 128-bit constant must be a 64-bit integer constant 
 __int128 x = (__int128)1 << 64;
 EOF
 
+# A directive's macro name must be on its line.
+expect_error "1:2: error: no macro name given in #define directive" <<'EOF'
+#define
+int main(void) { return 0; }
+EOF
+
+expect_error "2:2: error: no macro name given in #undef directive" <<'EOF'
+int x = 1;
+#undef
+int y = 2;
+EOF
+
+expect_error "1:2: error: no macro name given in #ifdef directive" <<'EOF'
+#ifdef
+int z;
+#endif
+EOF
+
+expect_error "1:8: error: macro name must be an identifier" <<'EOF'
+#ifdef 3
+#endif
+EOF
+
 # #include of a name that isn't a header name
 expect_error "1:10: error: expected a filename" <<'EOF'
 #include foo

@@ -611,6 +611,18 @@ static Token *paste_objlike(Token *tok) {
   return head.next;
 }
 
+// The macro name after directive `dir` (#define, #undef, #ifdef, ...),
+// which must be on its line: a bare `#undef` doesn't take the next
+// line's first word.
+static Token *macro_name(Token *dir) {
+  Token *tok = dir->next;
+  if (tok->at_bol || tok->kind == TK_EOF)
+    error_tok(dir, "no macro name given in #%.*s directive", dir->len, dir->loc);
+  if (tok->kind != TK_IDENT)
+    error_tok(tok, "macro name must be an identifier");
+  return tok;
+}
+
 static void read_macro_definition(Token **rest, Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "macro name must be an identifier");
@@ -1466,14 +1478,12 @@ static Token *preprocess2(Token *tok) {
     }
 
     if (equal(tok, "define")) {
-      read_macro_definition(&tok, tok->next);
+      read_macro_definition(&tok, macro_name(tok));
       continue;
     }
 
     if (equal(tok, "undef")) {
-      tok = tok->next;
-      if (tok->kind != TK_IDENT)
-        error_tok(tok, "macro name must be an identifier");
+      tok = macro_name(tok);
       undef_macro(strndup(tok->loc, tok->len));
       tok = skip_line(tok->next);
       continue;
@@ -1488,7 +1498,7 @@ static Token *preprocess2(Token *tok) {
     }
 
     if (equal(tok, "ifdef")) {
-      bool defined = find_macro(tok->next);
+      bool defined = find_macro(macro_name(tok));
       push_cond_incl(tok, defined);
       tok = skip_line(tok->next->next);
       if (!defined)
@@ -1497,7 +1507,7 @@ static Token *preprocess2(Token *tok) {
     }
 
     if (equal(tok, "ifndef")) {
-      bool defined = find_macro(tok->next);
+      bool defined = find_macro(macro_name(tok));
       push_cond_incl(tok, !defined);
       tok = skip_line(tok->next->next);
       if (defined)
@@ -1524,7 +1534,8 @@ static Token *preprocess2(Token *tok) {
         error_tok(start, "stray #%.*s", tok->len, tok->loc);
       cond_incl->ctx = IN_ELIF;
 
-      bool want = equal(tok, "elifdef") ? !!find_macro(tok->next) : !find_macro(tok->next);
+      Token *name = macro_name(tok);
+      bool want = equal(tok, "elifdef") ? !!find_macro(name) : !find_macro(name);
       if (!cond_incl->included && want) {
         cond_incl->included = true;
         tok = skip_line(tok->next->next);
