@@ -1832,8 +1832,12 @@ static int file_number(Token *tok) {
 
 // Tells the assembler which source line the next instructions come
 // from, for debuggers. Most expressions share a line with the statement
-// around them, so only emit a .loc when the line actually changes.
+// around them, so only emit a .loc when the line actually changes. Code
+// from a macro is on the line the macro is used on, as with gcc, not in
+// the header that defines it.
 static void emit_loc(Token *tok) {
+  while (tok->origin)
+    tok = tok->origin;
   int file_no = file_number(tok);
   if (file_no == loc_file && tok->line_no == loc_line)
     return;
@@ -3489,6 +3493,11 @@ static void emit_text(Obj *prog) {
     println("%s:", fn->name);
     current_fn = fn;
     loc_line = 0;
+
+    // The prologue is on the function's line, so the line table covers
+    // its first instruction, where gdb's `break f` looks.
+    if (fn->tok)
+      emit_loc(fn->tok);
 
     // Prologue
     println("  push %%rbp");

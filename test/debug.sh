@@ -118,3 +118,32 @@ if as --compress-debug-sections=zlib -c -o $tmp/c.o $tmp/c.s 2> /dev/null &&
         echo "testing debug a compressed section is left out ... passed" ||
         { echo "testing debug a compressed section is left out ... failed"; exit 1; }
 fi
+
+# The first instruction of each function has a line (gdb's `break main`
+# finds one even when main is last), and code from a macro is on the line
+# the macro is used on, not in the header defining it.
+cat > $tmp/m.c <<'EOF'
+#include <stddef.h>
+#define TWICE(x) ((x) * 2)
+int f(int v) {
+  int *p = NULL;
+  int r = TWICE(v);
+  return p ? 0 : r;
+}
+int main(void) {
+  return f(3) != 6;
+}
+EOF
+$mucc -g -o $tmp/m $tmp/m.c &&
+    gdb -batch -nx -ex 'break main' -ex 'break f' -ex run -ex continue -ex next $tmp/m 2>&1 |
+    grep -E '^(Breakpoint|[0-9]+\s)' | sed "s|$tmp/||; s/ at 0x[0-9a-f]*//" > $tmp/got
+printf '%s\n' 'Breakpoint 1: file m.c, line 9.' 'Breakpoint 2: file m.c, line 4.' \
+    'Breakpoint 1, main () at m.c:9' '9	  return f(3) != 6;' \
+    'Breakpoint 2, f (v=3) at m.c:4' '4	  int *p = NULL;' '5	  int r = TWICE(v);' > $tmp/want
+if diff $tmp/want $tmp/got > $tmp/diff; then
+    echo "testing debug lines of functions and macros ... passed"
+else
+    echo "testing debug lines of functions and macros ... failed"
+    cat $tmp/diff
+    exit 1
+fi
