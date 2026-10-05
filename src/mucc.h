@@ -136,6 +136,7 @@ struct Token {
   bool at_bol;      // True if this token is at beginning of line
   bool has_space;   // True if this token follows a space character
   uint8_t pack;     // The #pragma pack in effect here, or 0
+  uint16_t diag;    // The #pragma GCC diagnostic state here (see token.c)
   Hideset *hideset; // For macro expansion
   Token *origin;    // If this is expanded from a macro, the original token
 };
@@ -151,6 +152,8 @@ noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 
 noreturn void error_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void warn_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void warn_opt(char *name, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
+extern int diag_state;
+void pragma_diagnostic(Token *tok);
 bool warning_on(char *name);
 noreturn void error_expected(Token *tok, char *what);
 bool equal(Token *tok, char *op);

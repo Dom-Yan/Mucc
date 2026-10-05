@@ -560,6 +560,8 @@ static Token *pragma_operator(Token *tok) {
     push_pop_macro(body);
   else if (equal(body, "pack"))
     pragma_pack(body);
+  else if (equal(body, "GCC") && equal(body->next, "diagnostic"))
+    pragma_diagnostic(body->next->next);
   return tok;
 }
 
@@ -1396,6 +1398,7 @@ static Token *preprocess2(Token *tok) {
       tok->line_delta = tok->file->line_delta;
       tok->filename = tok->file->display_name;
       tok->pack = pack;
+      tok->diag = diag_state;
       cur = cur->next = tok;
       tok = tok->next;
       continue;
@@ -1546,6 +1549,13 @@ static Token *preprocess2(Token *tok) {
 
     if (equal(tok, "pragma") && equal(tok->next, "pack")) {
       tok = skip_line(pragma_pack(tok->next));
+      continue;
+    }
+
+    if (equal(tok, "pragma") && equal(tok->next, "GCC") &&
+        equal(tok->next->next, "diagnostic")) {
+      Token *line = copy_line(&tok, tok->next->next->next);
+      pragma_diagnostic(line);
       continue;
     }
 

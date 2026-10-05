@@ -155,19 +155,67 @@ static struct {
   char *name;
   bool on;
 } named_warnings[] = {
-  {"unused-variable", true}, {"return-type", true}, {"attributes", true},
-  {"discarded-qualifiers", true}, {"return-local-addr", true},
-  {"div-by-zero", true}, {"shift-count-overflow", true},
-  {"shift-count-negative", true},
+  {"attributes", true}, {"discarded-qualifiers", true},
+  {"return-local-addr", true}, {"div-by-zero", true},
+  {"shift-count-overflow", true}, {"shift-count-negative", true},
+  {"unused-variable", false}, {"return-type", false},
   {"parentheses", false}, {"unused-value", false}, {"format", false},
   {"format-extra-args", false}, {"address", false},
   {"unused-function", false}, {"switch", false},
 };
 
+// #pragma GCC diagnostic ignored, warning or error "-W<name>" changes a
+// warning from where it is to the end of the file, or to the matching
+// `#pragma GCC diagnostic pop`. Each state is the one before it with one
+// warning changed, and each token gets the state in effect where it is
+// (Token's `diag`, set by the preprocessor), which decides the warnings
+// reported at it, as with gcc. State 0 changes nothing.
+typedef struct {
+  int prev;
+  char *name;
+  char mode; // 'i'gnored, 'w'arning or 'e'rror
+} DiagState;
+
+static DiagState *diag_states;
+static int diag_len = 1;
+int diag_state;
+static int diag_stack[64];
+static int diag_depth;
+
+// `tok` is the token after `#pragma GCC diagnostic`.
+void pragma_diagnostic(Token *tok) {
+  if (equal(tok, "push")) {
+    if (diag_depth == 64)
+      error_tok(tok, "#pragma GCC diagnostic push nested too deeply");
+    diag_stack[diag_depth++] = diag_state;
+    return;
+  }
+  if (equal(tok, "pop")) {
+    if (diag_depth)
+      diag_state = diag_stack[--diag_depth];
+    return;
+  }
+
+  // An option that isn't a warning's changes nothing.
+  char mode = equal(tok, "ignored") ? 'i' : equal(tok, "warning") ? 'w' :
+              equal(tok, "error") ? 'e' : 0;
+  Token *opt = tok->next;
+  if (!mode || opt->kind != TK_STR || strncmp(opt->str, "-W", 2))
+    return;
+
+  if (diag_len % 64 == 1)
+    diag_states = realloc(diag_states, (diag_len + 64) * sizeof(DiagState));
+  if (diag_len > UINT16_MAX)
+    error_tok(tok, "too many #pragma GCC diagnostic changes");
+  diag_states[diag_len] = (DiagState){diag_state, opt->str + 2, mode};
+  diag_state = diag_len++;
+}
+
 // Is warning `name` on, going through the -W flags in order? *is_error
 // says whether -Werror or -Werror=<name> makes it an error. With `name`
-// NULL, for a warning that has no name, only -w and -Werror count.
-static bool warning_state(char *name, bool *is_error) {
+// NULL, for a warning that has no name, only -w and -Werror count. Then
+// the #pragma GCC diagnostic state `diag` can change it.
+static bool warning_state2(char *name, bool *is_error, int diag) {
   bool on = true;
   if (name) {
     int i = 0;
@@ -199,7 +247,22 @@ static bool warning_state(char *name, bool *is_error) {
   }
 
   *is_error = (this_error >= 0) ? this_error : all_errors;
+
+  // A pragma for -Wall or -Wunused covers what those turn on.
+  for (int s = diag; name && s; s = diag_states[s].prev) {
+    char *n = diag_states[s].name;
+    if (!strcmp(n, name) || !strcmp(n, "all") ||
+        (!strcmp(n, "unused") && !strncmp(name, "unused-", 7))) {
+      on = diag_states[s].mode != 'i';
+      *is_error = diag_states[s].mode == 'e';
+      break;
+    }
+  }
   return on && !opt_w;
+}
+
+static bool warning_state(char *name, bool *is_error) {
+  return warning_state2(name, is_error, 0);
 }
 
 bool warning_on(char *name) {
@@ -209,7 +272,7 @@ bool warning_on(char *name) {
 
 static void warn_vtok(char *name, Token *tok, char *fmt, va_list ap) {
   bool is_error;
-  if (!warning_state(name, &is_error))
+  if (!warning_state2(name, &is_error, tok->diag))
     return;
   // As with gcc, code in a system header (the C library's) gets no
   // warnings that have a name.

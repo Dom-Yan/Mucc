@@ -7247,6 +7247,12 @@ static void warn_format(Obj *fn, Node *args) {
         p++;
     }
 
+    // scanf's `m` (as in %ms) allocates the string, so its argument is a
+    // pointer to the pointer. (printf's %m takes no argument.)
+    bool alloc = is_scanf && *p == 'm';
+    if (alloc)
+      p++;
+
     char len[3] = {0};
     if ((p[0] == 'h' && p[1] == 'h') || (p[0] == 'l' && p[1] == 'l')) {
       len[0] = len[1] = *p;
@@ -7268,6 +7274,8 @@ static void warn_format(Obj *fn, Node *args) {
     Type *want = format_arg_type(conv, len, is_scanf);
     if (!want)
       continue; // a conversion this doesn't know
+    if (alloc)
+      want = pointer_to(want);
     int spec_len = (int)(p - spec + (*p != '\0'));
     if (!arg) {
       warn_opt("format", fmt_tok, "format '%.*s' expects a matching '%s' argument",

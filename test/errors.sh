@@ -471,6 +471,12 @@ mucc=$saved_mucc
 
 #---------- Warnings ---------------------------------------------------------
 
+# -Wunused-variable and -Wreturn-type are off without -Wall, as with gcc.
+expect_clean 'unused variable and missing return without -Wall' <<'EOF'
+int f(int x) { int unused; if (x) return 1; }
+EOF
+
+mucc="$saved_mucc -Wunused-variable -Wreturn-type"
 expect_warning "3:7: warning: unused variable 'unused' [-Wunused-variable]" <<'EOF'
 int f(void) {
   int used = 1;
@@ -493,6 +499,7 @@ EOF
 expect_warning "1:35: warning: control reaches end of non-void function 'h' [-Wreturn-type]" <<'EOF'
 int h(void) { for (;;) { break; } }
 EOF
+mucc=$saved_mucc
 
 # None of these can reach the end of the function without a return.
 expect_clean 'no false warnings' <<'EOF'
@@ -638,13 +645,45 @@ mucc="$mucc_plain -Wall -Werror=parentheses"
 expect_error "1:22: error: suggest parentheses around assignment used as truth value [-Werror=parentheses]" <<'EOF'
 int f(int a) { if (a = 1) return 1; return 0; }
 EOF
-mucc="$mucc_plain -Werror"
+mucc="$mucc_plain -Wall -Werror"
 expect_error "1:19: error: unused variable 'x' [-Werror=unused-variable]" <<'EOF'
 int f(void) { int x; return 0; }
 EOF
-mucc="$mucc_plain -Werror -Wno-error=unused-variable"
+mucc="$mucc_plain -Wall -Werror -Wno-error=unused-variable"
 expect_warning "1:19: warning: unused variable 'x' [-Wunused-variable]" <<'EOF'
 int f(void) { int x; return 0; }
+EOF
+
+# #pragma GCC diagnostic changes a warning from where it is, until a pop.
+mucc="$mucc_plain -Wall -Werror"
+expect_error "5:12: error: 'loud' defined but not used [-Werror=unused-function]" <<'EOF'
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+static int quiet(void) { return 1; }
+#pragma GCC diagnostic pop
+static int loud(void) { return 2; }
+EOF
+expect_clean '_Pragma("GCC diagnostic ignored") from a macro' <<'EOF'
+#define QUIET _Pragma("GCC diagnostic push") _Pragma("GCC diagnostic ignored \"-Wunused\"")
+#define END _Pragma("GCC diagnostic pop")
+QUIET
+static int quiet(void) { return 1; }
+END
+EOF
+expect_warning "2:22: warning: suggest parentheses around assignment used as truth value [-Wparentheses]" <<'EOF'
+#pragma GCC diagnostic warning "-Wparentheses"
+int f(int a) { if (a = 1) return 1; return 0; }
+EOF
+mucc="$mucc_plain -Wall"
+expect_error "2:22: error: suggest parentheses around assignment used as truth value [-Werror=parentheses]" <<'EOF'
+#pragma GCC diagnostic error "-Wparentheses"
+int f(int a) { if (a = 1) return 1; return 0; }
+EOF
+
+# scanf's %ms takes a char **.
+expect_clean '%ms in scanf' <<'EOF'
+#include <stdio.h>
+int f(void) { char *s; return scanf("%ms %10ms %m[a-z]", &s, &s, &s); }
 EOF
 mucc=$mucc_plain
 
