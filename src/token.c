@@ -40,6 +40,7 @@ static int line_no;
 
 jmp_buf *error_recovery;
 int error_count;
+int werror_count; // warnings -Werror made errors
 
 // Past this many, the rest are probably caused by the earlier ones.
 #define MAX_ERRORS 20
@@ -148,14 +149,97 @@ void error_tok(Token *tok, char *fmt, ...) {
   after_error();
 }
 
-void warn_tok(Token *tok, char *fmt, ...) {
-  if (opt_w)
+// Warnings that -W<name> turns on and -Wno-<name> off, with whether each
+// is on without them. -Wall turns them all on, as gcc's does.
+static struct {
+  char *name;
+  bool on;
+} named_warnings[] = {
+  {"unused-variable", true}, {"return-type", true}, {"attributes", true},
+  {"discarded-qualifiers", true}, {"return-local-addr", true},
+  {"div-by-zero", true}, {"shift-count-overflow", true},
+  {"shift-count-negative", true},
+  {"parentheses", false}, {"unused-value", false}, {"format", false},
+  {"format-extra-args", false}, {"address", false},
+  {"unused-function", false}, {"switch", false},
+};
+
+// Is warning `name` on, going through the -W flags in order? *is_error
+// says whether -Werror or -Werror=<name> makes it an error. With `name`
+// NULL, for a warning that has no name, only -w and -Werror count.
+static bool warning_state(char *name, bool *is_error) {
+  bool on = true;
+  if (name) {
+    int i = 0;
+    while (strcmp(named_warnings[i].name, name))
+      i++;
+    on = named_warnings[i].on;
+  }
+  bool all_errors = false;
+  int this_error = -1; // -Werror=<name> or -Wno-error=<name>, if given
+
+  for (int i = 0; i < opt_warnings.len; i++) {
+    char *w = opt_warnings.data[i];
+    bool no = !strncmp(w, "no-", 3);
+    char *rest = no ? w + 3 : w;
+    if (!strcmp(w, "all") && name) {
+      on = true;
+    } else if (!strcmp(rest, "error")) {
+      all_errors = !no;
+    } else if (!strncmp(rest, "error=", 6)) {
+      if (name && !strcmp(rest + 6, name)) {
+        this_error = !no;
+        on = on || !no;
+      }
+    } else if (name && !strncmp(rest, name, strlen(name)) &&
+               (rest[strlen(name)] == '\0' || rest[strlen(name)] == '=')) {
+      // -Wformat=0 is -Wno-format.
+      on = !no && strcmp(rest + strlen(name), "=0");
+    }
+  }
+
+  *is_error = (this_error >= 0) ? this_error : all_errors;
+  return on && !opt_w;
+}
+
+bool warning_on(char *name) {
+  bool is_error;
+  return warning_state(name, &is_error);
+}
+
+static void warn_vtok(char *name, Token *tok, char *fmt, va_list ap) {
+  bool is_error;
+  if (!warning_state(name, &is_error))
     return;
+  // As with gcc, code in a system header (the C library's) gets no
+  // warnings that have a name.
+  if (name && in_system_header(tok))
+    return;
+
   tok = user_token(tok);
+  char *msg = vformat(fmt, ap);
+  if (name)
+    msg = format("%s [-W%s%s]", msg, is_error ? "error=" : "", name);
+  print_diag(is_error ? "error" : "warning", tok_filename(tok), tok->file->contents,
+             tok->line_no, tok->loc, msg);
+  // An error from -Werror stops the compile, but not the parser, which
+  // reports the rest.
+  if (is_error)
+    werror_count++;
+}
+
+void warn_tok(Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  print_diag("warning", tok_filename(tok), tok->file->contents, tok->line_no,
-             tok->loc, vformat(fmt, ap));
+  warn_vtok(NULL, tok, fmt, ap);
+  va_end(ap);
+}
+
+// A warning with a name, which -Wno-<name> turns off
+void warn_opt(char *name, Token *tok, char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  warn_vtok(name, tok, fmt, ap);
   va_end(ap);
 }
 

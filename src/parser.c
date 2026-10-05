@@ -238,6 +238,15 @@ static bool is_function(Token *tok, Type *basety);
 static bool falls_through(Node *node);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
+static void warn_unused_value(Node *stmt);
+static void warn_assign_in_condition(Node *cond, Token *start);
+static void warn_address_condition(Node *cond);
+static void warn_string_compare(Node *lhs, Node *rhs, Token *tok);
+static void warn_return_local(Node *exp);
+static void warn_div_by_zero(Node *lhs, Node *rhs, Token *tok);
+static void warn_shift_count(Node *lhs, Node *rhs, Token *tok);
+static void warn_format(Obj *fn, Node *args);
+static void warn_switch(Node *sw);
 
 //---------- Scopes and name lookup ------------------------------------------
 
@@ -1538,12 +1547,15 @@ static Type *enum_specifier(Token **rest, Token *tok) {
   int i = 0;
   int64_t val = 0;
   int64_t min = 0, max = 0;
+  EnumConst head = {};
+  EnumConst *last = &head;
   while (!consume_end(rest, tok)) {
     if (i++ > 0)
       tok = skip(tok, ",");
 
     // An enumerator can't reuse a name declared in the same scope, as in
     // `enum A { X }; enum B { X };`.
+    Token *name_tok = tok;
     char *name = get_ident(tok);
     if (hashmap_get(&scope->vars, name))
       error_tok(tok, "redeclaration of '%s'", name);
@@ -1568,8 +1580,13 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     // enum's type, as with gcc.
     VarScope *sc = push_scope(name);
     sc->enum_ty = (fixed || val != (int)val) ? ty : ty_int;
-    sc->enum_val = val++;
+    sc->enum_val = val;
+
+    last = last->next = arena_alloc(sizeof(EnumConst));
+    last->name = name_tok;
+    last->val = val++;
   }
+  ty->enum_consts = head.next;
 
   *rest = attributes(*rest, &a, true);
   no_symbol_attrs(&a, "an enum");
@@ -3052,6 +3069,14 @@ static Node *asm_stmt(Token **rest, Token *tok) {
 
 //---------- Statements: if, switch, loops, jumps and blocks -----------------
 
+// The condition of an if, a loop or ?:, which starts at `start`: a number
+// or a pointer, and the warnings about conditions.
+static void check_condition(Node *cond, Token *start) {
+  check_scalar(cond);
+  warn_assign_in_condition(cond, start);
+  warn_address_condition(cond);
+}
+
 // A case label's value converted to the promoted type of the switch's
 // controlling expression `ty`, as C requires: all 64 bits for a 64-bit
 // switch, 32 otherwise.
@@ -3115,6 +3140,7 @@ static Node *stmt(Token **rest, Token *tok) {
                   current_fn->name);
     } else {
       check_assign(ty, exp, "return");
+      warn_return_local(exp);
     }
 
     if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
@@ -3127,6 +3153,7 @@ static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "if")) {
     Node *node = new_node(ND_IF, tok);
     tok = skip(tok->next, "(");
+    Token *cond_start = tok;
     node->cond = expr(&tok, tok);
     tok = skip(tok, ")");
     node->then = stmt(&tok, tok);
@@ -3139,7 +3166,7 @@ static Node *stmt(Token **rest, Token *tok) {
     // `if (ENABLE_FEATURE) f();` names functions that don't exist when
     // the feature is off. A branch with a label stays, since a goto or a
     // case can still reach it.
-    check_scalar(node->cond);
+    check_condition(node->cond, cond_start);
     if (is_integer(node->cond->ty) && is_const_expr(node->cond)) {
       if (eval(node->cond)) {
         if (node->els && !has_label(node->els))
@@ -3170,6 +3197,7 @@ static Node *stmt(Token **rest, Token *tok) {
     brk_cleanups = case_cleanups = cleanups;
 
     node->then = stmt(rest, tok);
+    warn_switch(node);
 
     current_switch = sw;
     brk_label = brk;
@@ -3256,8 +3284,9 @@ static Node *stmt(Token **rest, Token *tok) {
     brk_cleanups = cont_cleanups = cleanups;
 
     if (!equal(tok, ";")) {
+      Token *cond_start = tok;
       node->cond = expr(&tok, tok);
-      check_scalar(node->cond);
+      check_condition(node->cond, cond_start);
     }
     tok = skip(tok, ";");
 
@@ -3288,8 +3317,9 @@ static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "while")) {
     Node *node = new_node(ND_FOR, tok);
     tok = skip(tok->next, "(");
+    Token *cond_start = tok;
     node->cond = expr(&tok, tok);
-    check_scalar(node->cond);
+    check_condition(node->cond, cond_start);
     tok = skip(tok, ")");
 
     char *brk = brk_label;
@@ -3327,8 +3357,9 @@ static Node *stmt(Token **rest, Token *tok) {
 
     tok = skip(tok, "while");
     tok = skip(tok, "(");
+    Token *cond_start = tok;
     node->cond = expr(&tok, tok);
-    check_scalar(node->cond);
+    check_condition(node->cond, cond_start);
     tok = skip(tok, ")");
     *rest = skip(tok, ";");
     return node;
@@ -3498,6 +3529,11 @@ static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr) {
   }
 
   leave_scope();
+
+  if (!error_count)
+    for (Node *n = head.next; n; n = n->next)
+      if (!is_stmt_expr || n->next)
+        warn_unused_value(n);
 
   node->body = head.next;
   if (cleanups != outer) {
@@ -4074,6 +4110,7 @@ static Node *conditional(Token **rest, Token *tok) {
     *rest = tok;
     return cond;
   }
+  warn_address_condition(cond);
 
   if (equal(tok->next, ":")) {
     // [GNU] Compile `a ?: b` as `tmp = a, tmp ? tmp : b`.
@@ -4181,13 +4218,10 @@ static Node *equality(Token **rest, Token *tok) {
   for (;;) {
     Token *start = tok;
 
-    if (equal(tok, "==")) {
-      node = new_binary(ND_EQ, node, relational(&tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, "!=")) {
-      node = new_binary(ND_NE, node, relational(&tok, tok->next), start);
+    if (equal(tok, "==") || equal(tok, "!=")) {
+      Node *rhs = relational(&tok, tok->next);
+      warn_string_compare(node, rhs, start);
+      node = new_binary(equal(start, "==") ? ND_EQ : ND_NE, node, rhs, start);
       continue;
     }
 
@@ -4235,13 +4269,10 @@ static Node *shift(Token **rest, Token *tok) {
   for (;;) {
     Token *start = tok;
 
-    if (equal(tok, "<<")) {
-      node = new_binary(ND_SHL, node, add(&tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, ">>")) {
-      node = new_binary(ND_SHR, node, add(&tok, tok->next), start);
+    if (equal(tok, "<<") || equal(tok, ">>")) {
+      Node *rhs = add(&tok, tok->next);
+      warn_shift_count(node, rhs, start);
+      node = new_binary(equal(start, "<<") ? ND_SHL : ND_SHR, node, rhs, start);
       continue;
     }
 
@@ -4372,13 +4403,10 @@ static Node *mul(Token **rest, Token *tok) {
       continue;
     }
 
-    if (equal(tok, "/")) {
-      node = new_binary(ND_DIV, node, cast(&tok, tok->next), start);
-      continue;
-    }
-
-    if (equal(tok, "%")) {
-      node = new_binary(ND_MOD, node, cast(&tok, tok->next), start);
+    if (equal(tok, "/") || equal(tok, "%")) {
+      Node *rhs = cast(&tok, tok->next);
+      warn_div_by_zero(node, rhs, start);
+      node = new_binary(equal(start, "/") ? ND_DIV : ND_MOD, node, rhs, start);
       continue;
     }
 
@@ -4975,6 +5003,9 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
 
   *rest = skip(tok, ")");
 
+  if (fn->kind == ND_VAR && fn->var->is_function)
+    warn_format(fn->var, head.next);
+
   // Errors about the call's value point at the function name.
   Node *node = new_unary(ND_FUNCALL, fn, fn->tok);
   node->func_ty = ty;
@@ -5207,6 +5238,9 @@ static bool overflow_builtin(Token *tok, NodeKind *op, Type **ty) {
   return true;
 }
 
+static int fp_builtin_index(Token *tok);
+static char *libc_builtin_sig(Token *tok);
+
 static bool is_gnu_builtin(Token *tok) {
   int size;
   NodeKind op;
@@ -5215,7 +5249,7 @@ static bool is_gnu_builtin(Token *tok) {
     if (equal(tok, gnu_builtin_names[i]))
       return true;
   return bit_builtin(tok, &size) || rmw_builtin(tok) >= 0 ||
-         overflow_builtin(tok, &op, &ty);
+         overflow_builtin(tok, &op, &ty) || fp_builtin_index(tok) >= 0;
 }
 
 // The bits a bit builtin counts in a constant, so it can be folded.
@@ -5279,6 +5313,388 @@ static Node *void_node(Token *tok) {
   return new_cast(new_num(0, tok), ty_void);
 }
 
+// [GNU] __builtin_memcpy and the like are the C library function of that
+// name, which gcc calls too at -O0. The program needn't have declared it:
+// its type comes from here, the return type first, then the parameters,
+// with '.' for `...`: v void, i int, l long, L long long, z size_t,
+// d double, f float, D long double, p void *, P const void *, s char *,
+// S const char *.
+static struct {
+  char *name;
+  char *sig;
+} libc_builtins[] = {
+  {"memcpy", "ppPz"}, {"memmove", "ppPz"}, {"memset", "ppiz"},
+  {"memcmp", "iPPz"}, {"memchr", "pPiz"}, {"strlen", "zS"},
+  {"strnlen", "zSz"}, {"strcmp", "iSS"}, {"strncmp", "iSSz"},
+  {"strcpy", "ssS"}, {"strncpy", "ssSz"}, {"strcat", "ssS"},
+  {"strncat", "ssSz"}, {"strchr", "sSi"}, {"strrchr", "sSi"},
+  {"strstr", "sSS"}, {"strspn", "zSS"}, {"strcspn", "zSS"},
+  {"strpbrk", "sSS"}, {"strdup", "sS"}, {"strndup", "sSz"},
+  {"abs", "ii"}, {"labs", "ll"}, {"llabs", "LL"},
+  {"sqrt", "dd"}, {"sqrtf", "ff"}, {"sqrtl", "DD"},
+  {"floor", "dd"}, {"floorf", "ff"}, {"ceil", "dd"}, {"ceilf", "ff"},
+  {"round", "dd"}, {"roundf", "ff"}, {"trunc", "dd"}, {"truncf", "ff"},
+  {"fmod", "ddd"}, {"fmin", "ddd"}, {"fmax", "ddd"}, {"pow", "ddd"},
+  {"exp", "dd"}, {"log", "dd"}, {"log2", "dd"}, {"log10", "dd"},
+  {"sin", "dd"}, {"cos", "dd"}, {"tan", "dd"}, {"atan2", "ddd"},
+  {"ldexp", "ddi"},
+  {"malloc", "pz"}, {"calloc", "pzz"}, {"realloc", "ppz"}, {"free", "vp"},
+  {"abort", "v"}, {"exit", "vi"}, {"_exit", "vi"},
+  {"printf", "iS."}, {"sprintf", "isS."}, {"snprintf", "iszS."},
+  {"fprintf", "ipS."}, {"puts", "iS"}, {"putchar", "ii"},
+  {"fputs", "iSp"}, {"fputc", "iip"}, {"fwrite", "zPzzp"},
+};
+
+static Type *libc_builtin_type(char c) {
+  switch (c) {
+  case 'v': return ty_void;
+  case 'i': return ty_int;
+  case 'l': return ty_long;
+  case 'L': return ty_llong;
+  case 'z': return ty_ulong;
+  case 'd': return ty_double;
+  case 'f': return ty_float;
+  case 'D': return ty_ldouble;
+  case 'p': return pointer_to(ty_void);
+  case 'P': return pointer_to(qualified(ty_void, true, false));
+  case 's': return pointer_to(ty_char);
+  case 'S': return pointer_to(qualified(ty_char, true, false));
+  }
+  unreachable();
+}
+
+static bool is_libc_noreturn(char *name);
+static Obj *find_func(char *name);
+
+// The type string of `tok`, `__builtin_<name>`, from libc_builtins[], or
+// NULL if it isn't one of them.
+static char *libc_builtin_sig(Token *tok) {
+  int pre = strlen("__builtin_");
+  if (tok->kind != TK_IDENT || tok->len <= pre || strncmp(tok->loc, "__builtin_", pre))
+    return NULL;
+  for (int i = 0; i < sizeof(libc_builtins) / sizeof(*libc_builtins); i++) {
+    char *name = libc_builtins[i].name;
+    if (strlen(name) == tok->len - pre && !strncmp(name, tok->loc + pre, tok->len - pre))
+      return libc_builtins[i].sig;
+  }
+  return NULL;
+}
+
+// The function `tok`, `__builtin_<name>`, calls, or NULL if it isn't one
+// of libc_builtins[]: the program's own declaration of it if there is
+// one, or else a declaration made here.
+static Obj *libc_builtin(Token *tok) {
+  static HashMap declared;
+  char *sig = libc_builtin_sig(tok);
+  if (!sig)
+    return NULL;
+  char *name = strndup(tok->loc + strlen("__builtin_"), tok->len - strlen("__builtin_"));
+
+  Obj *fn = find_func(name);
+  if (!fn)
+    fn = hashmap_get(&declared, name);
+  if (fn)
+    return fn;
+
+  Type *ty = func_type(libc_builtin_type(sig[0]));
+  Type head = {};
+  Type *cur = &head;
+  for (char *p = sig + 1; *p; p++) {
+    if (*p == '.')
+      ty->is_variadic = true;
+    else
+      cur = cur->next = copy_type(libc_builtin_type(*p));
+  }
+  ty->params = head.next;
+
+  fn = arena_alloc(sizeof(Obj));
+  fn->name = name;
+  fn->ty = ty;
+  fn->align = 1;
+  fn->is_function = true;
+  fn->is_noreturn = is_libc_noreturn(name);
+  hashmap_put(&declared, name, fn);
+  return fn;
+}
+
+// [GNU] Builtins that need no library, each with how many arguments it
+// takes. fp_builtin() makes them.
+static struct {
+  char *name;
+  int nargs;
+} fp_builtins[] = {
+  {"__builtin_inf", 0}, {"__builtin_inff", 0}, {"__builtin_infl", 0},
+  {"__builtin_huge_val", 0}, {"__builtin_huge_valf", 0},
+  {"__builtin_huge_vall", 0},
+  {"__builtin_nan", 1}, {"__builtin_nanf", 1}, {"__builtin_nanl", 1},
+  {"__builtin_isnan", 1}, {"__builtin_isinf", 1}, {"__builtin_isfinite", 1},
+  {"__builtin_isnormal", 1}, {"__builtin_isinf_sign", 1},
+  {"__builtin_signbit", 1}, {"__builtin_signbitf", 1},
+  {"__builtin_signbitl", 1}, {"__builtin_fpclassify", 6},
+  {"__builtin_isgreater", 2}, {"__builtin_isgreaterequal", 2},
+  {"__builtin_isless", 2}, {"__builtin_islessequal", 2},
+  {"__builtin_islessgreater", 2}, {"__builtin_isunordered", 2},
+  {"__builtin_fabs", 1}, {"__builtin_fabsf", 1}, {"__builtin_fabsl", 1},
+  {"__builtin_copysign", 2}, {"__builtin_copysignf", 2},
+  {"__builtin_copysignl", 2},
+  {"__builtin_choose_expr", 3}, {"__builtin_object_size", 2},
+  {"__builtin_dynamic_object_size", 2}, {"__builtin_speculation_safe_value", 1},
+  {"__builtin_LINE", 0}, {"__builtin_FILE", 0}, {"__builtin_FUNCTION", 0},
+};
+
+static int fp_builtin_index(Token *tok) {
+  for (int i = 0; i < sizeof(fp_builtins) / sizeof(*fp_builtins); i++)
+    if (equal(tok, fp_builtins[i].name))
+      return i;
+  return -1;
+}
+
+static Node *new_flonum(long double val, Type *ty, Token *tok) {
+  Node *node = new_node(ND_NUM, tok);
+  node->fval = val;
+  node->ty = ty;
+  return node;
+}
+
+// The floating-point type a builtin's name says (an f or l at its end),
+// or NULL when it takes any.
+static Type *fp_suffix_type(Token *tok, int base_len) {
+  if (tok->len == base_len)
+    return ty_double;
+  return tok->loc[base_len] == 'f' ? ty_float : ty_ldouble;
+}
+
+// `T tmp = arg;` in *init, and tmp: a builtin that looks at its argument
+// more than once evaluates it once. With `ty` NULL, T is arg's own type,
+// which must be floating.
+static Obj *fp_temp(Node *arg, Type *ty, Node **init, Token *tok) {
+  add_type(arg);
+  if (!ty) {
+    if (!is_flonum(arg->ty))
+      error_tok(arg->tok, "floating-point argument expected, not '%s'",
+                type_name(arg->ty));
+    ty = unqual(arg->ty);
+  }
+  Obj *var = new_lvar("", ty);
+  *init = new_binary(ND_ASSIGN, new_var_node(var, tok), new_cast(arg, ty), tok);
+  return var;
+}
+
+// The integer in `var` (float, double or long double) that holds its sign
+// bit, as an lvalue, and the bit's mask.
+static Node *sign_word(Obj *var, uint64_t *mask, Token *tok) {
+  Node *addr = new_unary(ND_ADDR, new_var_node(var, tok), tok);
+  if (var->ty->kind == TY_FLOAT) {
+    *mask = 0x80000000;
+    return new_unary(ND_DEREF, new_cast(addr, pointer_to(ty_uint)), tok);
+  }
+  if (var->ty->kind == TY_DOUBLE) {
+    *mask = (uint64_t)1 << 63;
+    return new_unary(ND_DEREF, new_cast(addr, pointer_to(ty_ulong)), tok);
+  }
+  // x87's 80 bits: the sign is the top bit of the 16-bit word at byte 8.
+  *mask = 0x8000;
+  Node *word = new_add(new_cast(addr, pointer_to(ty_ushort)), new_num(4, tok), tok);
+  return new_unary(ND_DEREF, word, tok);
+}
+
+static Node *new_comma(Node *lhs, Node *rhs, Token *tok) {
+  return new_binary(ND_COMMA, lhs, rhs, tok);
+}
+
+static Node *new_cond(Node *c, Node *then, Node *els, Token *tok) {
+  Node *node = new_node(ND_COND, tok);
+  node->cond = c;
+  node->then = then;
+  node->els = els;
+  return node;
+}
+
+// |var|, for comparing with infinity and the smallest normal number
+static Node *fp_abs(Obj *var, Token *tok) {
+  Node *is_neg = new_binary(ND_LT, new_var_node(var, tok), new_flonum(0, var->ty, tok), tok);
+  return new_cond(is_neg, new_unary(ND_NEG, new_var_node(var, tok), tok),
+                  new_var_node(var, tok), tok);
+}
+
+// The smallest normal number of a floating-point type
+static long double fp_min_normal(Type *ty) {
+  if (ty->kind == TY_FLOAT)
+    return 0x1p-126L;
+  if (ty->kind == TY_DOUBLE)
+    return 0x1p-1022L;
+  return 0x1p-16382L;
+}
+
+// One of fp_builtins[], named by `start`, with its arguments.
+static Node *fp_builtin(Token *start, Node **args) {
+  Token *tok = start;
+  char *name = strndup(start->loc, start->len);
+
+  if (!strncmp(name, "__builtin_inf", 13) || !strncmp(name, "__builtin_huge_val", 18)) {
+    int len = name[10] == 'i' ? 13 : 18;
+    return new_flonum(strtold("inf", NULL), fp_suffix_type(start, len), tok);
+  }
+
+  if (!strncmp(name, "__builtin_nan", 13)) {
+    Node *arg = args[0];
+    if (arg->kind != ND_VAR || !arg->var->is_string)
+      error_tok(arg->tok, "a string literal expected");
+    char *payload = format("nan(%s)", arg->var->init_data);
+    return new_flonum(strtold(payload, NULL), fp_suffix_type(start, 13), tok);
+  }
+
+  if (equal(start, "__builtin_choose_expr")) {
+    if (!is_const_expr(args[0]))
+      error_tok(args[0]->tok, "a constant expression expected");
+    return eval(args[0]) ? args[1] : args[2];
+  }
+
+  // The size of the object a pointer points to: known for an array or
+  // `&var`, as gcc knows it even at -O0. Otherwise it's unknown, which
+  // gcc says as (size_t)-1, or 0 for types 2 and 3.
+  if (equal(start, "__builtin_object_size") ||
+      equal(start, "__builtin_dynamic_object_size")) {
+    Node *p = args[0];
+    while (p->kind == ND_CAST)
+      p = p->lhs;
+    add_type(p);
+    if (p->kind == ND_VAR && p->ty->kind == TY_ARRAY)
+      return new_ulong(p->ty->size, tok);
+    if (p->kind == ND_ADDR && p->lhs->kind == ND_VAR && p->lhs->ty->kind != TY_VLA)
+      return new_ulong(p->lhs->ty->size, tok);
+    return new_ulong((eval(args[1]) & 2) ? 0 : -1, tok);
+  }
+
+  if (equal(start, "__builtin_speculation_safe_value"))
+    return args[0];
+
+  // Where the call is, as __LINE__, __FILE__ and __func__ say
+  if (equal(start, "__builtin_LINE") || equal(start, "__builtin_FILE")) {
+    Token *t = start;
+    while (t->origin)
+      t = t->origin;
+    if (equal(start, "__builtin_LINE"))
+      return new_num(t->line_no + t->file->line_delta, tok);
+    char *file = t->file->display_name;
+    return new_var_node(new_string_literal(file, array_of(ty_char, strlen(file) + 1)), tok);
+  }
+  if (equal(start, "__builtin_FUNCTION")) {
+    char *fn = current_fn ? current_fn->name : "";
+    return new_var_node(new_string_literal(fn, array_of(ty_char, strlen(fn) + 1)), tok);
+  }
+
+  // The comparisons that are quiet on a NaN: on x86 an ordinary
+  // comparison is, and is false when either side is a NaN.
+  if (!strncmp(name, "__builtin_is", 12) && strcmp(name, "__builtin_isnan") &&
+      strcmp(name, "__builtin_isinf") && strcmp(name, "__builtin_isfinite") &&
+      strcmp(name, "__builtin_isnormal") && strcmp(name, "__builtin_isinf_sign")) {
+    Node *init_a, *init_b;
+    Obj *a = fp_temp(args[0], NULL, &init_a, tok);
+    Obj *b = fp_temp(args[1], NULL, &init_b, tok);
+    Node *x = new_var_node(a, tok), *y = new_var_node(b, tok);
+    Node *res;
+    if (equal(start, "__builtin_isgreater"))
+      res = new_binary(ND_LT, y, x, tok);
+    else if (equal(start, "__builtin_isgreaterequal"))
+      res = new_binary(ND_LE, y, x, tok);
+    else if (equal(start, "__builtin_isless"))
+      res = new_binary(ND_LT, x, y, tok);
+    else if (equal(start, "__builtin_islessequal"))
+      res = new_binary(ND_LE, x, y, tok);
+    else if (equal(start, "__builtin_islessgreater"))
+      res = new_binary(ND_LOGOR, new_binary(ND_LT, x, y, tok),
+                       new_binary(ND_LT, new_var_node(b, tok), new_var_node(a, tok), tok),
+                       tok);
+    else
+      res = new_binary(ND_LOGOR, new_binary(ND_NE, x, new_var_node(a, tok), tok),
+                       new_binary(ND_NE, y, new_var_node(b, tok), tok), tok);
+    return new_comma(init_a, new_comma(init_b, res, tok), tok);
+  }
+
+  // fabs and copysign clear and copy the sign bit, as gcc does, so they
+  // need no libm and get -0.0 and NaNs right.
+  if (!strncmp(name, "__builtin_fabs", 14) || !strncmp(name, "__builtin_copysign", 18)) {
+    bool is_fabs = name[10] == 'f';
+    Type *ty = fp_suffix_type(start, is_fabs ? 14 : 18);
+    Node *init;
+    Obj *var = fp_temp(args[0], ty, &init, tok);
+    uint64_t mask;
+    Node *word = sign_word(var, &mask, tok);
+    Node *bits = new_binary(ND_BITAND, sign_word(var, &mask, tok),
+                            new_ulong(~mask, tok), tok);
+    if (!is_fabs) {
+      Node *init2;
+      Obj *from = fp_temp(args[1], ty, &init2, tok);
+      init = new_comma(init, init2, tok);
+      bits = new_binary(ND_BITOR, bits,
+                        new_binary(ND_BITAND, sign_word(from, &mask, tok),
+                                   new_ulong(mask, tok), tok),
+                        tok);
+    }
+    Node *set = new_binary(ND_ASSIGN, word, bits, tok);
+    return new_comma(init, new_comma(set, new_var_node(var, tok), tok), tok);
+  }
+
+  // The classifications, on one argument of any floating type
+  Node *x = equal(start, "__builtin_fpclassify") ? args[5] : args[0];
+  Node *init;
+  Obj *var = fp_temp(x, NULL, &init, tok);
+  Type *ty = var->ty;
+  Node *v = new_var_node(var, tok);
+  Node *inf = new_flonum(strtold("inf", NULL), ty, tok);
+
+  if (!strncmp(name, "__builtin_signbit", 17)) {
+    uint64_t mask;
+    Node *word = sign_word(var, &mask, tok);
+    Node *bit = new_binary(ND_BITAND, word, new_ulong(mask, tok), tok);
+    return new_comma(init, new_binary(ND_NE, bit, new_num(0, tok), tok), tok);
+  }
+
+  Node *is_nan = new_binary(ND_NE, v, new_var_node(var, tok), tok);
+  Node *is_inf = new_binary(ND_EQ, fp_abs(var, tok), inf, tok);
+  Node *res;
+
+  if (equal(start, "__builtin_isnan"))
+    res = is_nan;
+  else if (equal(start, "__builtin_isinf"))
+    res = is_inf;
+  else if (equal(start, "__builtin_isfinite"))
+    // x - x is 0 for a finite x, and a NaN for an infinity or a NaN.
+    res = new_binary(ND_EQ,
+                     new_binary(ND_SUB, new_var_node(var, tok), new_var_node(var, tok), tok),
+                     new_flonum(0, ty, tok), tok);
+  else if (equal(start, "__builtin_isinf_sign"))
+    res = new_cond(new_binary(ND_EQ, new_var_node(var, tok),
+                             new_flonum(strtold("inf", NULL), ty, tok), tok),
+                   new_num(1, tok),
+               new_cond(new_binary(ND_EQ, new_var_node(var, tok),
+                               new_flonum(-strtold("inf", NULL), ty, tok), tok),
+                    new_num(-1, tok), new_num(0, tok), tok),
+               tok);
+  else if (equal(start, "__builtin_isnormal"))
+    res = new_binary(ND_LOGAND,
+                     new_binary(ND_LE, new_flonum(fp_min_normal(ty), ty, tok),
+                                fp_abs(var, tok), tok),
+                     new_binary(ND_LT, fp_abs(var, tok),
+                                new_flonum(strtold("inf", NULL), ty, tok), tok),
+                     tok);
+  else
+    // fpclassify(nan, infinite, normal, subnormal, zero, x)
+    res = new_cond(is_nan, args[0],
+               new_cond(is_inf, args[1],
+                    new_cond(new_binary(ND_LE, new_flonum(fp_min_normal(ty), ty, tok),
+                                        fp_abs(var, tok), tok),
+                         args[2],
+                         new_cond(new_binary(ND_EQ, new_var_node(var, tok),
+                                         new_flonum(0, ty, tok), tok),
+                              args[4], args[3], tok),
+                         tok),
+                    tok),
+               tok);
+  return new_comma(init, res, tok);
+}
+
 // [GNU] gcc's bit-counting, atomic and other builtins, which real code
 // often calls without checking for gcc. `tok` is one of them.
 static Node *gnu_builtin(Token **rest, Token *tok) {
@@ -5295,6 +5711,14 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
     } while (consume(&tok, tok, ","));
   }
   *rest = skip(tok, ")");
+
+  int fp = fp_builtin_index(start);
+  if (fp >= 0) {
+    if (nargs != fp_builtins[fp].nargs)
+      error_tok(start, "'%s' takes %d argument%s", fp_builtins[fp].name,
+                fp_builtins[fp].nargs, fp_builtins[fp].nargs == 1 ? "" : "s");
+    return fp_builtin(start, args);
+  }
 
   int size;
   char *bit = bit_builtin(start, &size);
@@ -5522,7 +5946,7 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
 bool is_known_builtin(char *name) {
   Token tok = {.loc = name, .len = strlen(name)};
   return in_list(name, builtin_names, sizeof(builtin_names) / sizeof(*builtin_names)) ||
-         is_gnu_builtin(&tok);
+         is_gnu_builtin(&tok) || libc_builtin_sig(&tok);
 }
 
 //---------- Primary expressions ---------------------------------------------
@@ -5644,6 +6068,17 @@ static Node *primary(Token **rest, Token *tok) {
       is_gnu_builtin(tok) && !find_var(tok))
     return gnu_builtin(rest, tok);
 
+  // __builtin_memcpy and the rest of libc_builtins[]: the function itself,
+  // which postfix() then calls.
+  if (tok->kind == TK_IDENT && tok->loc[0] == '_' && equal(tok->next, "(") &&
+      !find_var(tok)) {
+    Obj *fn = libc_builtin(tok);
+    if (fn) {
+      *rest = tok->next;
+      return new_var_node(fn, tok);
+    }
+  }
+
   // C23's unreachable() in <stddef.h>. Reaching it traps (ud2).
   if (equal(tok, "__builtin_unreachable")) {
     tok = skip(tok->next, "(");
@@ -5747,9 +6182,12 @@ static Node *primary(Token **rest, Token *tok) {
 
 //---------- Warnings --------------------------------------------------------
 
-// Two warnings, checked once a function is parsed: unused local
-// variables, and non-void functions that can end without a return.
-// Neither is given in system headers, after errors, or with -w.
+// Warnings, each with a name that -W<name> and -Wno-<name> turn on and
+// off (see warning_state() in token.c). Two are checked once a function
+// is parsed: unused local variables, and non-void functions that can end
+// without a return. The others are checked where the parser meets the
+// code: here are the functions it calls. None is given in system
+// headers or with -w.
 
 // C library functions that never return. glibc marks them with
 // __attribute__((noreturn)), which mucc doesn't read, so they're listed.
@@ -5765,6 +6203,375 @@ static bool is_libc_noreturn(char *name) {
   return false;
 }
 
+// Can evaluating `node` change anything, or is only its value wanted?
+static bool has_side_effects(Node *node) {
+  if (!node)
+    return false;
+  switch (node->kind) {
+  case ND_ASSIGN: // also ++, -- and op=
+  case ND_FUNCALL:
+  case ND_ASM:
+  case ND_STMT_EXPR:
+  case ND_CAS:
+  case ND_EXCH:
+  case ND_MEMZERO:
+  case ND_VA_ARG:
+  case ND_FENCE:
+  case ND_UNREACHABLE:
+  case ND_OVERFLOW:
+  case ND_VLA_FREE:
+    return true;
+  case ND_VAR:
+  case ND_DEREF:
+  case ND_MEMBER:
+    // Reading a volatile object is something a program can see.
+    if (node->ty && node->ty->is_volatile)
+      return true;
+    break;
+  }
+  for (Node *n = node->args; n; n = n->next)
+    if (has_side_effects(n))
+      return true;
+  return has_side_effects(node->lhs) || has_side_effects(node->rhs) ||
+         has_side_effects(node->cond) || has_side_effects(node->then) ||
+         has_side_effects(node->els);
+}
+
+// -Wunused-value: `x == 1;`, a statement that computes a value and drops
+// it without doing anything. A cast to void says that's meant. `stmt` is
+// a statement in a block, but not the last one of a statement expression,
+// whose value is the block's.
+static void warn_unused_value(Node *stmt) {
+  while (stmt->kind == ND_LABEL || stmt->kind == ND_CASE)
+    stmt = stmt->lhs;
+  if (stmt->kind != ND_EXPR_STMT)
+    return;
+  Node *expr = stmt->lhs;
+  Token *start = stmt->tok;
+  add_type(expr);
+  switch (expr->kind) {
+  case ND_ADD: case ND_SUB: case ND_MUL: case ND_DIV: case ND_MOD:
+  case ND_BITAND: case ND_BITOR: case ND_BITXOR: case ND_SHL: case ND_SHR:
+  case ND_EQ: case ND_NE: case ND_LT: case ND_LE:
+  case ND_NOT: case ND_BITNOT: case ND_NEG:
+  case ND_VAR: case ND_NUM: case ND_MEMBER:
+    if (!has_side_effects(expr))
+      warn_opt("unused-value", start, "statement with no effect");
+  }
+}
+
+// -Wparentheses: `if (x = 0)`, most likely meant as `if (x == 0)`. Extra
+// parentheses, `if ((x = f()))`, say it's meant. `start` is the
+// condition's first token.
+static void warn_assign_in_condition(Node *cond, Token *start) {
+  if (cond->kind == ND_ASSIGN && equal(cond->tok, "=") && !equal(start, "("))
+    warn_opt("parentheses", cond->tok,
+             "suggest parentheses around assignment used as truth value");
+}
+
+// -Waddress: a condition that is a function or an array is always true,
+// since only its address is tested.
+static void warn_address_condition(Node *cond) {
+  if (cond->kind != ND_VAR)
+    return;
+  Obj *var = cond->var;
+  if (var->ty->kind == TY_FUNC)
+    warn_opt("address", cond->tok,
+             "the address of '%s' will always evaluate as 'true'", var->name);
+  else if (var->ty->kind == TY_ARRAY && !var->is_string)
+    warn_opt("address", cond->tok,
+             "the address of '%s' will always evaluate as 'true'", var->name);
+}
+
+// -Waddress: `s == "abc"` compares addresses, not the strings.
+static void warn_string_compare(Node *lhs, Node *rhs, Token *tok) {
+  if ((lhs->kind == ND_VAR && lhs->var->is_string) ||
+      (rhs->kind == ND_VAR && rhs->var->is_string))
+    warn_opt("address", tok, "comparison with string literal results in "
+             "unspecified behavior");
+}
+
+// -Wreturn-local-addr: `return &x;` or `return buf;` for a local x or
+// array buf, which no longer exists once the function returns.
+static void warn_return_local(Node *exp) {
+  Node *node = exp;
+  while (node->kind == ND_CAST)
+    node = node->lhs;
+  // Through a[i], the object is a only if a is an array, not a pointer.
+  bool needs_array = true;
+  if (node->kind == ND_ADDR) {
+    node = node->lhs;
+    needs_array = false;
+    // &x.member, &a[i]
+    while (node->kind == ND_MEMBER ||
+           (node->kind == ND_DEREF && node->lhs->kind == ND_ADD)) {
+      if (node->kind == ND_DEREF)
+        needs_array = true;
+      node = (node->kind == ND_MEMBER) ? node->lhs : node->lhs->lhs;
+      while (node->kind == ND_CAST)
+        node = node->lhs;
+    }
+  } else if (node->kind == ND_ADD) {
+    // &a[2], which the parser has made a + 2
+    node = node->lhs;
+    while (node->kind == ND_CAST)
+      node = node->lhs;
+  }
+  if (node->kind == ND_VAR && node->var->is_local && node->var->tok &&
+      (!needs_array || node->var->ty->kind == TY_ARRAY))
+    warn_opt("return-local-addr", exp->tok,
+             "function returns address of local variable '%s'", node->var->name);
+}
+
+// -Wdiv-by-zero: a division by an integer constant 0. (By 0.0 is how a
+// program asks for an infinity or a NaN.)
+static void warn_div_by_zero(Node *lhs, Node *rhs, Token *tok) {
+  add_type(rhs);
+  if (is_integer(rhs->ty) && is_const_expr(rhs) && eval(rhs) == 0)
+    warn_opt("div-by-zero", tok, "division by zero");
+}
+
+// -Wshift-count-overflow and -Wshift-count-negative: a constant shift
+// count that is negative, or at least the width of the shifted type.
+static void warn_shift_count(Node *lhs, Node *rhs, Token *tok) {
+  add_type(lhs);
+  add_type(rhs);
+  if (!is_integer(lhs->ty) || !is_integer(rhs->ty) || !is_const_expr(rhs))
+    return;
+  int64_t n = eval(rhs);
+  int width = MAX(lhs->ty->size, 4) * 8; // after integer promotion
+  char *dir = equal(tok, "<<") ? "left" : "right";
+  if (n < 0)
+    warn_opt("shift-count-negative", tok, "%s shift count is negative", dir);
+  else if (n >= width)
+    warn_opt("shift-count-overflow", tok, "%s shift count >= width of type", dir);
+}
+
+// -Wformat: a printf or scanf format string that doesn't match the
+// arguments after it. Only a literal format is checked.
+static struct {
+  char *name;
+  int fmt; // which argument is the format, from 0
+  bool is_scanf;
+} format_funcs[] = {
+  {"printf", 0}, {"fprintf", 1}, {"dprintf", 1}, {"sprintf", 1},
+  {"snprintf", 2}, {"asprintf", 1},
+  {"scanf", 0, true}, {"fscanf", 1, true}, {"sscanf", 1, true},
+  // glibc's names for them, which its <stdio.h> uses for C99 and C23
+  {"__isoc99_scanf", 0, true}, {"__isoc99_fscanf", 1, true},
+  {"__isoc99_sscanf", 1, true}, {"__isoc23_scanf", 0, true},
+  {"__isoc23_fscanf", 1, true}, {"__isoc23_sscanf", 1, true},
+};
+
+// The type a conversion takes, as a type, for checking and messages.
+// For printf's integers, `ty` is only the size class: int for no length
+// (char and short become int), and the sign isn't checked, as with gcc.
+static Type *format_arg_type(char conv, char *len, bool is_scanf) {
+  Type *ty;
+  if (conv == 'c')
+    return is_scanf ? pointer_to(!strcmp(len, "l") ? ty_int : ty_char) : ty_int;
+  if (strchr("diouxXn", conv)) {
+    if (!strcmp(len, "l") || !strcmp(len, "j") || !strcmp(len, "z") || !strcmp(len, "t"))
+      ty = ty_long;
+    else if (!strcmp(len, "ll") || !strcmp(len, "q"))
+      ty = ty_llong;
+    else if (is_scanf && !strcmp(len, "h"))
+      ty = ty_short;
+    else if (is_scanf && !strcmp(len, "hh"))
+      ty = ty_char;
+    else
+      ty = ty_int;
+    return (conv == 'n' || is_scanf) ? pointer_to(ty) : ty;
+  }
+  if (strchr("fFeEgGaA", conv)) {
+    ty = !strcmp(len, "L") ? ty_ldouble
+         : (is_scanf && strcmp(len, "l")) ? ty_float : ty_double;
+    return is_scanf ? pointer_to(ty) : ty;
+  }
+  if (conv == 's' || conv == '[')
+    return pointer_to(!strcmp(len, "l") ? ty_int : ty_char);
+  if (conv == 'p')
+    return pointer_to(is_scanf ? pointer_to(ty_void) : ty_void);
+  return NULL;
+}
+
+// Does argument type `arg` fit what the conversion wants, `want`?
+static bool format_arg_ok(Type *want, Type *arg, char conv, char *len) {
+  // j, z and t are the 64-bit typedefs, which may be long or long long
+  bool any64 = len[0] && strchr("jzt", len[0]);
+  if (want->kind != TY_PTR) {
+    if (is_flonum(want))
+      return want->kind == TY_LDOUBLE ? arg->kind == TY_LDOUBLE
+                                      : arg->kind == TY_DOUBLE || arg->kind == TY_FLOAT;
+    if (!is_integer(arg))
+      return false;
+    if (want->size == 8)
+      return arg->size == 8 && (any64 || arg->is_distinct == want->is_distinct);
+    return arg->size <= 4;
+  }
+
+  // %p takes any pointer; the others, a pointer to the right type.
+  if (!arg->base)
+    return arg->kind == TY_FUNC && conv == 'p';
+  if (conv == 'p')
+    return true;
+  Type *w = want->base, *a = arg->base;
+  if (w->kind == TY_PTR)
+    return a->kind == TY_PTR;
+  if (is_flonum(w))
+    return a->kind == w->kind;
+  if (w->kind == TY_CHAR)
+    return a->kind == TY_CHAR;
+  return is_integer(a) && a->size == w->size &&
+         (w->size != 8 || any64 || a->is_distinct == w->is_distinct);
+}
+
+static void warn_format(Obj *fn, Node *args) {
+  int idx = -1;
+  for (int i = 0; i < sizeof(format_funcs) / sizeof(*format_funcs); i++)
+    if (!strcmp(fn->name, format_funcs[i].name))
+      idx = i;
+  if (idx < 0 || !warning_on("format"))
+    return;
+  bool is_scanf = format_funcs[idx].is_scanf;
+
+  Node *arg = args;
+  int argno = 1;
+  for (int i = 0; i < format_funcs[idx].fmt && arg; i++, argno++)
+    arg = arg->next;
+  if (!arg)
+    return;
+  Node *fmt_node = arg;
+  while (fmt_node->kind == ND_CAST)
+    fmt_node = fmt_node->lhs;
+  if (fmt_node->kind != ND_VAR || !fmt_node->var->is_string ||
+      fmt_node->var->ty->base->size != 1)
+    return;
+  char *fmt = fmt_node->var->init_data;
+  Token *fmt_tok = fmt_node->tok;
+  arg = arg->next;
+  argno++;
+
+  for (char *p = fmt; *p; p++) {
+    if (*p != '%')
+      continue;
+    char *spec = p++;
+    if (*p == '%')
+      continue;
+
+    // %1$d: arguments by position, which this doesn't follow
+    char *q = p;
+    while (isdigit(*q))
+      q++;
+    if (*q == '$')
+      return;
+
+    bool suppress = is_scanf && *p == '*';
+    if (suppress)
+      p++;
+    while (!is_scanf && *p && strchr("-+ #0'", *p))
+      p++;
+
+    // Width and precision; a `*` takes an int argument.
+    for (int part = 0; part < 2; part++) {
+      if (part == 1) {
+        if (is_scanf || *p != '.')
+          break;
+        p++;
+      }
+      if (*p == '*' && !is_scanf) {
+        p++;
+        if (!arg) {
+          warn_opt("format", fmt_tok, "field width or precision '*' expects a matching 'int' argument");
+          return;
+        }
+        add_type(arg);
+        if (!is_integer(arg->ty))
+          warn_opt("format", arg->tok, "field width or precision '*' expects argument of "
+                   "type 'int', but argument %d has type '%s'", argno, type_name(arg->ty));
+        arg = arg->next;
+        argno++;
+      }
+      while (isdigit(*p))
+        p++;
+    }
+
+    char len[3] = {0};
+    if ((p[0] == 'h' && p[1] == 'h') || (p[0] == 'l' && p[1] == 'l')) {
+      len[0] = len[1] = *p;
+      p += 2;
+    } else if (*p && strchr("hlLqjzt", *p)) {
+      len[0] = *p++;
+    }
+
+    char conv = *p;
+    if (!conv)
+      return;
+    if (conv == '[')
+      // %[...]: skip the set; a ']' first is part of it.
+      for (p += (p[1] == ']') + 1; *p && *p != ']'; p++)
+        ;
+    if (suppress || conv == 'm')
+      continue;
+
+    Type *want = format_arg_type(conv, len, is_scanf);
+    if (!want)
+      continue; // a conversion this doesn't know
+    int spec_len = (int)(p - spec + (*p != '\0'));
+    if (!arg) {
+      warn_opt("format", fmt_tok, "format '%.*s' expects a matching '%s' argument",
+               spec_len, spec, type_name(want));
+      return;
+    }
+    add_type(arg);
+    if (!format_arg_ok(want, arg->ty, conv, len))
+      warn_opt("format", arg->tok, "format '%.*s' expects argument of type '%s', but "
+               "argument %d has type '%s'", spec_len, spec, type_name(want), argno,
+               type_name(arg->ty));
+    arg = arg->next;
+    argno++;
+    if (!*p)
+      break;
+  }
+
+  if (arg)
+    warn_opt("format-extra-args", arg->tok, "too many arguments for format");
+}
+
+// -Wswitch: a switch on an enum, with no default, that has no case for
+// one of its constants.
+static void warn_switch(Node *sw) {
+  Type *ty = sw->cond->ty;
+  if (ty->kind != TY_ENUM || sw->default_case)
+    return;
+  bool uns = ty->is_unsigned && ty->size >= 4;
+  for (EnumConst *e = ty->enum_consts; e; e = e->next) {
+    int64_t v = case_value(ty, e->val);
+    Node *c = sw->case_next;
+    while (c && !(uns ? (uint64_t)c->begin <= (uint64_t)v && (uint64_t)v <= (uint64_t)c->end
+                      : c->begin <= v && v <= c->end))
+      c = c->case_next;
+    if (!c)
+      warn_opt("switch", sw->tok, "enumeration value '%.*s' not handled in switch",
+               e->name->len, e->name->loc);
+  }
+}
+
+// -Wunused-function: a static function that is defined and never used,
+// in the order they were defined (the list is newest first).
+static void warn_unused_functions(Obj *fn) {
+  if (!fn)
+    return;
+  warn_unused_functions(fn->next);
+  if (fn->is_function && fn->is_definition && fn->is_static && !fn->is_inline &&
+      !fn->is_used && !fn->is_kept && !fn->is_ctor && !fn->is_dtor && fn->tok) {
+    for (Obj *var = globals; var; var = var->next)
+      if (var->alias_target && !strcmp(var->alias_target, fn->name))
+        return;
+    warn_opt("unused-function", fn->tok, "'%s' defined but not used", fn->name);
+  }
+}
+
 // Warns about each local variable that is declared but never named
 // again, in declaration order (the list is newest first).
 static void warn_unused_locals(Obj *var) {
@@ -5774,7 +6581,7 @@ static void warn_unused_locals(Obj *var) {
 
   // Parameters and compiler temporaries have no `tok`.
   if (var->tok && !var->is_used && !in_system_header(var->tok))
-    warn_tok(var->tok, "unused variable '%s'", var->name);
+    warn_opt("unused-variable", var->tok, "unused variable '%s'", var->name);
 }
 
 // Does statement `node` contain a jump to `label`, such as the `break`
@@ -5878,7 +6685,8 @@ static void warn_function(Obj *fn, Token *rbrace) {
   // main() returns 0 if it runs off the end (C99).
   if (fn->ty->return_ty->kind != TY_VOID && strcmp(fn->name, "main") &&
       !in_system_header(rbrace) && falls_through(fn->body))
-    warn_tok(rbrace, "control reaches end of non-void function '%s'", fn->name);
+    warn_opt("return-type", rbrace, "control reaches end of non-void function '%s'",
+             fn->name);
 }
 
 //---------- Top level: typedefs and function definitions --------------------
@@ -6021,6 +6829,9 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn->is_noreturn = is_noreturn || is_libc_noreturn(name_str);
   }
 
+  // Where it's defined (or first declared), for warnings
+  if (!fn->tok || equal(tok, "{"))
+    fn->tok = ty->name;
   fn->is_weak |= da.weak_tok != NULL;
   fn->is_kept |= da.is_used;
   if (da.ctor_tok) {
@@ -6375,7 +7186,7 @@ static Token *remove_attributes(Token *tok) {
                              !strcmp(str, "reproducible"))) {
         // A hint mucc doesn't use.
       } else if (!in_system_header(name)) {
-        warn_tok(name, "unknown attribute '%s%s%s' ignored",
+        warn_opt("attributes", name, "unknown attribute '%s%s%s' ignored",
                  prefix ? strndup(prefix->loc, prefix->len) : "",
                  prefix ? "::" : "", str);
       }
@@ -6464,6 +7275,9 @@ Obj *parse(Token *tok) {
   for (Obj *var = globals; var; var = var->next)
     if (var->is_root)
       mark_live(var);
+
+  if (!error_count)
+    warn_unused_functions(globals);
 
   // Remove redundant tentative definitions.
   scan_globals();

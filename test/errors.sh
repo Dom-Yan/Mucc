@@ -471,7 +471,7 @@ mucc=$saved_mucc
 
 #---------- Warnings ---------------------------------------------------------
 
-expect_warning "3:7: warning: unused variable 'unused'" <<'EOF'
+expect_warning "3:7: warning: unused variable 'unused' [-Wunused-variable]" <<'EOF'
 int f(void) {
   int used = 1;
   int unused = used;
@@ -479,18 +479,18 @@ int f(void) {
 }
 EOF
 
-expect_warning "4:1: warning: control reaches end of non-void function 'f'" <<'EOF'
+expect_warning "4:1: warning: control reaches end of non-void function 'f' [-Wreturn-type]" <<'EOF'
 int f(int x) {
   if (x)
     return 1;
 }
 EOF
 
-expect_warning "1:49: warning: control reaches end of non-void function 'g'" <<'EOF'
+expect_warning "1:49: warning: control reaches end of non-void function 'g' [-Wreturn-type]" <<'EOF'
 int g(int x) { switch (x) { case 1: return 1; } }
 EOF
 
-expect_warning "1:35: warning: control reaches end of non-void function 'h'" <<'EOF'
+expect_warning "1:35: warning: control reaches end of non-void function 'h' [-Wreturn-type]" <<'EOF'
 int h(void) { for (;;) { break; } }
 EOF
 
@@ -542,6 +542,111 @@ if $mucc -w -c -o $tmp/t.o $tmp/t.c 2> $tmp/err && [ ! -s $tmp/err ]; then
 else
     echo "testing clean '-w silences warnings' ... failed"; exit 1
 fi
+
+# On by default, as with gcc
+expect_warning "1:34: warning: function returns address of local variable 'x' [-Wreturn-local-addr]" <<'EOF'
+int *f(void) { int x = 1; return &x; }
+EOF
+
+expect_warning "1:25: warning: division by zero [-Wdiv-by-zero]" <<'EOF'
+int f(int a) { return a / 0; }
+EOF
+
+expect_warning "1:25: warning: left shift count >= width of type [-Wshift-count-overflow]" <<'EOF'
+int f(int a) { return a << 32; }
+EOF
+
+expect_clean 'no default warning for what -Wall adds' <<'EOF'
+static int unused(void) { return 0; }
+int f(int a) { if (a = 1) a == 2; return a; }
+EOF
+
+# -Wall's
+mucc_plain=$mucc
+mucc="$mucc_plain -Wall"
+
+expect_warning "1:22: warning: suggest parentheses around assignment used as truth value [-Wparentheses]" <<'EOF'
+int f(int a) { if (a = 1) return 1; return 0; }
+EOF
+
+expect_warning "1:24: warning: statement with no effect [-Wunused-value]" <<'EOF'
+void f(int a, int b) { a == b; }
+EOF
+
+expect_warning "1:33: warning: comparison with string literal results in unspecified behavior [-Waddress]" <<'EOF'
+int f(const char *s) { return s == "abc" ? 1 : 0; }
+EOF
+
+expect_warning "1:36: warning: the address of 'f' will always evaluate as 'true' [-Waddress]" <<'EOF'
+void f(void); int g(void) { return f ? 1 : 0; } int h(void) { if (f) return 1; return 0; }
+EOF
+
+expect_warning "2:45: warning: format '%d' expects argument of type 'int', but argument 2 has type 'long' [-Wformat]" <<'EOF'
+int printf(const char *, ...);
+void f(long l, char *s) { printf("%d %s\n", l, s); }
+EOF
+
+expect_warning "2:24: warning: format '%s' expects a matching 'char *' argument [-Wformat]" <<'EOF'
+int printf(const char *, ...);
+void f(int a) { printf("%d %s\n", a); }
+EOF
+
+expect_warning "2:35: warning: too many arguments for format [-Wformat-extra-args]" <<'EOF'
+int printf(const char *, ...);
+void f(int a) { printf("%d\n", a, a); }
+EOF
+
+expect_warning "1:12: warning: 'unused' defined but not used [-Wunused-function]" <<'EOF'
+static int unused(void) { return 0; }
+EOF
+
+expect_warning "3:3: warning: enumeration value 'BLUE' not handled in switch [-Wswitch]" <<'EOF'
+enum Color { RED, GREEN, BLUE };
+int f(enum Color c) {
+  switch (c) { case RED: return 1; case GREEN: return 2; }
+  return 0;
+}
+EOF
+
+expect_clean '-Wall on correct code' <<'EOF'
+int printf(const char *, ...);
+int sscanf(const char *, const char *, ...);
+enum Color { RED, GREEN, BLUE };
+static int used(int x) { return x * 2; }
+int *keep(int *p) { static int s; return p ? &p[1] : &s; }
+int f(enum Color c, long l, unsigned long z, double d, char *s) {
+  int a, n = 0;
+  if ((a = used(1))) n++;
+  while ((a = a - 1) > 0) n++;
+  (void)(a == 1);
+  n += ({ int t = a; t; });
+  switch (c) { case RED: case GREEN: n++; break; case BLUE: break; }
+  switch (c) { case RED: n++; default: break; }
+  printf("%d %ld %zu %f %s %p %5.2f %-3d %%\n", n, l, z, d, s, (void *)s, d, a);
+  printf("%*d %.*s %c %hhd %llx\n", a, n, a, s, a, (char)a, 1ULL);
+  sscanf(s, "%d %lf %s", &a, &d, s);
+  return n / 1 + (a << 3) + (s == 0);
+}
+EOF
+
+# -Wno-<name>, -Werror and -Werror=<name>
+mucc="$mucc_plain -Wall -Wno-parentheses"
+expect_clean '-Wno-parentheses' <<'EOF'
+int f(int a) { if (a = 1) return 1; return 0; }
+EOF
+mucc="$mucc_plain -Wall -Werror=parentheses"
+expect_error "1:22: error: suggest parentheses around assignment used as truth value [-Werror=parentheses]" <<'EOF'
+int f(int a) { if (a = 1) return 1; return 0; }
+EOF
+mucc="$mucc_plain -Werror"
+expect_error "1:19: error: unused variable 'x' [-Werror=unused-variable]" <<'EOF'
+int f(void) { int x; return 0; }
+EOF
+mucc="$mucc_plain -Werror -Wno-error=unused-variable"
+expect_warning "1:19: warning: unused variable 'x' [-Wunused-variable]" <<'EOF'
+int f(void) { int x; return 0; }
+EOF
+mucc=$mucc_plain
 
 #---------- Valid code that must still compile -------------------------------
 
@@ -888,11 +993,11 @@ expect_error "1:34: error: only an integer or a pointer can be a register variab
 void f(void) { register double x asm("rax"); }
 EOF
 
-expect_warning "1:3: warning: unknown attribute 'bogus' ignored" <<'EOF'
+expect_warning "1:3: warning: unknown attribute 'bogus' ignored [-Wattributes]" <<'EOF'
 [[bogus]] int x;
 EOF
 
-expect_warning "1:10: warning: unknown attribute 'clang::optnone' ignored" <<'EOF'
+expect_warning "1:10: warning: unknown attribute 'clang::optnone' ignored [-Wattributes]" <<'EOF'
 [[clang::optnone]] int f(void) { return 0; }
 EOF
 
@@ -980,7 +1085,7 @@ void g(char **);
 void f(const char **p) { g(p); }
 EOF
 
-expect_warning "1:45: warning: initialization discards the 'const' qualifier of 'const int *'" <<'EOF'
+expect_warning "1:45: warning: initialization discards the 'const' qualifier of 'const int *' [-Wdiscarded-qualifiers]" <<'EOF'
 void f(int x) { const int *p = &x; int *q = p; *q = 1; }
 EOF
 

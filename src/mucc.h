@@ -79,6 +79,7 @@ typedef struct Member Member;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
 typedef struct Cleanup Cleanup;
+typedef struct EnumConst EnumConst;
 
 //---------- strings.c: string arrays, format() ------------------------------
 
@@ -139,15 +140,18 @@ struct Token {
   Token *origin;    // If this is expanded from a macro, the original token
 };
 
-// Where the parser resumes after an error (see token.c), and how many
-// errors have been reported.
+// Where the parser resumes after an error (see token.c), how many errors
+// have been reported, and how many warnings -Werror made errors.
 extern jmp_buf *error_recovery;
 extern int error_count;
+extern int werror_count;
 
 noreturn void error(char *fmt, ...) __attribute__((format(printf, 1, 2)));
 noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 2, 3)));
 noreturn void error_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void warn_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void warn_opt(char *name, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
+bool warning_on(char *name);
 noreturn void error_expected(Token *tok, char *what);
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *op);
@@ -472,11 +476,21 @@ struct Type {
   uint8_t pack; // #pragma pack: the largest member alignment, or 0
   Type *variants; // qualified copies made while incomplete (see qualified())
 
+  // Enum: its constants, in order (for -Wswitch)
+  EnumConst *enum_consts;
+
   // Function type
   Type *return_ty;
   Type *params;
   bool is_variadic;
   Type *next;
+};
+
+// An enum constant
+struct EnumConst {
+  EnumConst *next;
+  Token *name;
+  int64_t val;
 };
 
 // Struct member
@@ -599,6 +613,7 @@ bool in_system_header(Token *tok);
 
 extern StringArray include_paths;
 extern bool opt_w;
+extern StringArray opt_warnings;
 extern bool opt_fpic;
 extern bool opt_asm_cpp;
 extern bool opt_fcommon;

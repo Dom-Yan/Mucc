@@ -659,8 +659,8 @@ void check_assign(Type *to, Node *from, char *what) {
       char *q = f->is_const && !t->is_const ? "const"
                 : f->is_volatile && !t->is_volatile ? "volatile" : NULL;
       if (q && !in_system_header(from->tok))
-        warn_tok(from->tok, "%s discards the '%s' qualifier of '%s'", what, q,
-                 type_name(ty));
+        warn_opt("discarded-qualifiers", from->tok,
+                 "%s discards the '%s' qualifier of '%s'", what, q, type_name(ty));
       return;
     }
     if (is_integer(ty) && is_null_const(from))

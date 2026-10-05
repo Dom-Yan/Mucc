@@ -88,6 +88,47 @@ int main() {
   ASSERT(1, frame_check());
   ASSERT(1, __builtin_return_address(0) != 0);
 
+  // C library builtins call the function, declared or not (test.h has
+  // memcpy and strlen, not strchr or abs).
+  ASSERT(3, ({ char b[8]; __builtin_memcpy(b, "abc", 4); __builtin_strlen(b); }));
+  ASSERT('l', *__builtin_strchr("hello", 'l'));
+  ASSERT(3, __builtin_abs(-3));
+  ASSERT(1, __builtin_llabs(-1LL << 40) == 1LL << 40);
+
+  // Floating-point builtins, which need no library
+  ASSERT(1, __builtin_inf() > 1e308 && __builtin_huge_valf() > 1e38f);
+  ASSERT(1, __builtin_nan("") != __builtin_nan(""));
+  ASSERT(1, __builtin_isnan(__builtin_nanf("")) && !__builtin_isnan(1.0));
+  ASSERT(1, __builtin_isinf(-__builtin_inf()) && !__builtin_isinf(1e308));
+  ASSERT(1, __builtin_isfinite(-0.0) && !__builtin_isfinite(__builtin_nan("")));
+  ASSERT(1, __builtin_isnormal(1.0) && !__builtin_isnormal(1e-310) && !__builtin_isnormal(0.0));
+  ASSERT(-1, __builtin_isinf_sign(-__builtin_infl()));
+  ASSERT(1, !!__builtin_signbit(-0.0) && !__builtin_signbit(0.0) && !!__builtin_signbitl(-1.0L));
+  ASSERT(3, __builtin_fpclassify(0, 1, 2, 3, 4, 1e-310));
+  ASSERT(4, __builtin_fpclassify(0, 1, 2, 3, 4, -0.0));
+  ASSERT(1, __builtin_isunordered(1.0, __builtin_nan("")) && !__builtin_isgreater(__builtin_nan(""), 1.0));
+  ASSERT(1, __builtin_islessgreater(1.0, 2.0) && __builtin_isgreaterequal(2.0, 2.0));
+  ASSERT(1, __builtin_fabs(-2.5) == 2.5 && !__builtin_signbit(__builtin_fabs(-0.0)));
+  ASSERT(1, __builtin_fabsl(-3.5L) == 3.5L && __builtin_fabsf(-1.5f) == 1.5f);
+  ASSERT(1, __builtin_copysign(3.0, -0.0) == -3.0 && __builtin_copysignl(-4.0L, 1.0L) == 4.0L);
+  // Each looks at its argument more than once, but evaluates it once.
+  ASSERT(2, ({ int n = 0; __builtin_isinf((n++, 1.0)); __builtin_fpclassify(0, 1, 2, 3, 4, (n++, 1.0)); n; }));
+
+  ASSERT(10, __builtin_choose_expr(1, 10, 20.0));
+  ASSERT(8, sizeof(__builtin_choose_expr(0, 1, 2.0)));
+  ASSERT(16, ({ char b[16]; __builtin_object_size(b, 0); }));
+  ASSERT(4, ({ int i; __builtin_object_size(&i, 1); }));
+  ASSERT(1, ({ char *p = 0; __builtin_object_size(p, 0) == (unsigned long)-1; }));
+  ASSERT(0, ({ char *p = 0; __builtin_object_size(p, 2); }));
+  ASSERT(__LINE__, __builtin_LINE());
+  ASSERT(0, strcmp(__builtin_FUNCTION(), "main"));
+  ASSERT(0, strcmp(__builtin_FILE(), __FILE__));
+  ASSERT(7, __builtin_speculation_safe_value(7));
+#if !__has_builtin(__builtin_memcpy) || !__has_builtin(__builtin_isnan) || \
+    !__has_builtin(__builtin_choose_expr) || __has_builtin(__builtin_nonesuch)
+  ASSERT(1, 0);
+#endif
+
   printf("OK\n");
   return 0;
 }

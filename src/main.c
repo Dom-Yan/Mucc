@@ -20,6 +20,7 @@ typedef enum {
 
 StringArray include_paths;
 bool opt_w; // -w: no warnings
+StringArray opt_warnings; // -Wall, -Wno-format, ... without the -W, in order
 bool opt_fcommon = true;
 bool opt_fpic;
 bool opt_asm_cpp; // preprocessing assembly (.S), not C
@@ -744,6 +745,13 @@ static void parse_args(int argc, char **argv) {
       exit(0);
     }
 
+    // -Wall, -Werror, -Wno-unused-variable, ...: see warning_state() in
+    // token.c. A name mucc doesn't have is accepted and does nothing.
+    if (!strncmp(argv[i], "-W", 2) && argv[i][2]) {
+      strarray_push(&opt_warnings, argv[i] + 2);
+      continue;
+    }
+
     if (is_ignored_option(argv[i]))
       continue;
 
@@ -1172,7 +1180,7 @@ static void cc1(void) {
   }
 
   Obj *prog = parse(tok);
-  if (error_count)
+  if (error_count || werror_count)
     exit(1);
 
   // Open a temporary output buffer.
