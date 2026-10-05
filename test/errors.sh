@@ -1001,8 +1001,12 @@ expect_error "1:16: error: %l in an asm template must name one of its goto label
 void f(void) { asm goto("jmp %l1" : : : : out); out:; }
 EOF
 
-expect_error "1:26: error: asm constraint 'x' is not supported" <<'EOF'
-void f(int x) { asm("" : "=x"(x)); }
+expect_error "1:26: error: asm constraint 't' is not supported" <<'EOF'
+void f(int x) { asm("" : "=t"(x)); }
+EOF
+
+expect_error "1:34: error: an operand of type 'long double' can't go in an SSE register" <<'EOF'
+void f(long double x) { asm("" : "=x"(x)); }
 EOF
 
 expect_error "1:26: error: alternative asm constraints are not supported" <<'EOF'

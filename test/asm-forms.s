@@ -228,6 +228,28 @@ func:
   movss (%rax), %xmm0
   movss %xmm0, (%rdi)
   movss %xmm2, -4(%rbp)
+  sqrtsd %xmm1, %xmm0
+  sqrtss 8(%rsp), %xmm9
+  minsd %xmm2, %xmm1
+  maxsd (%rax), %xmm12
+  minss %xmm3, %xmm4
+  maxss %xmm15, %xmm0
+  addpd %xmm1, %xmm2
+  mulpd %xmm1, %xmm2
+  subpd %xmm1, %xmm2
+  divpd %xmm1, %xmm2
+  addps %xmm1, %xmm2
+  mulps %xmm1, %xmm2
+  subps %xmm1, %xmm2
+  divps (%rdi), %xmm2
+  sqrtpd %xmm1, %xmm2
+  sqrtps %xmm10, %xmm2
+  andpd %xmm1, %xmm2
+  andps %xmm1, %xmm2
+  andnpd %xmm1, %xmm2
+  andnps %xmm1, %xmm2
+  orpd %xmm1, %xmm2
+  orps -16(%rbp), %xmm2
   addsd %xmm1, %xmm0
   subsd %xmm1, %xmm0
   mulsd %xmm1, %xmm0

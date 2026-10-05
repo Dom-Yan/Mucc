@@ -2650,6 +2650,8 @@ static char *asm_operand_text(Node *node, AsmOperand *op, char mod) {
       return format("(%s)", reg64(op->reg));
     return asm_reg_text(node, op->reg, op->ty->size, mod);
   }
+  if (op->kind == 'x')
+    return format("%%xmm%d", op->reg);
   if (op->kind == 'm') {
     if (op->addr)
       return format("(%s)", reg64(op->reg));
@@ -2785,15 +2787,27 @@ static void asm_load(Type *ty, char *src, int reg) {
   println("  mov %s, %s", src, reg64(reg));
 }
 
+// The instruction that moves an SSE operand of type `ty`
+static char *sse_move(Type *ty) {
+  if (ty->kind == TY_FLOAT)
+    return "movss";
+  if (ty->kind == TY_DOUBLE)
+    return "movsd";
+  return ty->size == 4 ? "movd" : "movq";
+}
+
 // Stores the outputs in registers through their addresses.
 static void store_asm_outputs(Node *node) {
   for (int i = 0; i < node->asm_nops; i++) {
     AsmOperand *op = &node->asm_ops[i];
-    if (!op->is_output || op->kind != 'r')
+    if (!op->is_output || (op->kind != 'r' && op->kind != 'x'))
       continue;
     println("  mov %d(%%rbp), %s", op->addr->offset, reg64(node->asm_scratch));
-    println("  mov %s, (%s)", asm_reg_text(node, op->reg, op->ty->size, 0),
-            reg64(node->asm_scratch));
+    if (op->kind == 'x')
+      println("  %s %%xmm%d, (%s)", sse_move(op->ty), op->reg, reg64(node->asm_scratch));
+    else
+      println("  mov %s, (%s)", asm_reg_text(node, op->reg, op->ty->size, 0),
+              reg64(node->asm_scratch));
   }
 }
 
@@ -2801,6 +2815,17 @@ static void gen_asm(Node *node) {
   // The operands' values and addresses, into their temporaries
   for (Node *n = node->body; n; n = n->next)
     gen_stmt(n);
+
+  // SSE operands first, while %rax is free to hold an address
+  for (int i = 0; i < node->asm_nops; i++) {
+    AsmOperand *op = &node->asm_ops[i];
+    if (op->kind == 'x' && op->is_rw) {
+      println("  mov %d(%%rbp), %%rax", op->addr->offset);
+      println("  %s (%%rax), %%xmm%d", sse_move(op->ty), op->reg);
+    } else if (op->kind == 'x' && op->value) {
+      println("  %s %d(%%rbp), %%xmm%d", sse_move(op->ty), op->value->offset, op->reg);
+    }
+  }
 
   for (int i = 0; i < node->asm_nops; i++) {
     AsmOperand *op = &node->asm_ops[i];
@@ -2820,7 +2845,8 @@ static void gen_asm(Node *node) {
   int c = count(), nlabels = 0;
   bool outputs = false, stubs = false;
   for (int i = 0; i < node->asm_nops; i++)
-    outputs |= node->asm_ops[i].is_output && node->asm_ops[i].kind == 'r';
+    outputs |= node->asm_ops[i].is_output &&
+               (node->asm_ops[i].kind == 'r' || node->asm_ops[i].kind == 'x');
   for (Node *g = node->asm_labels; g; g = g->next)
     nlabels++;
   char **targets = calloc(nlabels + 1, sizeof(char *));

@@ -217,6 +217,29 @@ out:
   return cleaned;
 }
 
+// "x": an SSE register, for float, double and 64-bit integers
+static double asm_sqrt(double x) {
+  double r;
+  asm("sqrtsd %1, %0" : "=x"(r) : "x"(x));
+  return r;
+}
+
+static float asm_sqrtf(float x) {
+  asm("sqrtss %0, %0" : "+x"(x));
+  return x;
+}
+
+static double asm_add3(double a, double b, double c) {
+  asm("addsd %2, %0\n\taddsd %3, %0" : "=x"(a) : "0"(a), "x"(b), "x"(c) : "xmm0", "xmm1");
+  return a;
+}
+
+static long asm_bits(double d) {
+  long r;
+  asm("movq %1, %0" : "=r"(r) : "x"(d));
+  return r;
+}
+
 int main() {
   ASSERT(12, add(5, 7));
   ASSERT(1, add(0x100000000, 5) == 0x100000005);
@@ -250,6 +273,11 @@ int main() {
   ASSERT(102, asm_goto_output(1));
   ASSERT(30, asm_goto_output(2));
   ASSERT(5, asm_goto_cleanup());
+
+  ASSERT(3, asm_sqrt(9.0));
+  ASSERT(4, asm_sqrtf(16.0f));
+  ASSERT(6, asm_add3(1, 2, 3));
+  ASSERT(1, asm_bits(1.0) == 0x3ff0000000000000);
 
   printf("OK\n");
   return 0;

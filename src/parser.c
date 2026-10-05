@@ -2956,7 +2956,7 @@ static int asm_constraint(AsmOperand *op, int noutputs, int *match) {
   }
 
   int regs = 0;
-  bool mem = false, imm = false;
+  bool mem = false, imm = false, sse = false;
   *match = -1;
   for (; *s; s++) {
     if (strchr("&%?!", *s))
@@ -2979,6 +2979,10 @@ static int asm_constraint(AsmOperand *op, int noutputs, int *match) {
       regs |= asm_reg_class(*s);
       continue;
     }
+    if (*s == 'x' || *s == 'v') {
+      sse = true;
+      continue;
+    }
     if (strchr("moV<>", *s)) {
       mem = true;
       continue;
@@ -2996,7 +3000,7 @@ static int asm_constraint(AsmOperand *op, int noutputs, int *match) {
     op->kind = 'r';
     return 0;
   }
-  op->kind = regs ? 'r' : mem ? 'm' : imm ? 'i' : 0;
+  op->kind = regs ? 'r' : sse ? 'x' : mem ? 'm' : imm ? 'i' : 0;
   if (!op->kind)
     error_tok(op->tok, "empty asm constraint");
   if (op->kind == 'i' && op->is_output)
@@ -3005,10 +3009,10 @@ static int asm_constraint(AsmOperand *op, int noutputs, int *match) {
 }
 
 // clobbers = (string-literal ("," string-literal)*)?
-// Returns the general registers named. mucc keeps nothing in memory
-// caches, flags or other registers from one statement to the next, so
-// "memory", "cc" and the rest need nothing.
-static int asm_clobbers(Token **rest, Token *tok) {
+// Returns the general registers named, and in `*xmm` the SSE ones. mucc
+// keeps nothing in memory caches, flags or other registers from one
+// statement to the next, so "memory", "cc" and the rest need nothing.
+static int asm_clobbers(Token **rest, Token *tok, int *xmm) {
   int regs = 0;
   for (bool first = true; !equal(tok, ":") && !equal(tok, ")"); first = false) {
     if (!first)
@@ -3021,6 +3025,8 @@ static int asm_clobbers(Token **rest, Token *tok) {
       error_tok(tok, "an asm statement can't clobber %s", name);
     if (r >= 0)
       regs |= 1 << r;
+    else if (!strncmp(name, "xmm", 3) && isdigit(name[3]) && atoi(name + 3) < 16)
+      *xmm |= 1 << atoi(name + 3);
     else if (strcmp(name, "memory") && strcmp(name, "cc") &&
              strcmp(name, "dirflag") && strcmp(name, "fpsr") &&
              strcmp(name, "flags") && strncmp(name, "xmm", 3) &&
@@ -3079,13 +3085,13 @@ static Node *asm_stmt(Token **rest, Token *tok) {
 
   AsmOperand ops[30] = {};
   Node *exprs[30];
-  int n = 0, clobbered = 0;
+  int n = 0, clobbered = 0, xmm_used = 0;
   tok = asm_operands(tok->next, ops, exprs, &n, true);
   int noutputs = n;
   if (consume(&tok, tok, ":")) {
     tok = asm_operands(tok, ops, exprs, &n, false);
     if (consume(&tok, tok, ":"))
-      clobbered = asm_clobbers(&tok, tok);
+      clobbered = asm_clobbers(&tok, tok, &xmm_used);
   }
   if (equal(tok, ":")) {
     if (!is_goto)
@@ -3104,8 +3110,10 @@ static Node *asm_stmt(Token **rest, Token *tok) {
     Node *e = exprs[i];
     add_type(e);
     allowed[i] = asm_constraint(op, noutputs, &match[i]);
-    if (match[i] >= 0 && ops[match[i]].kind != 'r')
+    if (match[i] >= 0 && ops[match[i]].kind != 'r' && ops[match[i]].kind != 'x')
       error_tok(op->tok, "a matching constraint must name a register output");
+    if (match[i] >= 0)
+      op->kind = ops[match[i]].kind;
 
     // `register long x asm("r10")` as a register operand goes in r10.
     if (allowed[i] == ASM_GENERAL && e->kind == ND_VAR && e->var->asm_reg)
@@ -3120,6 +3128,10 @@ static Node *asm_stmt(Token **rest, Token *tok) {
 
     if (op->kind == 'r' && !is_integer(ty) && ty->kind != TY_PTR)
       error_tok(op->tok, "an operand of type '%s' can't go in a general register",
+                type_name(ty));
+    if (op->kind == 'x' && ty->kind != TY_FLOAT && ty->kind != TY_DOUBLE &&
+        !((is_integer(ty) || ty->kind == TY_PTR) && (ty->size == 4 || ty->size == 8)))
+      error_tok(op->tok, "an operand of type '%s' can't go in an SSE register",
                 type_name(ty));
 
     if (op->kind == 'i') {
@@ -3170,6 +3182,19 @@ static Node *asm_stmt(Token **rest, Token *tok) {
     ops[i].reg = r;
     used |= 1 << r;
   }
+  // SSE registers: one each, but for inputs that share an output's
+  for (int i = 0; i < n; i++) {
+    if (ops[i].kind != 'x' || match[i] >= 0)
+      continue;
+    int r = 0;
+    while (r < 16 && (xmm_used & (1 << r)))
+      r++;
+    if (r == 16)
+      error_tok(ops[i].tok, "not enough SSE registers for this asm statement's operands");
+    ops[i].reg = r;
+    xmm_used |= 1 << r;
+  }
+
   for (int i = 0; i < n; i++)
     if (match[i] >= 0)
       ops[i].reg = ops[match[i]].reg;

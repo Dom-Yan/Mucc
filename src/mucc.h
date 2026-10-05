@@ -326,8 +326,9 @@ typedef struct {
   Token *tok;      // the constraint, for errors
   bool is_output;
   bool is_rw;      // '+': an output that is also read
-  char kind;       // 'r' register, 'm' memory, 'i' constant
-  int reg;         // 'r': its register; 'm' through `addr`: the address's
+  char kind;       // 'r' register, 'x' SSE register, 'm' memory, 'i' constant
+  int reg;         // 'r': its register, 'x': its %xmm number; 'm' through
+                   // `addr`: the address's
   Type *ty;        // its type
   Obj *value;      // a temporary holding the input's value, or NULL
   Obj *addr;       // a temporary holding the operand's address, or NULL
