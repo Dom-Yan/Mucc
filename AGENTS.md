@@ -37,4 +37,7 @@ read, and that pull request will be closed.
   `_Complex`, K&R definitions or `asm` with operands.
 - Add a test in `test/` for every fix or feature.
 - Match the surrounding code's style and comment density.
+- Put new code in the section of its file where it belongs; the guide at
+  the top of `src/mucc.h` says where common changes go. A new section
+  starts with a 78-column `//---------- Name ---` line.
 - Never use em dashes in code, comments, docs or commit messages.

@@ -33,6 +33,14 @@ int main() {
   ASSERT(8, ({ char a[offsetof(U, inner.y)]; sizeof(a); }));
   ASSERT(1, __builtin_constant_p(offsetof(U, inner.y)));
 
+  // [GNU] __builtin_offsetof, without <stddef.h>
+  ASSERT(8, __builtin_offsetof(T, c));
+  ASSERT(16, __builtin_offsetof(U, inner.y[2]));
+  ASSERT(1, sizeof(char[__builtin_offsetof(U, inner.x) == 4]));
+#if !__has_builtin(__builtin_offsetof)
+  ASSERT(1, 0);
+#endif
+
   printf("OK\n");
   return 0;
 }

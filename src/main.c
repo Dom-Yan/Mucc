@@ -3,7 +3,8 @@
 //
 // Reads the command line, then runs the pipeline for each input file:
 //   C file -> [cc1: token.c -> preprocess.c -> parser.c -> cgen.c]
-//          -> assembly -> as -> object file -> ld -> executable
+//          -> assembly -> asm.c (or `as`) -> object file
+//          -> link.c (static) or `ld` (dynamic) -> executable
 // mucc runs itself again as `mucc -cc1` to compile each C file.
 //============================================================================
 
@@ -97,24 +98,7 @@ FILE *open_input_file(char *path) {
   return fopen(path, "rb");
 }
 
-//---------- Argument parsing and include paths ------------------------------
-
-static void usage(int status) {
-  fprintf(stderr, "mucc [ -o <path> ] <file>\n");
-  exit(status);
-}
-
-static bool take_arg(char *arg) {
-  char *x[] = {
-    "-o", "-I", "-L", "-D", "-U", "-idirafter", "-include", "-x", "-MF",
-    "-MT", "-Xlinker",
-  };
-
-  for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
-    if (!strcmp(arg, x[i]))
-      return true;
-  return false;
-}
+//---------- Include paths and the C library (--libc) ------------------------
 
 // Returns the directory containing the running mucc binary. argv[0] is
 // only a bare "mucc" when mucc is found via $PATH, so ask the kernel.
@@ -277,6 +261,25 @@ static void add_default_include_paths(char *argv0) {
     strarray_push(&include_paths, sys[i]);
     strarray_push(&std_include_paths, sys[i]);
   }
+}
+
+//---------- Argument parsing ------------------------------------------------
+
+static void usage(int status) {
+  fprintf(stderr, "mucc [ -o <path> ] <file>\n");
+  exit(status);
+}
+
+static bool take_arg(char *arg) {
+  char *x[] = {
+    "-o", "-I", "-L", "-D", "-U", "-idirafter", "-include", "-x", "-MF",
+    "-MT", "-Xlinker",
+  };
+
+  for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
+    if (!strcmp(arg, x[i]))
+      return true;
+  return false;
 }
 
 static void define(char *str) {

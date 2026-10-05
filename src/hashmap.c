@@ -149,7 +149,7 @@ void hashmap_delete2(HashMap *map, char *key, int keylen) {
     ent->key = TOMBSTONE;
 }
 
-//---------- Self test (mucc -hashmap-test) -----------------------------------
+//---------- Self test (mucc -hashmap-test) ----------------------------------
 
 void hashmap_test(void) {
   HashMap *map = calloc(1, sizeof(HashMap));

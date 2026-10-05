@@ -463,6 +463,24 @@ int main() {
   ASSERT(42, M32(802_2));
   ASSERT(0, strcmp(STR(802_2), "802_2"));
 
+  // Empty arguments around ## are placemarkers (C17 6.10.3.3's example):
+  // t(, , 3) is 3, not an error.
+#define M33(x, y, z) x##y##z
+#define XSTR(x) STR(x)
+  ASSERT(0, strcmp(XSTR(M33(1, 2, 3) M33(, 4, 5) M33(6, , ) M33(, , 7) M33(, , ) M33(, 8, )),
+                   "123 45 6 7 8"));
+  ASSERT(5, ({ int ab = 5; M33(a, , b); }));
+
+  // An object-like macro's ## pastes too, and `# ## #` is one ## token
+  // that is not an operator later (C17 6.10.3.3's other example).
+#define M34 1 ## 2
+  ASSERT(12, M34);
+#define hash_hash # ## #
+#define mkstr(a) # a
+#define in_between(a) mkstr(a)
+#define join(c, d) in_between(c hash_hash d)
+  ASSERT(0, strcmp(join(x, y), "x ## y"));
+
   printf("OK\n");
   return 0;
 }

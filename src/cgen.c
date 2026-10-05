@@ -1,5 +1,5 @@
 //============================================================================
-// cgen.c - STAGE 4 of 4: CODEGEN
+// cgen.c - STAGE 4 of 6: CODEGEN
 //
 // Walks the AST and prints x86-64 assembly (AT&T syntax). It is a
 // simple stack machine: each expression leaves its result in %rax.
@@ -1401,6 +1401,10 @@ static void gen_expr(Node *node) {
     return;
   }
 
+  // gen_expr() has three parts, in this order: the node kinds that aren't
+  // binary operators (this switch: values, memory, ?:, && and ||, calls,
+  // builtins and atomics), then binary operators on floating-point
+  // operands, then binary operators on integers and pointers.
   switch (node->kind) {
   case ND_NULL_EXPR:
     return;
@@ -1973,6 +1977,7 @@ static void gen_expr(Node *node) {
   }
   }
 
+  // Binary operators on float, double and long double operands
   switch (node->lhs->ty->kind) {
   case TY_FLOAT:
   case TY_DOUBLE: {
@@ -2088,6 +2093,7 @@ static void gen_expr(Node *node) {
   }
   }
 
+  // Binary operators on integers and pointers
   gen_operands(node);
 
   char *ax, *di, *dx;
@@ -2175,20 +2181,6 @@ static void gen_expr(Node *node) {
   }
 
   error_tok(node->tok, "invalid expression");
-}
-
-//---------- Statements ------------------------------------------------------
-
-// The operand for comparing a switch's value with `val`. An instruction's
-// immediate is 32 bits, sign-extended, so a 64-bit value outside that
-// range is loaded into %rdx first.
-static char *case_operand(int64_t val, bool is64) {
-  if (!is64)
-    return format("$%d", (int32_t)val);
-  if (val == (int32_t)val)
-    return format("$%ld", val);
-  println("  mov $%ld, %%rdx", val);
-  return "%rdx";
 }
 
 //---------- asm statements with operands ------------------------------------
@@ -2358,6 +2350,20 @@ static void gen_asm(Node *node) {
     println("  mov %s, (%s)", asm_reg_text(node, op->reg, op->ty->size, 0),
             reg64(node->asm_scratch));
   }
+}
+
+//---------- Statements ------------------------------------------------------
+
+// The operand for comparing a switch's value with `val`. An instruction's
+// immediate is 32 bits, sign-extended, so a 64-bit value outside that
+// range is loaded into %rdx first.
+static char *case_operand(int64_t val, bool is64) {
+  if (!is64)
+    return format("$%d", (int32_t)val);
+  if (val == (int32_t)val)
+    return format("$%ld", val);
+  println("  mov $%ld, %%rdx", val);
+  return "%rdx";
 }
 
 static void gen_stmt(Node *node) {
@@ -2799,9 +2805,10 @@ static void emit_data(Obj *prog) {
     int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
       ? MAX(16, var->align) : var->align;
 
-    // Common symbol (never for a weak one or one with a section, as with
-    // gcc)
-    if (opt_fcommon && var->is_tentative && !is_weak(prog, var) && !var->section) {
+    // Common symbol (never for a weak or thread-local one or one with a
+    // section, as with gcc)
+    if (opt_fcommon && var->is_tentative && !var->is_tls && !is_weak(prog, var) &&
+        !var->section) {
       println("  .comm %s, %d, %d", var->name, var->ty->size, align);
       continue;
     }

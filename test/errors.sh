@@ -1021,4 +1021,63 @@ if ! grep -q 'one\.h' $tmp/useone.d; then
 fi
 echo "testing -MMD lists a header found through -I ... passed"
 
+# A struct is not a number: as a condition, an operand or a cast target
+# it's an error, not code that quietly uses its address.
+expect_error "2:20: error: 'struct T' used where a scalar is required" <<'EOF'
+struct T { int v; } t;
+void f(void) { if (t) {} }
+EOF
+
+expect_error "2:29: error: 'struct T' used where a scalar is required" <<'EOF'
+struct T { int v; } t;
+void f(void) { long p = 1 * t; }
+EOF
+
+expect_error "2:24: error: switch on 'struct T', which is not an integer" <<'EOF'
+struct T { int v; } t;
+void f(void) { switch (t) {} }
+EOF
+
+expect_error "2:21: error: cannot convert 'struct T' to 'int'" <<'EOF'
+struct T { int v; } t;
+void f(void) { (int)t; }
+EOF
+
+# s[0] on a struct s, which used to crash
+expect_error "2:17: error: invalid operands" <<'EOF'
+struct T { int v; } t;
+void f(void) { t[0].v; }
+EOF
+
+expect_error "2:32: error: 'struct T' used where a scalar is required" <<'EOF'
+struct T { int v; };
+struct T *p = &(struct T){1} & (struct T){2};
+EOF
+
+expect_error "2:5: error: redefinition of x" <<'EOF'
+int x = 1;
+int x = 1;
+EOF
+
+# These used to crash.
+expect_error "1:20: error: member name omitted" <<'EOF'
+struct T { int *a, ; } t;
+EOF
+
+expect_error "1:1: error: unterminated attribute" <<'EOF'
+[[gnu::constr(ctor(101)]] static void f(void) {}
+EOF
+
+expect_ok 'a thread-local tentative definition twice' <<'EOF'
+_Thread_local int v1;
+_Thread_local int v1;
+int *get(void) { return &v1; }
+EOF
+
+expect_ok 'a struct in its own places' <<'EOF'
+struct T { int v; } t, u;
+struct T get(int c) { return c ? t : u; }
+void f(void) { (void)t; t = u; t = get(1); if (get(0).v) {} }
+EOF
+
 echo OK

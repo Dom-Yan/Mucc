@@ -189,6 +189,12 @@ int main() {
   ASSERT(0, (long)&aligned % 16);
   ASSERT(8, alignof(long));
   ASSERT(4, ({ typeof_unqual(const int) t = 4; t; }));
+  // typeof_unqual drops const, volatile and _Atomic, so its variable can
+  // be changed; typeof keeps them.
+  ASSERT(5, ({ typeof_unqual(const int) t = 4; t++; t; }));
+  ASSERT(3, ({ const volatile int cv = 1; typeof_unqual(cv) t = 2; t++; t; }));
+  ASSERT(0, ({ _Atomic int a = 1; _Generic((typeof_unqual(a))0, int: 0, default: 1); }));
+  ASSERT(1, ({ const int c = 1; _Generic(&(typeof(c)){0}, const int *: 1, default: 0); }));
   thread_local static int tl = 3;
   ASSERT(3, tl);
 

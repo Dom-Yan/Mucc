@@ -1,5 +1,5 @@
 //============================================================================
-// link.c - STAGE 6: LINK (static executables)
+// link.c - STAGE 6 of 6: LINK (static executables)
 //
 // With -static, mucc links the object files and static libraries into an
 // executable itself instead of running `ld`: it reads the objects and the

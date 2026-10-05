@@ -1,5 +1,5 @@
 //============================================================================
-// type.c - STAGE 3 of 4: PARSE (types)
+// type.c - STAGE 3 of 6: PARSE (types)
 //
 // The C type system: built-in types, type constructors, and add_type(),
 // which works out the type of every AST node.
@@ -301,6 +301,16 @@ static void usual_arith_conv(Node **lhs, Node **rhs) {
   *rhs = new_cast(*rhs, ty);
 }
 
+// A condition, or an operand of an arithmetic, comparison or logical
+// operator, must be a number or a pointer: `if (s)` or `s * 2` on a
+// struct s is an error, not code that reads its address.
+void check_scalar(Node *node) {
+  add_type(node);
+  Type *ty = node->ty;
+  if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION || ty->kind == TY_VOID))
+    error_tok(node->tok, "'%s' used where a scalar is required", type_name(ty));
+}
+
 void add_type(Node *node) {
   if (!node || node->ty)
     return;
@@ -330,10 +340,13 @@ void add_type(Node *node) {
   case ND_BITAND:
   case ND_BITOR:
   case ND_BITXOR:
+    check_scalar(node->lhs);
+    check_scalar(node->rhs);
     usual_arith_conv(&node->lhs, &node->rhs);
     node->ty = node->lhs->ty;
     return;
   case ND_NEG: {
+    check_scalar(node->lhs);
     Type *ty = get_common_type(ty_int, node->lhs->ty);
     node->lhs = new_cast(node->lhs, ty);
     node->ty = ty;
@@ -350,6 +363,8 @@ void add_type(Node *node) {
   case ND_NE:
   case ND_LT:
   case ND_LE:
+    check_scalar(node->lhs);
+    check_scalar(node->rhs);
     usual_arith_conv(&node->lhs, &node->rhs);
     node->ty = ty_int;
     return;
@@ -359,11 +374,17 @@ void add_type(Node *node) {
   case ND_NOT:
   case ND_LOGOR:
   case ND_LOGAND:
+    check_scalar(node->lhs);
+    if (node->rhs)
+      check_scalar(node->rhs);
     node->ty = ty_int;
     return;
   case ND_BITNOT:
   case ND_SHL:
   case ND_SHR:
+    check_scalar(node->lhs);
+    if (node->rhs)
+      check_scalar(node->rhs);
     // Integer promotion: a char or short operand becomes int, so
     // ~c on an unsigned char is a negative int, not an unsigned char,
     // and an enum its int or unsigned int.
@@ -377,6 +398,7 @@ void add_type(Node *node) {
     node->ty = node->var->ty;
     return;
   case ND_COND:
+    check_scalar(node->cond);
     if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
       node->ty = ty_void;
     } else {

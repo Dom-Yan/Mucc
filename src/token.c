@@ -1,5 +1,5 @@
 //============================================================================
-// token.c - STAGE 1 of 4: TOKENIZE
+// token.c - STAGE 1 of 6: TOKENIZE
 //
 // Turns source text into a linked list of tokens (identifiers,
 // keywords, punctuators, numbers, strings). Also holds error reporting.
@@ -297,8 +297,8 @@ static bool is_keyword(Token *tok) {
       "default", "extern", "_Alignof", "_Alignas", "do", "signed",
       "unsigned", "const", "volatile", "auto", "register", "restrict",
       "__restrict", "__restrict__", "_Noreturn", "float", "double",
-      "typeof", "asm", "_Thread_local", "__thread", "_Atomic",
-      "__attribute__", "_Static_assert",
+      "typeof", "__typeof_unqual__", "asm", "_Thread_local", "__thread",
+      "_Atomic", "__attribute__", "_Static_assert",
     };
 
     // Before C23, these are ordinary names.

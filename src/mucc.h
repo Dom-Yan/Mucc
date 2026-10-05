@@ -2,8 +2,43 @@
 // mucc.h - SHARED DECLARATIONS
 //
 // Every .c file includes this. It declares the data that flows through
-// the pipeline: Token (token.c) -> Token (preprocess.c) -> Obj/Node/Type
-// (parser.c, type.c) -> assembly (cgen.c).
+// the pipeline, one stage per file:
+//
+//   1 token.c       source text -> Token list
+//   2 preprocess.c  Token list -> Token list, with macros expanded
+//   3 parser.c      Token list -> Obj (functions, globals) and Node (AST),
+//     type.c        typed by add_type()
+//   4 cgen.c        AST -> x86-64 assembly text
+//   5 asm.c         assembly text -> ELF object file
+//   6 link.c        object files and archives -> static executable
+//
+// main.c is the driver that runs them; ar.c is `mucc -ar`; strings.c,
+// hashmap.c and unicode.c are support code.
+//
+// Where things are
+//
+// Each file is split into sections by `//---------- Name ---` lines;
+// `grep -n '^//-------' src/*.c` lists them all. New code goes in the
+// section it belongs to. Common changes and where they're made:
+//
+//   a keyword               token.c is_keyword(); also parser.c
+//                           is_typename() if it can start a type
+//   a predefined macro      preprocess.c "Predefined and builtin macros",
+//                           init_macros()
+//   a command-line option   main.c "Argument parsing", parse_args(); one
+//                           that changes nothing goes in ignored_options[]
+//   a __builtin_ function   parser.c "GNU builtins": gnu_builtin_names[]
+//                           and gnu_builtin(); one that takes a type, in
+//                           "Primary expressions", primary()
+//   an __attribute__        parser.c "GNU attributes", apply_attribute()
+//                           and is_known_attribute()
+//   a warning               parser.c "Warnings"
+//   a new AST node kind     NodeKind below, type.c add_type(), and cgen.c
+//                           gen_expr() or gen_stmt()
+//   an x86 instruction      asm.c "Instructions", insns[]
+//   a test                  test/*.c (ASSERT) for the language,
+//                           test/errors.sh for diagnostics, test/driver.sh
+//                           for options
 //============================================================================
 
 //---------- System headers and small utilities ------------------------------
@@ -499,6 +534,7 @@ Type *vla_of(Type *base, Node *expr);
 Type *enum_type(void);
 Type *struct_type(void);
 void add_type(Node *node);
+void check_scalar(Node *node);
 char *type_name(Type *ty);
 void check_assign(Type *to, Node *from, char *what);
 

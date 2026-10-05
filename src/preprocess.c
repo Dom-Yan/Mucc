@@ -1,5 +1,5 @@
 //============================================================================
-// preprocess.c - STAGE 2 of 4: PREPROCESS
+// preprocess.c - STAGE 2 of 6: PREPROCESS
 //
 // Runs #include, #define, #if and friends over the token list and
 // expands macros. The output is a plain token list for the parser.
@@ -592,6 +592,32 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
   return head.next;
 }
 
+static Token *paste(Token *lhs, Token *rhs);
+
+// An object-like macro's `##` joins two of its own tokens, so it's done
+// once, here, rather than at each expansion: `#define AB a ## b` is
+// `#define AB ab`.
+static Token *paste_objlike(Token *tok) {
+  Token head = {};
+  Token *cur = &head;
+
+  for (; tok->kind != TK_EOF; tok = tok->next) {
+    if (!equal(tok, "##")) {
+      cur = cur->next = tok;
+      continue;
+    }
+    if (cur == &head)
+      error_tok(tok, "'##' cannot appear at start of macro expansion");
+    if (tok->next->kind == TK_EOF)
+      error_tok(tok, "'##' cannot appear at end of macro expansion");
+    Token *next = tok->next;
+    *cur = *paste(cur, next);
+    tok = next;
+  }
+  cur->next = tok;
+  return head.next;
+}
+
 static void read_macro_definition(Token **rest, Token *tok) {
   if (tok->kind != TK_IDENT)
     error_tok(tok, "macro name must be an identifier");
@@ -608,7 +634,7 @@ static void read_macro_definition(Token **rest, Token *tok) {
     m->va_args_name = va_args_name;
   } else {
     // Object-like macro
-    add_macro(name, true, copy_line(rest, tok));
+    add_macro(name, true, paste_objlike(copy_line(rest, tok)));
   }
 }
 
@@ -808,6 +834,12 @@ static Token *subst(Token *tok, MacroArg *args) {
 
       if (arg->tok->kind == TK_EOF) {
         MacroArg *arg2 = find_arg(args, rhs);
+        // `x ## y ## z` with x empty: y is the left side of the next ##,
+        // so start over from it (C17 6.10.3.3's placemarkers).
+        if (arg2 && equal(rhs->next, "##")) {
+          tok = rhs;
+          continue;
+        }
         if (arg2) {
           for (Token *t = arg2->tok; t->kind != TK_EOF; t = t->next)
             cur = cur->next = copy_token(t);
@@ -1668,6 +1700,7 @@ void init_macros(void) {
   define_macro("__signed__", "signed");
   define_macro("__typeof", "typeof");
   define_macro("__typeof__", "typeof");
+  define_macro("__typeof_unqual", "__typeof_unqual__");
   define_macro("__unix", "1");
   define_macro("__unix__", "1");
   define_macro("__volatile", "volatile");
@@ -1692,7 +1725,7 @@ void init_macros(void) {
     define_macro("bool", "_Bool");
     define_macro("static_assert", "_Static_assert");
     define_macro("thread_local", "_Thread_local");
-    define_macro("typeof_unqual", "typeof");
+    define_macro("typeof_unqual", "__typeof_unqual__");
   }
 
   // The GNU spellings of asm

@@ -3,6 +3,12 @@
 int g1, g2[4];
 static int g3 = 3;
 
+// The same tentative definition twice defines the variable once.
+int g4;
+int g4;
+static int g5;
+static int g5;
+
 int main() {
   ASSERT(3, ({ int a; a=3; a; }));
   ASSERT(3, ({ int a=3; a; }));
@@ -66,6 +72,8 @@ int main() {
   { void *x; }
 
   ASSERT(3, g3);
+  ASSERT(7, ({ g4 = 7; g4; }));
+  ASSERT(8, ({ g5 = 8; g5; }));
 
   printf("OK\n");
   return 0;

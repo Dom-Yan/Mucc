@@ -1,5 +1,5 @@
 //============================================================================
-// parser.c - STAGE 3 of 4: PARSE
+// parser.c - STAGE 3 of 6: PARSE
 //
 // Turns tokens into a typed syntax tree (AST): a list of functions and
 // global variables. Type rules live in type.c.
@@ -22,6 +22,14 @@
 // Most parsing functions don't change the global state of the parser.
 // So it is very easy to lookahead arbitrary number of tokens in this
 // parser.
+//
+// The sections run in this order: the parser's state and helpers,
+// attributes, declarations and types, initializers, statements (asm
+// statements first), then expressions from the lowest precedence (comma,
+// assignment) to the highest (postfix, GNU builtins, primary), with
+// constant evaluation and struct and union declarations among them,
+// then warnings, and last the top level (functions, global variables,
+// parse()).
 
 #include "mucc.h"
 
@@ -172,6 +180,8 @@ static Type *va_elem_ty; // an element of __builtin_va_list
 // `auto x = 1;`. declaration() and global_variable() then take the type
 // from the initializer. Anywhere else it acts as the old implicit int.
 static Type auto_type = {TY_INT, 4, 4};
+
+//---------- Forward declarations --------------------------------------------
 
 static bool is_typename(Token *tok);
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
@@ -405,6 +415,13 @@ static Node *new_vla_ptr(Obj *var, Token *tok) {
 
 Node *new_cast(Node *expr, Type *ty) {
   add_type(expr);
+
+  // Nothing converts to or from a struct or union, except to void.
+  Type *from = expr->ty;
+  bool from_aggr = from && (from->kind == TY_STRUCT || from->kind == TY_UNION);
+  bool to_aggr = ty->kind == TY_STRUCT || ty->kind == TY_UNION;
+  if (from && ty->kind != TY_VOID && from_aggr != to_aggr)
+    error_tok(expr->tok, "cannot convert '%s' to '%s'", type_name(from), type_name(ty));
 
   Node *node = arena_alloc(sizeof(Node));
   node->kind = ND_CAST;
@@ -1012,7 +1029,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     // Handle user-defined types.
     Type *ty2 = find_typedef(tok);
     if (equal(tok, "struct") || equal(tok, "union") || equal(tok, "enum") ||
-        equal(tok, "typeof") || ty2) {
+        equal(tok, "typeof") || equal(tok, "__typeof_unqual__") || ty2) {
       if (counter)
         break;
 
@@ -1024,6 +1041,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
         ty = enum_specifier(&tok, tok->next);
       } else if (equal(tok, "typeof")) {
         ty = typeof_specifier(&tok, tok->next);
+      } else if (equal(tok, "__typeof_unqual__")) {
+        // C23 typeof_unqual: the type without const, volatile or _Atomic
+        ty = unqual(typeof_specifier(&tok, tok->next));
+        if (ty->is_atomic) {
+          ty = copy_type(ty);
+          ty->is_atomic = false;
+        }
       } else {
         ty = ty2;
         tok = tok->next;
@@ -2637,7 +2661,7 @@ static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
   var->rel = head.next;
 }
 
-//---------- Statements ------------------------------------------------------
+//---------- Type names and _Static_assert -----------------------------------
 
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
@@ -2648,7 +2672,8 @@ static bool is_typename(Token *tok) {
       "void", "_Bool", "char", "short", "int", "long", "struct", "union",
       "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
       "const", "volatile", "auto", "register", "restrict", "__restrict",
-      "__restrict__", "_Noreturn", "float", "double", "typeof", "inline",
+      "__restrict__", "_Noreturn", "float", "double", "typeof",
+      "__typeof_unqual__", "inline",
       "_Thread_local", "__thread", "_Atomic", "constexpr", "__attribute__",
       "__attribute",
     };
@@ -3025,6 +3050,8 @@ static Node *asm_stmt(Token **rest, Token *tok) {
   return node;
 }
 
+//---------- Statements: if, switch, loops, jumps and blocks -----------------
+
 // A case label's value converted to the promoted type of the switch's
 // controlling expression `ty`, as C requires: all 64 bits for a 64-bit
 // switch, 32 otherwise.
@@ -3112,7 +3139,7 @@ static Node *stmt(Token **rest, Token *tok) {
     // `if (ENABLE_FEATURE) f();` names functions that don't exist when
     // the feature is off. A branch with a label stays, since a goto or a
     // case can still reach it.
-    add_type(node->cond);
+    check_scalar(node->cond);
     if (is_integer(node->cond->ty) && is_const_expr(node->cond)) {
       if (eval(node->cond)) {
         if (node->els && !has_label(node->els))
@@ -3129,6 +3156,9 @@ static Node *stmt(Token **rest, Token *tok) {
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
     add_type(node->cond);
+    if (!is_integer(node->cond->ty))
+      error_tok(node->cond->tok, "switch on '%s', which is not an integer",
+                type_name(node->cond->ty));
     tok = skip(tok, ")");
 
     Node *sw = current_switch;
@@ -3225,8 +3255,10 @@ static Node *stmt(Token **rest, Token *tok) {
     }
     brk_cleanups = cont_cleanups = cleanups;
 
-    if (!equal(tok, ";"))
+    if (!equal(tok, ";")) {
       node->cond = expr(&tok, tok);
+      check_scalar(node->cond);
+    }
     tok = skip(tok, ";");
 
     if (!equal(tok, ")"))
@@ -3257,6 +3289,7 @@ static Node *stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_FOR, tok);
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
+    check_scalar(node->cond);
     tok = skip(tok, ")");
 
     char *brk = brk_label;
@@ -3295,6 +3328,7 @@ static Node *stmt(Token **rest, Token *tok) {
     tok = skip(tok, "while");
     tok = skip(tok, "(");
     node->cond = expr(&tok, tok);
+    check_scalar(node->cond);
     tok = skip(tok, ")");
     *rest = skip(tok, ";");
     return node;
@@ -4249,6 +4283,10 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
     rhs = tmp;
   }
 
+  // Neither is a pointer: a struct, say, as in `s[0]` on a struct s.
+  if (!lhs->ty->base)
+    error_tok(tok, "invalid operands");
+
   // VLA + num
   if (lhs->ty->base->kind == TY_VLA) {
     rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
@@ -4268,6 +4306,9 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   // num - num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
     return new_binary(ND_SUB, lhs, rhs, tok);
+
+  if (!lhs->ty->base)
+    error_tok(tok, "invalid operands");
 
   // VLA + num
   if (lhs->ty->base->kind == TY_VLA) {
@@ -4496,6 +4537,12 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
         mem->bit_width = const_expr(&tok, tok);
         tok = attributes(tok, &all, true);
       }
+
+      // Only a bit-field (`int : 3`) or an anonymous struct or union may
+      // have no name; member lookup looks inside the nameless ones.
+      if (!mem->name && !mem->is_bitfield && mem->ty->kind != TY_STRUCT &&
+          mem->ty->kind != TY_UNION)
+        error_tok(mem->ty->name_pos ? mem->ty->name_pos : tok, "member name omitted");
 
       set_member_align(mem, &attr, &all);
       cur = cur->next = mem;
@@ -4754,7 +4801,7 @@ static Node *struct_ref(Node *node, Token *tok) {
   return node;
 }
 
-//---------- Postfix, calls, _Generic and primary expressions ----------------
+//---------- Postfix expressions, calls and _Generic -------------------------
 
 // Convert A++ to `(typeof A)((A += 1) - 1)`
 static Node *new_inc_dec(Node *node, Token *tok, int addend) {
@@ -4817,6 +4864,10 @@ static Node *postfix(Token **rest, Token *tok) {
       Obj *var = new_lvar("", ty);
       Node *lhs = lvar_initializer(&tok, tok, var);
       node = new_binary(ND_COMMA, lhs, new_var_node(var, tok), start);
+      // It's an lvalue of its own type, `const` included, which a comma's
+      // value otherwise wouldn't keep: &(const int){0} is const int *.
+      add_type(node);
+      node->ty = ty;
     }
   } else {
     node = primary(&tok, tok);
@@ -4987,7 +5038,7 @@ static char *builtin_names[] = {
   "__builtin_types_compatible_p", "__builtin_unreachable",
   "__builtin_compare_and_swap", "__builtin_atomic_exchange",
   "__builtin_va_start", "__builtin_va_end", "__builtin_va_copy",
-  "__builtin_va_arg",
+  "__builtin_va_arg", "__builtin_offsetof",
 };
 
 // <stdarg.h>'s va_start, va_end, va_copy and va_arg, as gcc's builtins:
@@ -5474,6 +5525,8 @@ bool is_known_builtin(char *name) {
          is_gnu_builtin(&tok);
 }
 
+//---------- Primary expressions ---------------------------------------------
+
 // primary = "(" "{" stmt+ "}" ")"
 //         | "(" expr ")"
 //         | "sizeof" "(" type-name ")"
@@ -5485,6 +5538,7 @@ bool is_known_builtin(char *name) {
 //         | "__builtin_va_start" "(" assign ("," assign)? ")"
 //         | ("__builtin_va_end" | "__builtin_va_copy") "(" assign ("," assign)? ")"
 //         | "__builtin_va_arg" "(" assign "," type-name ")"
+//         | "__builtin_offsetof" "(" type-name "," member ("." member | "[" expr "]")* ")"
 //         | "true" | "false" | "nullptr"
 //         | ident
 //         | str
@@ -5558,6 +5612,32 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "__builtin_va_start") || equal(tok, "__builtin_va_end") ||
       equal(tok, "__builtin_va_copy") || equal(tok, "__builtin_va_arg"))
     return va_builtin(rest, tok);
+
+  // [GNU] __builtin_offsetof(T, a.b[i]) is `(unsigned long)&((T *)0)->a.b[i]`,
+  // as <stddef.h>'s offsetof.
+  if (equal(tok, "__builtin_offsetof")) {
+    tok = skip(tok->next, "(");
+    Type *ty = typename(&tok, tok);
+    tok = skip(tok, ",");
+    Node *node = new_unary(ND_DEREF, new_cast(new_num(0, start), pointer_to(ty)), start);
+    node = struct_ref(node, tok);
+    tok = tok->next;
+    for (;;) {
+      if (equal(tok, ".")) {
+        node = struct_ref(node, tok->next);
+        tok = tok->next->next;
+      } else if (equal(tok, "[")) {
+        Token *bracket = tok;
+        Node *idx = expr(&tok, tok->next);
+        tok = skip(tok, "]");
+        node = new_unary(ND_DEREF, new_add(node, idx, bracket), bracket);
+      } else {
+        break;
+      }
+    }
+    *rest = skip(tok, ")");
+    return new_cast(new_unary(ND_ADDR, node, start), ty_ulong);
+  }
 
   // A program's own declaration of the name wins.
   if (tok->kind == TK_IDENT && tok->loc[0] == '_' && equal(tok->next, "(") &&
@@ -5801,7 +5881,7 @@ static void warn_function(Obj *fn, Token *rbrace) {
     warn_tok(rbrace, "control reaches end of non-void function '%s'", fn->name);
 }
 
-//---------- Top level: functions and global variables -----------------------
+//---------- Top level: typedefs and function definitions --------------------
 
 static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr) {
   bool first = true;
@@ -6026,12 +6106,13 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   // [https://www.sigbus.info/n1570#6.4.2.2p1] "__func__" is
   // automatically defined as a local variable containing the
   // current function name.
-  push_scope("__func__")->var =
-    new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
+  Obj *fn_name = new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
+  push_scope("__func__")->var = fn_name;
 
-  // [GNU] __FUNCTION__ is yet another name of __func__.
-  push_scope("__FUNCTION__")->var =
-    new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
+  // [GNU] __FUNCTION__ and __PRETTY_FUNCTION__ are other names for
+  // __func__ (in C, the "pretty" name is the plain one).
+  push_scope("__FUNCTION__")->var = fn_name;
+  push_scope("__PRETTY_FUNCTION__")->var = fn_name;
 
   Token *body = tok;
   fn->body = compound_stmt(&tok, tok, false);
@@ -6052,6 +6133,8 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn->is_definition = false;
   return tok;
 }
+
+//---------- Top level: global variables -------------------------------------
 
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
   bool first = true;
@@ -6081,6 +6164,12 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
       if (ty == &auto_type && equal(tok, "="))
         ty = peek_auto_type(tok->next);
     }
+
+    // A second initializer for the same variable, `int x = 1; int x = 1;`
+    VarScope *prev = find_var(name);
+    if (equal(tok, "=") && prev && prev->var && !prev->var->is_function &&
+        prev->var->is_definition && !prev->var->is_tentative)
+      error_tok(name, "redefinition of %s", prev->var->name);
 
     Obj *var = new_gvar(get_ident(name), ty);
     var->is_definition = !attr->is_extern;
@@ -6116,7 +6205,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
 
     if (equal(tok, "="))
       gvar_initializer(&tok, tok->next, var);
-    else if (!attr->is_extern && !attr->is_tls)
+    else if (!attr->is_extern)
       var->is_tentative = true;
   }
   return tok;
@@ -6150,11 +6239,20 @@ static void scan_globals(void) {
       continue;
     }
 
-    // Find another definition of the same identifier.
+    // Find another definition of the same identifier: one with an
+    // initializer, or a tentative one kept already (`int x; int x;`
+    // keeps the first, so exactly one of them is emitted).
     Obj *var2 = globals;
-    for (; var2; var2 = var2->next)
-      if (var != var2 && var2->is_definition && !strcmp(var->name, var2->name))
+    bool is_before = true;
+    for (; var2; var2 = var2->next) {
+      if (var2 == var) {
+        is_before = false;
+        continue;
+      }
+      if (var2->is_definition && !strcmp(var->name, var2->name) &&
+          (!var2->is_tentative || is_before))
         break;
+    }
 
     // If there's another definition, the tentative definition
     // is redundant
@@ -6165,6 +6263,8 @@ static void scan_globals(void) {
   cur->next = NULL;
   globals = head.next;
 }
+
+//---------- C23 [[attributes]] and built-in declarations --------------------
 
 static void declare_builtin_functions(void) {
   Type *ty = func_type(pointer_to(ty_void));
@@ -6252,6 +6352,8 @@ static Token *remove_attributes(Token *tok) {
           else if (equal(last, ")") && --depth == 0)
             break;
         }
+        if (last->kind == TK_EOF)
+          error_tok(start, "unterminated attribute");
       }
       tok = last->next;
 
@@ -6284,6 +6386,8 @@ static Token *remove_attributes(Token *tok) {
   cur->next = tok;
   return head.next;
 }
+
+//---------- Entry point -----------------------------------------------------
 
 // top-level-item = static-assert | typedef | function-definition
 //                | global-variable

@@ -1,5 +1,5 @@
 //============================================================================
-// asm.c - STAGE 5: ASSEMBLE
+// asm.c - STAGE 5 of 6: ASSEMBLE
 //
 // Turns the assembly text from cgen.c into an ELF object file (.o), so
 // mucc doesn't need to run the system assembler. It knows the

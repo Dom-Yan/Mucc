@@ -37,6 +37,11 @@ int main() {
   ASSERT(55, ({ int e, n = 0; do e = complit_get(&(int){n}); while (++n < 5); e * 10 + n; }));
   ASSERT(5, ({ int *p = &(int){5}; *p; }));
 
+  // A compound literal keeps its type's qualifiers.
+  ASSERT(1, _Generic(&(const int){0}, const int *: 1, default: 0));
+  ASSERT(1, ({ typedef const int CI; _Generic(&(CI){0}, const int *: 1, default: 0); }));
+  ASSERT(0, _Generic(&(int){0}, const int *: 1, default: 0));
+
   printf("OK\n");
   return 0;
 }

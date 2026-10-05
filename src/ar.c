@@ -1,5 +1,5 @@
 //============================================================================
-// ar.c - an archiver for static libraries
+// ar.c - TOOL: an archiver for static libraries (mucc -ar)
 //
 // `mucc -ar rcs libfoo.a a.o b.o` writes a static library in the format
 // GNU ar writes, which mucc's linker, ld and nm read. After the magic
@@ -15,6 +15,8 @@
 
 #include "mucc.h"
 #include <elf.h>
+
+//---------- Archive members -------------------------------------------------
 
 typedef struct {
   char *name;
@@ -43,6 +45,8 @@ static unsigned char *read_whole(char *path, size_t *size) {
   fclose(fp);
   return buf;
 }
+
+//---------- Reading an archive ----------------------------------------------
 
 // Reads the members of the archive at `path`, leaving out its symbol
 // index and long-name table.
@@ -82,6 +86,8 @@ static int find_member(char *name, int n) {
       return i;
   return -1;
 }
+
+//---------- Writing an archive and its symbol index -------------------------
 
 // Appends the global symbols `m` defines (if it is an ELF object) to
 // `names`, and returns how many.
@@ -211,6 +217,8 @@ static void write_archive(char *path, bool with_index, mode_t mode) {
   if (rename(tmp, path))
     error("%s: %s", path, strerror(errno));
 }
+
+//---------- mucc -ar and mucc -ranlib ---------------------------------------
 
 static char *base_name(char *path) {
   char *p = strrchr(path, '/');
