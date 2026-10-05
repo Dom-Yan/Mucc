@@ -67,7 +67,7 @@ binutils, no system headers.</p>
   <li><b>Nothing to install.</b> One file of about 11 MB is the whole
     toolchain. It works in an empty container, on old distributions and on
     machines with no compiler.</li>
-  <li><b>Small enough to read.</b> About 22,000 lines of C that you can
+  <li><b>Small enough to read.</b> About 24,000 lines of C that you can
     understand from end to end.</li>
   <li><b>Real C.</b> C17 by default, C23 with <code>-std=c23</code>. It
     builds CPython, Git, SQLite and Lua, which then pass their own test
@@ -198,10 +198,10 @@ the <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
 <h2 id="stats">Statistics</h2>
 <div class="table-wrap">
 <table>
-  <tr><th>Source</th><td>22,103 lines of C in 13 files</td></tr>
+  <tr><th>Source</th><td>23,772 lines of C in 13 files</td></tr>
   <tr><th>Released binary</th><td>about 11 MB, with musl and Linux's headers inside</td></tr>
   <tr><th>Compiling its own source</th><td>0.45 s (gcc <code>-O0</code>: 1.07 s, gcc <code>-O2</code>: 4.33 s)</td></tr>
-  <tr><th>Tests</th><td>51 programs with 2,047 assertions, 8 Linux programs with 166 checks, plus 394 command-line, error, assembler, linker and debugger checks</td></tr>
+  <tr><th>Tests</th><td>53 programs with 2,302 assertions, 8 Linux programs with 166 checks, plus 432 command-line, error, assembler, linker and debugger checks</td></tr>
   <tr><th>Real programs</th><td>CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC, QuickJS (its 9 test files pass), the kilo text editor</td></tr>
   <tr><th>Self-hosting</th><td>a mucc built by mucc builds a byte-identical mucc</td></tr>
 </table>
