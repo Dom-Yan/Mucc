@@ -516,6 +516,16 @@ int main() {
 #endif
     r; }));
 
+  // # escapes `\` and `"` only in literals, so #x of \n is a newline.
+  // L ## #x is a wide string, and __FILE_NAME__ the file's base name.
+#define STR_BS(x) #x
+#define WIDE_STR(x) L ## #x
+  ASSERT(0, strcmp(STR_BS(\n), "\n"));
+  ASSERT(0, strcmp(STR_BS("\n" '\\'), "\"\\n\" '\\\\'"));
+  ASSERT(8, sizeof(WIDE_STR(a)));
+  ASSERT('b', WIDE_STR(ab)[1]);
+  ASSERT(0, strcmp(__FILE_NAME__, "macro.c"));
+
   printf("OK\n");
   return 0;
 }

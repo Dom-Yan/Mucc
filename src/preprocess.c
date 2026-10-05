@@ -750,12 +750,30 @@ static char *join_tokens(Token *tok, Token *end) {
 
 // Concatenates all tokens in `arg` and returns a new string token.
 // This function is used for the stringizing operator (#).
+// As C11 6.10.3.2 says, `"` and `\` are escaped only in string and
+// character literals, so #x of `\n` is "\n", a newline, as with gcc.
 static Token *stringize(Token *hash, Token *arg) {
-  // Create a new string token. We need to set some value to its
-  // source location for error reporting function, so we use a macro
-  // name token as a template.
-  char *s = join_tokens(arg, NULL);
-  return new_str_token(s, hash);
+  char *buf;
+  size_t len;
+  FILE *out = open_memstream(&buf, &len);
+  fputc('"', out);
+  for (Token *t = arg; t->kind != TK_EOF; t = t->next) {
+    if (t != arg && t->has_space)
+      fputc(' ', out);
+    // A string, a character constant, or a quote that doesn't close
+    bool is_lit = t->kind == TK_STR || (t->len == 1 && *t->loc == '"') ||
+                  (t->kind == TK_NUM && t->loc[t->len - 1] == '\'');
+    for (int i = 0; i < t->len; i++) {
+      if (is_lit && (t->loc[i] == '\\' || t->loc[i] == '"'))
+        fputc('\\', out);
+      fputc(t->loc[i], out);
+    }
+  }
+  fputc('"', out);
+  fclose(out);
+
+  // The new token's file is the `#`'s, for error messages.
+  return tokenize(new_file(hash->file->name, hash->file->file_no, buf));
 }
 
 // Concatenate two tokens to create a new token.
@@ -816,6 +834,14 @@ static Token *subst(Token *tok, MacroArg *args) {
 
       if (tok->next->kind == TK_EOF)
         error_tok(tok, "'##' cannot appear at end of macro expansion");
+
+      // `L ## #x`: the stringized argument, as in a wide string
+      if (equal(tok->next, "#") && find_arg(args, tok->next->next)) {
+        Token *str = stringize(tok->next, find_arg(args, tok->next->next)->tok);
+        *cur = *paste(cur, str);
+        tok = tok->next->next->next;
+        continue;
+      }
 
       MacroArg *arg = find_arg(args, tok->next);
       if (arg) {
@@ -1625,6 +1651,13 @@ static Token *file_macro(Token *tmpl) {
   return new_str_token(tmpl->file->display_name, tmpl);
 }
 
+// [GNU] __FILE_NAME__ is __FILE__ without its directory.
+static Token *file_name_macro(Token *tmpl) {
+  char *name = file_macro(tmpl)->str;
+  char *slash = strrchr(name, '/');
+  return new_str_token(slash ? slash + 1 : name, tmpl);
+}
+
 static Token *line_macro(Token *tmpl) {
   while (tmpl->origin)
     tmpl = tmpl->origin;
@@ -1763,6 +1796,7 @@ void init_macros(void) {
   define_macro("__STDC_EMBED_EMPTY__", "2");
 
   add_builtin("__FILE__", file_macro);
+  add_builtin("__FILE_NAME__", file_name_macro);
   add_builtin("__LINE__", line_macro);
   add_builtin("__COUNTER__", counter_macro);
   add_builtin("__TIMESTAMP__", timestamp_macro);
