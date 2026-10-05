@@ -32,59 +32,15 @@ The linter idea from 2026-10-04 is dropped. The `linter` and
 - `13e6728` asm goto, with outputs and cleanups.
 - `ef27a4f` __int128. 200,000 random operations and conversions match
   gcc exactly.
+- `52c2124` _Complex. Multiplying and dividing call helpers ported from
+  libgcc2.c (`__mucc_mulsc3` and so on, parsed from C text at the end of
+  `parse()` when used). 600,000 random operations match gcc exactly, but
+  for NaN signs, which gcc -O0 and -O2 don't agree on either. musl's
+  complex functions are now built into the bundled libc. The fuzzer is
+  in the `complex` branch's history (`wip/cfuzz.c`).
 
 Every commit passed `make test-all`. All commits are authored only by
 Dom-Yan, with no co-author lines.
-
-## In progress: _Complex (branch `complex`, commit `0bea5ab`)
-
-Not finished, and `make test-all` has not been run on it.
-
-How it works: a complex type is a `TY_STRUCT` with `is_complex` set and
-two unnamed members (see `complex_type()` in type.c), so it is stored,
-copied and passed as a struct. That matches the psABI, except that a
-long double `_Complex` is returned in `%st0`/`%st1` (done in cgen.c).
-`add_type()` types complex arithmetic, which is otherwise left alone
-while a function is parsed, so `+=` and `++` work unchanged.
-`lower_complex()` (parser.c, "Complex numbers") then rewrites it in
-place into arithmetic on temporaries, at the end of `function()`. Global
-initializers use `eval_complex()`. Conditions, `!` and `(bool)z` test
-both parts in cgen's `cmp_zero()`.
-
-Done on the branch: the types (`_Complex`, `__complex__`), imaginary
-constants (`2.0i`, `1.0fi`), `__real__`/`__imag__`, `__builtin_complex`
-(musl's `CMPLX`), conversions, + - * / == !=, `~` as conjugate, the
-long double return, and DWARF.
-
-What's left:
-
-1. **Match gcc for infinities, NaNs and signed zeros.** The fuzzer
-   (`wip/cfuzz.c` with `wip/cfuzz_abi.c` built by gcc, compared with
-   `wip/fields.py`) differs from gcc in about 60% of lines, in two
-   patterns:
-   - Multiplying or dividing two complex numbers gives NaN where gcc
-     gives an infinity or zero. gcc calls libgcc's `__mulXc3` and
-     `__divXc3`, which recover them as C's Annex G says.
-   - Dividing `float` complex numbers: current libgcc divides them in
-     `double` precision, so some zeros come out with a different sign.
-
-   The planned fix: port libgcc2.c's `__mul{s,d,x}c3` and
-   `__div{s,d,x}c3` to C text inside mucc. At parse start, declare them
-   as static prototypes named `__mucc_mulsc3` and so on. Have
-   `lower_arith()` call them for complex times complex and anything
-   divided by a complex number (with 0 as a real dividend's imaginary
-   part, as gcc does). At the end of `parse()`, if any was used, tokenize
-   and parse their definitions (like `new_builtin_token`, with the line
-   of the first use) and mark them live. They must not call libgcc (see
-   `test/libgcc.sh`). The double and long double division uses GCC 12+'s
-   scaled Smith algorithm with RBIG, RMIN, RMIN2, RMINSCAL and RMAX2;
-   float division computes in double.
-2. Run the fuzzer until it matches exactly, then add `test/complex.c`
-   (with `<complex.h>`: `I`, `creal`, `cimag`, `CMPLX`, calls to musl's
-   `cabs`/`cexp`) and error tests for `_Complex int` and `z < w`.
-3. `make test-all`. In the commit, remove `wip/` and update the README
-   and website ("Not supported" now lists only C++, `_BitInt`, K&R
-   definitions and optimization). Then merge into main.
 
 ## Next: bugs found by the deep test (2026-10-05)
 
@@ -154,6 +110,11 @@ looking at, given the goal of being light on memory.
   CC=mucc` in `release.yml`), so gcc isn't in the release path at all.
 - Push main (it is several commits ahead of origin) once the above is
   in.
+- The README and website test counts are stale since `__int128`
+  (test/int128.c and test/complex.c are new).
+- With glibc's headers, `CMPLX` is undefined under mucc: glibc defines
+  it only for gcc 4.7+ and clang. `__builtin_complex` works. musl's
+  headers are fine.
 
 ## Working setup
 
