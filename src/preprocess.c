@@ -1727,7 +1727,23 @@ void define_macro(char *name, char *buf) {
   add_macro(name, true, tok);
 }
 
+// gcc's other spellings of keywords, macros here. They are keywords in
+// gcc, which #undef leaves alone: gnulib's libc-config.h undefines
+// __inline, then musl's headers use it.
+static char *keyword_spellings[][2] = {
+  {"__inline", "inline"}, {"__inline__", "inline"}, {"__const__", "const"},
+  {"__signed__", "signed"}, {"__volatile", "volatile"}, {"__volatile__", "volatile"},
+  {"__typeof", "typeof"}, {"__typeof__", "typeof"}, {"__alignof__", "_Alignof"},
+  {"__typeof_unqual", "__typeof_unqual__"}, {"__asm", "asm"}, {"__asm__", "asm"},
+};
+
 void undef_macro(char *name) {
+  for (int i = 0; i < sizeof(keyword_spellings) / sizeof(*keyword_spellings); i++) {
+    if (!strcmp(name, keyword_spellings[i][0])) {
+      define_macro(name, keyword_spellings[i][1]);
+      return;
+    }
+  }
   hashmap_delete(&macros, name);
 }
 
@@ -1851,26 +1867,16 @@ void init_macros(void) {
   define_macro("__STDC_UTF_32__", "1");
   define_macro("__STDC__", "1");
   define_macro("__USER_LABEL_PREFIX__", "");
-  define_macro("__alignof__", "_Alignof");
   define_macro("__amd64", "1");
   define_macro("__amd64__", "1");
   define_macro("__mucc__", "1");
   define_macro("__builtin_alloca", "alloca"); // as musl's <alloca.h> uses
-  define_macro("__const__", "const");
   define_macro("__extension__", ""); // only quiets gcc's -pedantic
   define_macro("__gnu_linux__", "1");
-  define_macro("__inline", "inline");
-  define_macro("__inline__", "inline");
   define_macro("__linux", "1");
   define_macro("__linux__", "1");
-  define_macro("__signed__", "signed");
-  define_macro("__typeof", "typeof");
-  define_macro("__typeof__", "typeof");
-  define_macro("__typeof_unqual", "__typeof_unqual__");
   define_macro("__unix", "1");
   define_macro("__unix__", "1");
-  define_macro("__volatile", "volatile");
-  define_macro("__volatile__", "volatile");
   define_macro("__x86_64", "1");
   define_macro("__x86_64__", "1");
 
@@ -1975,9 +1981,8 @@ void init_macros(void) {
     define_macro("typeof_unqual", "__typeof_unqual__");
   }
 
-  // The GNU spellings of asm
-  define_macro("__asm__", "asm");
-  define_macro("__asm", "asm");
+  for (int i = 0; i < sizeof(keyword_spellings) / sizeof(*keyword_spellings); i++)
+    define_macro(keyword_spellings[i][0], keyword_spellings[i][1]);
 
   // Lets `#if defined(__has_include)` etc. work. The operators themselves
   // are handled in read_const_expr().

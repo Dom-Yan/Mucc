@@ -967,6 +967,16 @@ expect_error "1:18: error: _Atomic __int128 is not supported" <<'EOF'
 _Atomic __int128 x;
 EOF
 
+# gcc's keyword spellings like __inline are keywords there, so #undef
+# leaves them (gnulib's libc-config.h does it before musl's headers).
+expect_ok '#undef of __inline, __volatile__ and __asm__' <<'EOF'
+#undef __inline
+#undef __volatile__
+#undef __asm__
+static __inline int f(void) { int x = 1; __asm__ __volatile__("" : "+r"(x)); return x; }
+int g(void) { return f(); }
+EOF
+
 expect_error "1:24: error: duplicate member 'a'" <<'EOF'
 struct S { int a; char a; };
 EOF
