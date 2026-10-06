@@ -233,7 +233,7 @@ static Node *expr_stmt(Token **rest, Token *tok);
 static Node *expr(Token **rest, Token *tok);
 static int64_t eval(Node *node);
 static void eval_complex(Node *node, long double *re, long double *im);
-static void lower_complex(Node *node);
+static Node *lower_complex(Node *node);
 static Token *top_level_item(Token *tok);
 static int64_t eval2(Node *node, char ***label);
 static int64_t eval_rval(Node *node, char ***label);
@@ -402,8 +402,27 @@ static Token *skip_bad_item(Token *tok) {
 
 //---------- AST node constructors -------------------------------------------
 
+// The bytes a node of `kind` takes: the fields before Node's union, and
+// those of the union's part for its kind. A node's kind never changes,
+// and a whole Node is never copied.
+static int node_size(NodeKind kind) {
+  switch (kind) {
+  case ND_VAR: case ND_VLA_PTR: case ND_MEMZERO: case ND_VA_ARG:
+    return offsetof(Node, var) + sizeof(Obj *);
+  case ND_MEMBER:
+    return offsetof(Node, member) + sizeof(Member *);
+  case ND_NUM: case ND_FRAME_ADDR:
+    return offsetof(Node, fval) + sizeof(long double *);
+  case ND_CAS: case ND_OVERFLOW:
+    return offsetof(Node, cas_new) + sizeof(Node *);
+  case ND_FUNCALL:
+    return offsetof(Node, ret_buffer) + sizeof(Obj *);
+  }
+  return has_stmt_fields(kind) ? sizeof(Node) : offsetof(Node, var);
+}
+
 static Node *new_node(NodeKind kind, Token *tok) {
-  Node *node = arena_alloc(sizeof(Node));
+  Node *node = arena_alloc(node_size(kind));
   node->kind = kind;
   node->tok = tok;
   return node;
@@ -471,9 +490,7 @@ Node *new_cast(Node *expr, Type *ty) {
   if (from && ty->kind != TY_VOID && from_aggr != to_aggr)
     error_tok(expr->tok, "cannot convert '%s' to '%s'", type_name(from), type_name(ty));
 
-  Node *node = arena_alloc(sizeof(Node));
-  node->kind = ND_CAST;
-  node->tok = expr->tok;
+  Node *node = new_node(ND_CAST, expr->tok);
   node->lhs = expr;
   node->ty = ty;
   return node;
@@ -3549,9 +3566,12 @@ static bool has_label(Node *node) {
     return false;
   if (node->kind == ND_LABEL || node->kind == ND_CASE)
     return true;
-  if (has_label(node->lhs) || has_label(node->rhs) || has_label(node->cond) ||
-      has_label(node->then) || has_label(node->els) || has_label(node->init) ||
-      has_label(node->inc))
+  if (has_label(node->lhs) || has_label(node->rhs))
+    return true;
+  if (!has_stmt_fields(node->kind))
+    return false;
+  if (has_label(node->cond) || has_label(node->then) || has_label(node->els) ||
+      has_label(node->init) || has_label(node->inc))
     return true;
   for (Node *n = node->body; n; n = n->next)
     if (has_label(n))
@@ -4337,8 +4357,7 @@ static int64_t eval_wide(Node *node, char ***label) {
       if (node->ty->kind == TY_BOOL)
         return re != 0 || im != 0;
       Node tmp = {.kind = ND_NUM, .tok = node->tok, .ty = complex_part(node->lhs->ty), .fval = &re};
-      Node cast = *node;
-      cast.lhs = &tmp;
+      Node cast = {.kind = ND_CAST, .tok = node->tok, .ty = node->ty, .lhs = &tmp};
       return eval2(&cast, label);
     }
 
@@ -7181,7 +7200,7 @@ static Node *primary(Token **rest, Token *tok) {
 // complex_type()), so it is stored, copied and passed as one. add_type()
 // types arithmetic on it, which is otherwise left as it is while a
 // function is parsed, so that `z += w` and `z++` are made as for any
-// other number. Then lower_complex() rewrites it, in place, into
+// other number. Then lower_complex() rewrites it into
 // arithmetic on the parts of temporaries. A global's initializer is
 // computed by eval_complex() instead. Multiplying two complex numbers
 // and dividing by one call helpers that define_complex_helpers() adds to
@@ -7589,36 +7608,40 @@ static Node *lowered(Node *node) {
   return NULL;
 }
 
-// Rewrites, in place, the complex arithmetic in `node` and what's under
-// it, children first.
-static void lower_complex(Node *node) {
+// `node` with the complex arithmetic in it and what's under it rewritten,
+// children first: node, changed in place, or what replaces it.
+static Node *lower_complex(Node *node) {
   if (!node)
-    return;
+    return NULL;
 
-  lower_complex(node->lhs);
-  lower_complex(node->rhs);
-  lower_complex(node->cond);
-  lower_complex(node->then);
-  lower_complex(node->els);
-  lower_complex(node->init);
-  lower_complex(node->inc);
-  lower_complex(node->cas_addr);
-  lower_complex(node->cas_old);
-  lower_complex(node->cas_new);
-  for (Node *n = node->body; n; n = n->next)
-    lower_complex(n);
-  for (Node *n = node->args; n; n = n->next)
-    lower_complex(n);
+  node->lhs = lower_complex(node->lhs);
+  node->rhs = lower_complex(node->rhs);
+  if (has_stmt_fields(node->kind)) {
+    node->cond = lower_complex(node->cond);
+    node->then = lower_complex(node->then);
+    node->els = lower_complex(node->els);
+    node->init = lower_complex(node->init);
+    node->inc = lower_complex(node->inc);
+    for (Node **p = &node->body; *p; p = &(*p)->next)
+      *p = lower_complex(*p);
+  }
+  if (node->kind == ND_CAS || node->kind == ND_OVERFLOW) {
+    node->cas_addr = lower_complex(node->cas_addr);
+    node->cas_old = lower_complex(node->cas_old);
+    node->cas_new = lower_complex(node->cas_new);
+  }
+  if (node->kind == ND_FUNCALL)
+    for (Node **p = &node->args; *p; p = &(*p)->next)
+      *p = lower_complex(*p);
 
   if (!node->ty)
-    return;
+    return node;
   Node *new = lowered(node);
   if (!new)
-    return;
+    return node;
   add_type(new);
-  Node *next = node->next;
-  *node = *new;
-  node->next = next;
+  new->next = node->next;
+  return new;
 }
 
 // The value of constant `node`, a complex or real number, in `*re` and
@@ -7730,12 +7753,11 @@ static bool has_side_effects(Node *node) {
       return true;
     break;
   }
-  for (Node *n = node->args; n; n = n->next)
-    if (has_side_effects(n))
-      return true;
-  return has_side_effects(node->lhs) || has_side_effects(node->rhs) ||
-         has_side_effects(node->cond) || has_side_effects(node->then) ||
-         has_side_effects(node->els);
+  if (has_side_effects(node->lhs) || has_side_effects(node->rhs))
+    return true;
+  return has_stmt_fields(node->kind) &&
+         (has_side_effects(node->cond) || has_side_effects(node->then) ||
+          has_side_effects(node->els));
 }
 
 // -Wunused-value: `x == 1;`, a statement that computes a value and drops
@@ -8489,7 +8511,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     vla_cur->next = fn->body->body;
     fn->body->body = vla_head.next;
   }
-  lower_complex(fn->body);
+  fn->body = lower_complex(fn->body);
   fn->locals = locals;
   leave_scope();
   resolve_goto_labels();

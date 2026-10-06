@@ -3200,18 +3200,23 @@ static void scan_uses(Node *node, int weight) {
 
   scan_uses(node->lhs, weight);
   scan_uses(node->rhs, weight);
-  scan_uses(node->cond, weight);
-  scan_uses(node->then, weight);
-  scan_uses(node->els, weight);
-  scan_uses(node->init, weight);
-  scan_uses(node->inc, weight);
-  scan_uses(node->cas_addr, weight);
-  scan_uses(node->cas_old, weight);
-  scan_uses(node->cas_new, weight);
-  for (Node *n = node->body; n; n = n->next)
-    scan_uses(n, weight);
-  for (Node *n = node->args; n; n = n->next)
-    scan_uses(n, weight);
+  if (has_stmt_fields(node->kind)) {
+    scan_uses(node->cond, weight);
+    scan_uses(node->then, weight);
+    scan_uses(node->els, weight);
+    scan_uses(node->init, weight);
+    scan_uses(node->inc, weight);
+    for (Node *n = node->body; n; n = n->next)
+      scan_uses(n, weight);
+  }
+  if (node->kind == ND_CAS || node->kind == ND_OVERFLOW) {
+    scan_uses(node->cas_addr, weight);
+    scan_uses(node->cas_old, weight);
+    scan_uses(node->cas_new, weight);
+  }
+  if (node->kind == ND_FUNCALL)
+    for (Node *n = node->args; n; n = n->next)
+      scan_uses(n, weight);
 }
 
 static bool can_be_in_register(Obj *fn, Obj *var) {

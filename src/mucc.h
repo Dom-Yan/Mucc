@@ -56,6 +56,7 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -369,11 +370,14 @@ struct LexBlock {
 
 // AST node type
 // There is one for each part of every expression and statement, which is
-// hundreds of thousands for a big file, so what only a few kinds use
-// shares space in the union at the end.
+// hundreds of thousands for a big file. So the fields after `rhs` are in
+// a union, by the kinds that use them, and a node is only as big as its
+// kind needs (see node_size() in parser.c): `a + b` is 48 bytes, `x` 56,
+// a statement 208. A pass over every node reads a field in the union only
+// for kinds that have it (see has_stmt_fields()).
 struct Node {
   NodeKind kind; // Node kind
-  bool pass_by_stack; // Function call: see below
+  bool pass_by_stack; // Function call argument: see below
   bool stack_pad;
   Node *next;    // Next node
   Type *ty;      // Type, e.g. int or pointer to int
@@ -382,77 +386,85 @@ struct Node {
   Node *lhs;     // Left-hand side
   Node *rhs;     // Right-hand side
 
-  // "if" or "for" statement
-  Node *cond;
-  Node *then;
-  Node *els;
-  Node *init;
-  Node *inc;
-
-  // "break" and "continue" labels
-  char *brk_label;
-  char *cont_label;
-
-  // Block or statement expression
-  Node *body;
-
-  // Struct member access
-  Member *member;
-
-  // Function call. `pass_by_stack` (at the top) says it goes on the stack,
-  // and `stack_pad`, with 8 bytes of padding before it.
-  Type *func_ty;
-  Node *args;
-  Obj *ret_buffer;
-
-  // Goto or labeled statement, or labels-as-values. A goto, break or
-  // continue that leaves the scope of variables with a cleanup calls the
-  // cleanups (lhs) first.
-  char *label;
-  char *unique_label;
-  Node *goto_next;
-  Cleanup *cleanups; // in scope at a goto or label (parser.c)
-
-  // Switch
-  Node *case_next;
-  Node *default_case;
-
-
-  // Atomic compare-and-swap
-  Node *cas_addr;
-  Node *cas_old;
-  Node *cas_new;
-
-  // Variable
-  Obj *var;
-
-  // A block, for loop or statement expression with a scope of its own:
-  // its variables' block, for -g
-  LexBlock *block;
-
-  // Numeric literal
-  int64_t val;
-  long double *fval; // of a floating type
-
   union {
-    // Case: `case begin ... end:`, and in a switch on __int128, the
-    // values' high halves
+    // Variable: ND_VAR, ND_VLA_PTR, ND_MEMZERO and ND_VA_ARG
+    Obj *var;
+
+    // Struct member access
+    Member *member;
+
+    // Numeric literal (also ND_FRAME_ADDR's level), atomic
+    // compare-and-swap, and ND_OVERFLOW, which uses val and cas_addr
     struct {
-      long begin;
-      long end;
-      long begin_hi;
-      long end_hi;
+      int64_t val;
+      long double *fval; // of a floating type
+      Node *cas_addr;
+      Node *cas_old;
+      Node *cas_new;
     };
 
-    // "asm" string literal. With operands (or any ':'), `%` in it refers
-    // to them; `body` computes their values and addresses first.
+    // Function call. An argument's `pass_by_stack` (at the top) says it
+    // goes on the stack, and `stack_pad`, with 8 bytes of padding before it.
     struct {
-      char *asm_str;
-      AsmOperand *asm_ops; // outputs, then inputs
-      Node *asm_labels;    // asm goto's labels: ND_GOTOs, linked by `next`
-      int asm_nops;
-      int asm_scratch;     // a register free after the asm, to store outputs
-      bool asm_extended;
+      Type *func_ty;
+      Node *args;
+      Obj *ret_buffer;
+    };
+
+    // Statements, and ?:
+    struct {
+      // "if" or "for" statement, or ?:
+      Node *cond;
+      Node *then;
+      Node *els;
+      Node *init;
+      Node *inc;
+
+      // "break" and "continue" labels
+      char *brk_label;
+      char *cont_label;
+
+      // Block or statement expression
+      Node *body;
+
+      // A block, for loop or statement expression with a scope of its
+      // own: its variables' block, for -g
+      LexBlock *block;
+
+      // Goto or labeled statement, or labels-as-values. A goto, break or
+      // continue that leaves the scope of variables with a cleanup calls
+      // the cleanups (lhs) first.
+      char *label;
+      char *unique_label;
+      Node *goto_next;
+      Cleanup *cleanups; // in scope at a goto or label (parser.c)
+
+      // Switch
+      Node *case_next;
+      Node *default_case;
+
+      union {
+        // Case: `case begin ... end:`, and in a switch on __int128, the
+        // values' high halves
+        struct {
+          long begin;
+          long end;
+          long begin_hi;
+          long end_hi;
+        };
+
+        // "asm" string literal. With operands (or any ':'), `%` in it
+        // refers to them; `body` computes their values and addresses
+        // first.
+        struct {
+          char *asm_str;
+          AsmOperand *asm_ops; // outputs, then inputs
+          Node *asm_labels;    // asm goto's labels: ND_GOTOs, linked by `next`
+          int asm_nops;
+          int asm_scratch;     // a register free after the asm, to store outputs
+          bool asm_extended;
+        };
+      };
     };
   };
 };
@@ -611,6 +623,7 @@ Type *array_of(Type *base, int size);
 Type *vla_of(Type *base, Node *expr);
 Type *enum_type(void);
 Type *struct_type(void);
+bool has_stmt_fields(NodeKind kind);
 void add_type(Node *node);
 void check_scalar(Node *node);
 char *type_name(Type *ty);

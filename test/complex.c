@@ -182,6 +182,10 @@ int main() {
   ASSERT(1, is(va_sum(3, (cd)1, 2.0i, 3 + 3.0i), 4, 5));
   ASSERT(1, ({ cd (*fp)(cd, cd, cd, cd, cd, int, cd) = many; is(fp(0, 0, 0, 0, 1.0i, 1, 1), 1, 1); }));
 
+  // Complex arithmetic as an argument, a statement and part of one
+  ASSERT(1, ({ cd z = 1 + 2.0i, w = 3 - 1.0i; z * w; z += w * 2;
+               is(z * w, __real__(z + w) + 11, __imag__(z - w) - 8); }));
+
   printf("OK\n");
   return 0;
 }

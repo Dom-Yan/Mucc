@@ -457,22 +457,36 @@ void check_scalar(Node *node) {
     error_tok(node->tok, "'%s' used where a scalar is required", type_name(ty));
 }
 
+// Does a node of `kind` have the fields of statements (cond, body and the
+// rest, see Node)?
+bool has_stmt_fields(NodeKind kind) {
+  switch (kind) {
+  case ND_IF: case ND_COND: case ND_FOR: case ND_DO: case ND_SWITCH: case ND_CASE:
+  case ND_BLOCK: case ND_STMT_EXPR: case ND_GOTO: case ND_LABEL: case ND_LABEL_VAL:
+  case ND_ASM:
+    return true;
+  }
+  return false;
+}
+
 void add_type(Node *node) {
   if (!node || node->ty)
     return;
 
   add_type(node->lhs);
   add_type(node->rhs);
-  add_type(node->cond);
-  add_type(node->then);
-  add_type(node->els);
-  add_type(node->init);
-  add_type(node->inc);
-
-  for (Node *n = node->body; n; n = n->next)
-    add_type(n);
-  for (Node *n = node->args; n; n = n->next)
-    add_type(n);
+  if (has_stmt_fields(node->kind)) {
+    add_type(node->cond);
+    add_type(node->then);
+    add_type(node->els);
+    add_type(node->init);
+    add_type(node->inc);
+    for (Node *n = node->body; n; n = n->next)
+      add_type(n);
+  }
+  if (node->kind == ND_FUNCALL)
+    for (Node *n = node->args; n; n = n->next)
+      add_type(n);
 
   switch (node->kind) {
   case ND_NUM:
