@@ -945,6 +945,14 @@ $mucc -fvisibility=hidden -S -o $tmp/vis.s $tmp/vis.c &&
   ! $mucc -fvisibility=secret -S -o $tmp/vis3.s $tmp/vis.c 2> /dev/null
 check '-fvisibility'
 
+# A variable's visibility from an earlier declaration holds for its
+# definition (CPython's headers declare PyAPI_DATA(PyTypeObject) X).
+printf '__attribute__((visibility("default"))) extern int d;\nint d = 1;\n__attribute__((visibility("hidden"))) extern int e;\nint e = 2;\n' > $tmp/vis4.c
+$mucc -fvisibility=hidden -S -o $tmp/vis4.s $tmp/vis4.c &&
+  ! grep -q '\.hidden d$' $tmp/vis4.s && grep -q '\.hidden e$' $tmp/vis4.s &&
+  $mucc -S -o $tmp/vis5.s $tmp/vis4.c && grep -q '\.hidden e$' $tmp/vis5.s
+check 'visibility of an earlier declaration'
+
 # __builtin_trap() traps (SIGILL), unlike __builtin_unreachable()
 echo 'int main(void) { __builtin_trap(); return 0; }' > $tmp/trap.c
 $mucc -o $tmp/trap $tmp/trap.c && { $tmp/trap; [ $? -eq 132 ]; } 2> /dev/null

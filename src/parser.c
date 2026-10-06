@@ -8959,15 +8959,19 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(all.weak_tok, "a weak variable must not be static");
     var->is_weak = all.weak_tok != NULL;
     var->section = all.section;
-    var->visibility = all.visibility;
     var->common = all.common;
 
     // `extern int x asm("y");`: x's symbol is y, also in later
-    // declarations of x without it
+    // declarations of x without it. Likewise its visibility, as CPython's
+    // headers declare PyAPI_DATA(PyTypeObject) PyList_Type.
+    bool redecl = prev && prev->var && !prev->var->is_function && !prev->var->is_local;
     if (all.asm_label_tok)
       var->asm_name = all.asm_label;
-    else if (prev && prev->var && !prev->var->is_function && !prev->var->is_local)
+    else if (redecl)
       var->asm_name = prev->var->asm_name;
+    var->visibility = all.visibility;
+    if (!all.visibility && redecl)
+      var->visibility = prev->var->visibility;
 
     // An alias defines no storage of its own.
     if (all.alias_tok) {
