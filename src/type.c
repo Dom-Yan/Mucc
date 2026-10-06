@@ -555,9 +555,9 @@ void add_type(Node *node) {
   case ND_DEREF:
     if (!node->lhs->ty->base)
       error_tok(node->tok, "invalid pointer dereference");
-    if (node->lhs->ty->base->kind == TY_VOID)
-      error_tok(node->tok, "dereferencing a void pointer");
 
+    // `*p` on a void *p is a void expression, as in gcc: <tgmath.h> takes
+    // `__typeof__(*(0 ? (T *)0 : (void *)x))`.
     node->ty = node->lhs->ty->base;
     return;
   case ND_STMT_EXPR:

@@ -27,6 +27,24 @@ int main() {
 
   ASSERT(10, (1 ? ret10 : (void *)0)());
 
+  // `c ? a : b` with pointers: a null pointer constant takes the other's
+  // type, void * wins over other pointers, and qualifiers add up.
+  ASSERT(8, ({ int x = 5, *p = &x; sizeof(1 ? 0 : p); }));
+  ASSERT(4, ({ int x = 5, *p = &x; sizeof(*(1 ? 0 : p)); }));
+  ASSERT(4, ({ int x = 5, *p = &x; sizeof(*(1 ? (void *)0 : p)); }));
+  ASSERT(4, ({ int x = 5, *p = &x; sizeof(*(1 ? (void *)(1 - 1) : p)); }));
+  ASSERT(1, ({ int x = 5, *p = &x; sizeof(*(1 ? (void *)1 : p)); }));
+  ASSERT(1, ({ int x = 5, *p = &x; void *v = p; sizeof(*(0 ? p : v)); }));
+  ASSERT(1, ({ char s[] = "hi"; sizeof(*(1 ? 0 : s)); }));
+  ASSERT(5, ({ int x = 5, *p = &x; *(0 ? 0 : p); }));
+  ASSERT(1, ({ int x = 5, *p = &x; const int *cp = p; _Generic(1 ? p : cp, const int *: 1, default: 2); }));
+  ASSERT(1, ({ int x = 5, *p = &x; const void *cv = p; _Generic(1 ? p : cv, const void *: 1, default: 2); }));
+  ASSERT(1, ({ int x = 5, *p = &x; void *v = p; _Generic(p ?: v, void *: 1, default: 2); }));
+
+  // musl's <tgmath.h> picks its result types that way.
+  ASSERT(8, sizeof(*(0 ? (double *)0 : (void *)!(sizeof(1.0) == 8))));
+  ASSERT(1, sizeof(*(0 ? (double *)0 : (void *)!(sizeof(1.0) == 4))));
+
   printf("OK\n");
   return 0;
 }

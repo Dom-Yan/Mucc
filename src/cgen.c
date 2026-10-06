@@ -417,7 +417,7 @@ static void load(Type *ty) {
   // becomes not the array itself but the address of the array.
   // This is where "array is automatically converted to a pointer to
   // the first element of the array in C" occurs.
-  if (is_aggregate(ty))
+  if (is_aggregate(ty) || ty->kind == TY_VOID) // `*p` on a void *p reads nothing
     return;
   load_from(ty, "(%rax)");
 }

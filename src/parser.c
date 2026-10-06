@@ -4422,6 +4422,61 @@ static Node *assign(Token **rest, Token *tok) {
 
 //---------- Binary operators, lowest precedence first -----------------------
 
+// A null pointer constant: an integer constant expression of value 0, or
+// one cast to void *.
+static bool is_null_pointer(Node *node) {
+  Type *ty = node->ty;
+  if (node->kind == ND_CAST && ty->kind == TY_PTR && ty->base->kind == TY_VOID &&
+      !ty->base->is_const && !ty->base->is_volatile)
+    node = node->lhs;
+  return is_integer(node->ty) && is_const_expr(node) && !eval(node);
+}
+
+// The type of `c ? a : b` if a or b is a pointer (C11 6.5.15p6), or NULL:
+// a null pointer constant takes the other's type, void * wins over other
+// pointers, and the pointed-to type has the qualifiers of both. musl's
+// <tgmath.h> picks its result types this way.
+static Type *cond_pointer_type(Node *node) {
+  Node *then = node->then, *els = node->els;
+  Type *t1 = then->ty, *t2 = els->ty;
+  if (t1->kind == TY_FUNC)
+    t1 = pointer_to(t1);
+  if (t2->kind == TY_FUNC)
+    t2 = pointer_to(t2);
+  if ((!t1->base && !t2->base) || t1->kind == TY_VOID || t2->kind == TY_VOID)
+    return NULL;
+  if ((!t1->base && !is_integer(t1)) || (!t2->base && !is_integer(t2)))
+    error_tok(node->tok, "type mismatch in conditional expression");
+  if (t1->base)
+    t1 = pointer_to(t1->base);
+  if (t2->base)
+    t2 = pointer_to(t2->base);
+
+  if (!t1->base || is_null_pointer(then))
+    return t2->base ? t2 : t1;
+  if (!t2->base || is_null_pointer(els))
+    return t1;
+
+  Type *b1 = t1->base, *b2 = t2->base;
+  Type *base = b2->kind == TY_VOID ? b2 : b1;
+  return pointer_to(qualified(base, b1->is_const || b2->is_const,
+                              b1->is_volatile || b2->is_volatile));
+}
+
+// add_type() for `c ? a : b`, which would give pointer arms a's type.
+static void add_cond_type(Node *node) {
+  add_type(node->then);
+  add_type(node->els);
+  Type *ptr = cond_pointer_type(node);
+  if (ptr) {
+    check_scalar(node->cond);
+    node->then = new_cast(node->then, ptr);
+    node->els = new_cast(node->els, ptr);
+    node->ty = ptr;
+  }
+  add_type(node);
+}
+
 // conditional = logor ("?" expr? ":" conditional)?
 static Node *conditional(Token **rest, Token *tok) {
   Node *cond = logor(&tok, tok);
@@ -4441,6 +4496,7 @@ static Node *conditional(Token **rest, Token *tok) {
     rhs->cond = new_var_node(var, tok);
     rhs->then = new_var_node(var, tok);
     rhs->els = conditional(rest, tok->next->next);
+    add_cond_type(rhs);
     return new_binary(ND_COMMA, lhs, rhs, tok);
   }
 
@@ -4453,7 +4509,7 @@ static Node *conditional(Token **rest, Token *tok) {
   // A constant condition picks the arm at compile time, as gcc does; the
   // other may name functions that don't exist (see the `if` in stmt()).
   Node *then = node->then, *els = node->els; // before add_type converts them
-  add_type(node);
+  add_cond_type(node);
   if (is_integer(cond->ty) && is_const_expr(cond)) {
     Node *arm = eval(cond) ? then : els;
     if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)

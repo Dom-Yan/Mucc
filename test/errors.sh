@@ -238,6 +238,18 @@ int main(void) {
 }
 EOF
 
+expect_error "1:31: error: void value used in return" <<'EOF'
+void *v; int f(void) { return *v; }
+EOF
+
+expect_ok '*p on a void *p, as a void expression' <<'EOF'
+void f(void *v) { *v; (void)*v; (void)&*v; }
+EOF
+
+expect_error "1:44: error: type mismatch in conditional expression" <<'EOF'
+void f(int c, double d, int *p) { (void)(c ? d : p); }
+EOF
+
 expect_error "1:1: error: static assertion failed: int must be 8 bytes" <<'EOF'
 _Static_assert(sizeof(int) == 8, "int must be 8 bytes");
 EOF
