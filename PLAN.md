@@ -113,6 +113,11 @@ Then, the same day:
   `-nostdinc`, `-fsyntax-only`, `-x c-header`, `-print-search-dirs`,
   `-l foo`; `-specs=`, `--param`, `-mcmodel=small`, `-Xassembler`
   accepted. creal, cimag and conj are builtins (no -lm).
+- `619c37d` Errors for code C forbids: duplicate labels, sizeof of an
+  incomplete type or a bit-field, bad bit-field widths, redeclarations
+  in a block, & of a register variable, two storage classes, a flexible
+  array member not last, void parameters, arrays of functions or void,
+  block-scope extern conflicts, duplicate macro parameters.
 
 Found on the way:
 - stb includes `<emmintrin.h>` on every x86-64 build, `__GNUC__` or
@@ -127,23 +132,16 @@ Found on the way:
 
 In order:
 
-1. **Accepted, rejected by gcc**: duplicate labels, sizeof an
-   incomplete struct or a bit-field, bad bit-field widths, `int x; int
-   x;` in a block, `&` of a register variable, `static extern`, a
-   flexible array member not last, a block-scope `extern int x;` and a
-   later file-scope `long x;`, `int f(void x)`, arrays of
-   functions, duplicate macro parameters, `#define f(` with parameters
-   on the next line.
-2. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
+1. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
    loop variable shows after its scope.
-3. **Memory, more**: implicit casts are full nodes and copy their type
+2. **Memory, more**: implicit casts are full nodes and copy their type
    (49 MB and 27 MB of sqlite3.c's); a function's tokens and AST could
    be freed once it is emitted. Macro expansion: musl's `<tgmath.h>`
    nested three deep takes over 4 GB (gcc: 1.2 GB).
-4. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
+3. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
    `vector_size`): stb and many other libraries use them on x86-64
    without a fallback. The biggest gap left for real code bases.
-5. **Bigger and rare**: arrays of 2 GiB or more (sizes are `int` all
+4. **Bigger and rare**: arrays of 2 GiB or more (sizes are `int` all
    through: types, offsets, codegen); `__int128` bit-fields (layout,
    loads and stores in 128 bits, static initializers).
 
