@@ -97,22 +97,26 @@ static HashEntry *get_or_insert_entry(HashMap *map, char *key, int keylen) {
 
   uint64_t hash = fnv_hash(key, keylen);
 
+  // A new key goes in the first tombstone on its way, if any, but only
+  // once it's known not to be further on: else, after an #undef of
+  // another name, a #define would leave two of it.
+  HashEntry *tombstone = NULL;
   for (int i = 0; i < map->capacity; i++) {
     HashEntry *ent = &map->buckets[(hash + i) & (map->capacity - 1)];
 
     if (match(ent, key, keylen))
       return ent;
 
-    if (ent->key == TOMBSTONE) {
-      ent->key = key;
-      ent->keylen = keylen;
-      return ent;
-    }
+    if (ent->key == TOMBSTONE && !tombstone)
+      tombstone = ent;
 
     if (ent->key == NULL) {
+      if (tombstone)
+        ent = tombstone;
+      else
+        map->used++;
       ent->key = key;
       ent->keylen = keylen;
-      map->used++;
       return ent;
     }
   }
@@ -179,5 +183,20 @@ void hashmap_test(void) {
     hashmap_put(map, format("key %d", i), (void *)(size_t)i);
 
   assert(hashmap_get(map, "no such key") == NULL);
+
+  // Putting keys again after other keys' deletion keeps one of each:
+  // deleting them leaves none.
+  HashMap *map2 = calloc(1, sizeof(HashMap));
+  for (int i = 0; i < 100; i++)
+    hashmap_put(map2, format("key %d", i), (void *)(size_t)i);
+  for (int i = 0; i < 50; i++)
+    hashmap_delete(map2, format("key %d", i));
+  for (int i = 50; i < 100; i++)
+    hashmap_put(map2, format("key %d", i), (void *)(size_t)(i + 1000));
+  for (int i = 50; i < 100; i++)
+    hashmap_delete(map2, format("key %d", i));
+  for (int i = 0; i < 100; i++)
+    assert(hashmap_get(map2, format("key %d", i)) == NULL);
+
   printf("OK\n");
 }
