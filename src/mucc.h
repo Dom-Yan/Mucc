@@ -416,10 +416,13 @@ struct Node {
   long double *fval; // of a floating type
 
   union {
-    // Case: `case begin ... end:`
+    // Case: `case begin ... end:`, and in a switch on __int128, the
+    // values' high halves
     struct {
       long begin;
       long end;
+      long begin_hi;
+      long end_hi;
     };
 
     // "asm" string literal. With operands (or any ':'), `%` in it refers

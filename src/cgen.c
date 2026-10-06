@@ -2981,7 +2981,39 @@ static void gen_stmt(Node *node) {
   case ND_SWITCH:
     gen_expr(node->cond);
 
-    for (Node *n = node->case_next; n; n = n->case_next) {
+    // On __int128 (in %rdx:%rax), both halves are compared. The high half
+    // goes to %rsi, since case_operand() may use %rdx.
+    if (is_int128(node->cond->ty)) {
+      println("  mov %%rdx, %%rsi");
+      for (Node *n = node->case_next; n; n = n->case_next) {
+        int c = count();
+        if (n->begin == n->end && n->begin_hi == n->end_hi) {
+          println("  cmp %s, %%rax", case_operand(n->begin, true));
+          println("  jne .L.case.%d", c);
+          println("  cmp %s, %%rsi", case_operand(n->begin_hi, true));
+          println("  je %s", n->label);
+          println(".L.case.%d:", c);
+          continue;
+        }
+
+        // [GNU] A range: is x - begin <= end - begin, unsigned?
+        unsigned __int128 b = (unsigned __int128)(uint64_t)n->begin_hi << 64 | (uint64_t)n->begin;
+        unsigned __int128 e = (unsigned __int128)(uint64_t)n->end_hi << 64 | (uint64_t)n->end;
+        unsigned __int128 d = e - b;
+        println("  mov %%rax, %%rdi");
+        println("  mov %%rsi, %%rcx");
+        println("  sub %s, %%rdi", case_operand(n->begin, true));
+        println("  sbb %s, %%rcx", case_operand(n->begin_hi, true)); // (a mov keeps CF)
+        println("  cmp %s, %%rcx", case_operand((int64_t)(d >> 64), true));
+        println("  jb %s", n->label);
+        println("  jne .L.case.%d", c);
+        println("  cmp %s, %%rdi", case_operand((int64_t)d, true));
+        println("  jbe %s", n->label);
+        println(".L.case.%d:", c);
+      }
+    }
+
+    for (Node *n = node->case_next; n && !is_int128(node->cond->ty); n = n->case_next) {
       bool is64 = node->cond->ty->size == 8;
       char *ax = is64 ? "%rax" : "%eax";
       char *di = is64 ? "%rdi" : "%edi";

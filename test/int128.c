@@ -49,9 +49,74 @@ i128 garr[] = {1, -2, 3};
 __int128_t g4 = 7;
 __uint128_t g5 = 8;
 
+// Constants of any 128-bit value
+i128 big1 = (i128)1 << 100;
+u128 big2 = (u128)0xffffffffffffffffUL * 0xffffffffffffffffUL;
+i128 big3 = -((i128)1 << 64) + 5;
+i128 big4 = ((i128)-1 << 100) >> 99;
+long big_low = (long)(((i128)1 << 70) >> 68);
+int big_cond = (i128)1 << 64 ? 1 : 2;
+
+// A switch, with cases of any 128-bit value and ranges
+static int sw128(i128 v) {
+  switch (v) {
+  case 0: return 1;
+  case -1: return 2;
+  case 0xffffffffffffffffU: return 3;
+  case (i128)1 << 100: return 4;
+  case 100 ... 200: return 5;
+  case (i128)1 << 64 ... ((i128)1 << 64) + 2: return 6;
+  default: return 0;
+  }
+}
+
+static int usw128(u128 v) {
+  switch (v) {
+  case -1: return 1;
+  case 0xffffffffffffffffU: return 2;
+  case (u128)-5 ... (u128)-2: return 3;
+  default: return 0;
+  }
+}
+
+// An overflow builtin's result: whether it overflowed, and *r
+static int ovf(int ov, u128 r, unsigned long h, unsigned long l) {
+  return ov * 2 + same(r, h, l);
+}
+
 int main() {
   ASSERT(16, sizeof(i128));
   ASSERT(16, _Alignof(u128));
+
+  ASSERT(1, same(big1, 1UL << 36, 0));
+  ASSERT(1, same(big2, 0xfffffffffffffffeUL, 1));
+  ASSERT(1, same(big3, -1UL, 5));
+  ASSERT(1, same(big4, -1UL, -2UL));
+  ASSERT(4, big_low);
+  ASSERT(1, big_cond);
+
+  ASSERT(1, sw128(0));
+  ASSERT(2, sw128(-1));
+  ASSERT(3, sw128(0xffffffffffffffffU));
+  ASSERT(4, sw128((i128)1 << 100));
+  ASSERT(5, sw128(150));
+  ASSERT(6, sw128((i128)1 << 64));
+  ASSERT(6, sw128(((i128)1 << 64) + 2));
+  ASSERT(0, sw128(((i128)1 << 64) + 3));
+  ASSERT(0, sw128(-2));
+  ASSERT(1, usw128(-1));
+  ASSERT(2, usw128(0xffffffffffffffffU));
+  ASSERT(3, usw128(-3));
+  ASSERT(0, usw128(-6));
+
+  // Overflow builtins on __int128: 2^127 - 1 + 1 overflows i128, not u128
+  ASSERT(3, ({ i128 r; int o = __builtin_add_overflow((i128)(~(u128)0 >> 1), 1, &r); ovf(o, r, 1UL << 63, 0); }));
+  ASSERT(1, ({ u128 r; int o = __builtin_add_overflow((i128)(~(u128)0 >> 1), 1, &r); ovf(o, r, 1UL << 63, 0); }));
+  ASSERT(1, ({ u128 r; int o = __builtin_mul_overflow(mk(0, -1UL), mk(0, -1UL), &r); ovf(o, r, -2UL, 1); }));
+  ASSERT(3, ({ u128 r; int o = __builtin_mul_overflow(mk(1, 0), mk(1, 0), &r); ovf(o, r, 0, 0); }));
+  ASSERT(3, ({ u128 r; int o = __builtin_sub_overflow((i128)0, (i128)1, &r); ovf(o, r, -1UL, -1UL); }));
+  ASSERT(1, ({ long r; int o = __builtin_sub_overflow((i128)5, (u128)7, &r); ovf(o, r, -1UL, -2UL); }));
+  ASSERT(3, ({ int r; int o = __builtin_add_overflow((i128)1 << 64, 0, &r); ovf(o, r, 0, 0); }));
   ASSERT(16, __SIZEOF_INT128__);
   ASSERT(32, sizeof(struct S));
   ASSERT(16, __builtin_offsetof(struct S, x));

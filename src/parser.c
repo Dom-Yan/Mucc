@@ -232,6 +232,8 @@ static Token *top_level_item(Token *tok);
 static int64_t eval2(Node *node, char ***label);
 static int64_t eval_rval(Node *node, char ***label);
 static bool is_const_expr(Node *node);
+static bool is_const_int128(Node *node);
+static __int128 eval128(Node *node);
 static Node *assign(Token **rest, Token *tok);
 static Node *logor(Token **rest, Token *tok);
 static long double eval_double(Node *node);
@@ -2948,18 +2950,14 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     return cur;
   }
 
-  // A 128-bit integer: a 64-bit value (see is_const_expr()), extended as
-  // its type says.
+  // A 128-bit integer, of any value (see is_const_int128())
   add_type(init->expr);
   if (is_int128(ty)) {
-    Type *from = init->expr->ty;
-    if (!is_integer(from))
-      error_tok(init->expr->tok, "a 128-bit constant must be a 64-bit integer "
-                                 "constant converted to __int128");
-    uint64_t val = eval(init->expr);
-    bool zero_ext = from->is_unsigned && !is_int128(from);
-    write_buf(buf + offset, val, 8);
-    write_buf(buf + offset + 8, !zero_ext && (int64_t)val < 0 ? -1 : 0, 8);
+    if (!is_const_int128(init->expr))
+      error_tok(init->expr->tok, "not a compile-time constant");
+    unsigned __int128 val = eval128(init->expr);
+    write_buf(buf + offset, (uint64_t)val, 8);
+    write_buf(buf + offset + 8, (uint64_t)(val >> 64), 8);
     return cur;
   }
 
@@ -3459,10 +3457,36 @@ static void check_condition(Node *cond, Token *start) {
 // A case label's value converted to the promoted type of the switch's
 // controlling expression `ty`, as C requires: all 64 bits for a 64-bit
 // switch, 32 otherwise.
-static int64_t case_value(Type *ty, int64_t val) {
-  if (ty->size == 8)
+// `val` converted to a switch's type `ty`, as a case's value is stored
+static int64_t to_case_type(Type *ty, int64_t val) {
+  if (ty->size >= 8)
     return val;
   return (ty->is_unsigned && ty->size == 4) ? (int64_t)(uint32_t)val : (int32_t)val;
+}
+
+// A case's value, converted to the switch's type `ty`. For __int128, *hi
+// gets its high half.
+static int64_t case_value(Token **rest, Token *tok, Type *ty, int64_t *hi) {
+  Node *node = conditional(rest, tok);
+  *hi = 0;
+  if (!is_int128(ty))
+    return to_case_type(ty, eval(node));
+
+  if (!is_const_int128(node))
+    error_tok(node->tok, "not a compile-time constant");
+  unsigned __int128 val = eval128(node);
+  *hi = val >> 64;
+  return val;
+}
+
+// Is case value a <= b, in a switch on type `ty`? (hi: see case_value())
+static bool case_le(Type *ty, int64_t a, int64_t a_hi, int64_t b, int64_t b_hi) {
+  bool uns = ty->is_unsigned && ty->size >= 4;
+  if (!is_int128(ty))
+    return uns ? (uint64_t)a <= (uint64_t)b : a <= b;
+  unsigned __int128 ua = (unsigned __int128)(uint64_t)a_hi << 64 | (uint64_t)a;
+  unsigned __int128 ub = (unsigned __int128)(uint64_t)b_hi << 64 | (uint64_t)b;
+  return uns ? ua <= ub : (__int128)ua <= (__int128)ub;
 }
 
 // Does `node` hold a label or case that a jump could reach from outside?
@@ -3565,8 +3589,6 @@ static Node *stmt(Token **rest, Token *tok) {
     if (!is_integer(node->cond->ty))
       error_tok(node->cond->tok, "switch on '%s', which is not an integer",
                 type_name(node->cond->ty));
-    if (is_int128(node->cond->ty))
-      error_tok(node->cond->tok, "switch on __int128 is not supported");
     tok = skip(tok, ")");
 
     Node *sw = current_switch;
@@ -3595,31 +3617,33 @@ static Node *stmt(Token **rest, Token *tok) {
 
     Node *node = new_node(ND_CASE, tok);
     Type *ty = current_switch->cond->ty;
-    bool uns = ty->is_unsigned && ty->size >= 4;
     Token *start = tok->next;
-    int64_t begin = case_value(ty, const_expr(&tok, tok->next));
-    int64_t end;
+    int64_t begin_hi, end_hi;
+    int64_t begin = case_value(&tok, tok->next, ty, &begin_hi);
+    int64_t end = begin;
+    end_hi = begin_hi;
 
-    if (equal(tok, "...")) {
-      // [GNU] Case ranges, e.g. "case 1 ... 5:"
-      end = case_value(ty, const_expr(&tok, tok->next));
-      if (uns ? (uint64_t)end < (uint64_t)begin : end < begin)
-        error_tok(tok, "empty case range specified");
-    } else {
-      end = begin;
-    }
+    // [GNU] Case ranges, e.g. "case 1 ... 5:"
+    bool is_range = equal(tok, "...");
+    if (is_range)
+      end = case_value(&tok, tok->next, ty, &end_hi);
+
+    if (is_range && !case_le(ty, begin, begin_hi, end, end_hi))
+      error_tok(tok, "empty case range specified");
 
     // A value that an earlier case has too is an error, as C requires.
     // (configure scripts rely on it: Tcl's tests sizeof(long) that way.)
     for (Node *n = current_switch->case_next; n; n = n->case_next)
-      if (uns ? (uint64_t)begin <= (uint64_t)n->end && (uint64_t)n->begin <= (uint64_t)end
-              : begin <= n->end && n->begin <= end)
+      if (case_le(ty, begin, begin_hi, n->end, n->end_hi) &&
+          case_le(ty, n->begin, n->begin_hi, end, end_hi))
         error_tok(start, "duplicate case value");
 
     tok = skip(tok, ":");
     node->label = new_unique_name();
     node->begin = begin;
     node->end = end;
+    node->begin_hi = begin_hi;
+    node->end_hi = end_hi;
     node->case_next = current_switch->case_next;
     current_switch->case_next = node;
     node->lhs = label_body(rest, tok);
@@ -3968,7 +3992,100 @@ static bool eval_truth(Node *node) {
   add_type(node);
   if (is_flonum(node->ty))
     return eval_double(node) != 0;
+  if (is_int128(node->ty))
+    return eval128(node) != 0;
   return eval(node) != 0;
+}
+
+// Is `node` an integer constant expression, with __int128 arithmetic of
+// any value? (is_const_expr() takes a 128-bit one only if its value fits
+// in 64 bits, as eval() computes it; static initializers and case labels
+// of __int128 take any, by eval128().)
+static bool is_const_int128(Node *node) {
+  add_type(node);
+  if (!is_int128(node->ty))
+    return is_integer(node->ty) && is_const_expr(node);
+
+  switch (node->kind) {
+  case ND_CAST:
+    return is_int128(node->lhs->ty) ? is_const_int128(node->lhs)
+                                    : is_integer(node->lhs->ty) && is_const_expr(node->lhs);
+  case ND_ADD:
+  case ND_SUB:
+  case ND_MUL:
+  case ND_DIV:
+  case ND_MOD:
+  case ND_BITAND:
+  case ND_BITOR:
+  case ND_BITXOR:
+  case ND_SHL:
+  case ND_SHR:
+  case ND_COMMA:
+    return is_const_int128(node->lhs) && is_const_int128(node->rhs);
+  case ND_NEG:
+  case ND_BITNOT:
+    return is_const_int128(node->lhs);
+  case ND_COND:
+    if (!is_const_int128(node->cond))
+      return false;
+    return is_const_int128(eval_truth(node->cond) ? node->then : node->els);
+  }
+  return false;
+}
+
+// The value of `node`, for which is_const_int128() is true, in 128 bits:
+// a narrower one is extended as its type says.
+static __int128 eval128(Node *node) {
+  add_type(node);
+  if (!is_int128(node->ty)) {
+    int64_t v = eval(node);
+    return node->ty->is_unsigned ? (__int128)(uint64_t)v : v;
+  }
+
+  // Arithmetic as unsigned, which wraps
+  bool u = node->ty->is_unsigned;
+  unsigned __int128 a = 0, b = 0;
+  if (node->lhs)
+    a = eval128(node->lhs);
+  if (node->rhs && node->kind != ND_COMMA)
+    b = eval128(node->rhs);
+
+  switch (node->kind) {
+  case ND_CAST:
+    return a;
+  case ND_ADD:
+    return a + b;
+  case ND_SUB:
+    return a - b;
+  case ND_MUL:
+    return a * b;
+  case ND_DIV:
+  case ND_MOD:
+    if (b == 0)
+      error_tok(node->tok, "division by zero in a constant");
+    if (node->kind == ND_DIV)
+      return u ? a / b : (unsigned __int128)((__int128)a / (__int128)b);
+    return u ? a % b : (unsigned __int128)((__int128)a % (__int128)b);
+  case ND_BITAND:
+    return a & b;
+  case ND_BITOR:
+    return a | b;
+  case ND_BITXOR:
+    return a ^ b;
+  case ND_SHL:
+    return a << (b & 127);
+  case ND_SHR:
+    return u ? a >> (b & 127) : (unsigned __int128)((__int128)a >> (b & 127));
+  case ND_NEG:
+    return -a;
+  case ND_BITNOT:
+    return ~a;
+  case ND_COMMA:
+    return eval128(node->rhs);
+  case ND_COND:
+    return eval_truth(node->cond) ? eval128(node->then) : eval128(node->els);
+  }
+  error_tok(node->tok, "not a compile-time constant");
 }
 
 // `val` as integer type `ty` holds it: cut to its width and sign- or
@@ -4027,9 +4144,13 @@ static Obj *string_at(Node *node, int64_t *off) {
 static int64_t eval_wide(Node *node, char ***label) {
   add_type(node);
 
-  if (is_int128(node->ty) && !is_const_expr(node))
-    error_tok(node->tok, "a 128-bit constant must be a 64-bit integer constant "
-                         "converted to __int128");
+  // A 128-bit value's low 64 bits, as converting it to a narrower type
+  // takes (see is_const_int128())
+  if (is_int128(node->ty)) {
+    if (!is_const_int128(node))
+      error_tok(node->tok, "not a compile-time constant");
+    return (int64_t)eval128(node);
+  }
 
   if (is_flonum(node->ty))
     return eval_double(node);
@@ -4086,6 +4207,15 @@ static int64_t eval_wide(Node *node, char ***label) {
     // Floating operands (as in `2.5 > 2.0`) are compared as such.
     if (is_flonum(node->lhs->ty)) {
       long double a = eval_double(node->lhs), b = eval_double(node->rhs);
+      return node->kind == ND_EQ ? a == b : node->kind == ND_NE ? a != b :
+             node->kind == ND_LT ? a < b : a <= b;
+    }
+    if (is_int128(node->lhs->ty)) {
+      __int128 a = eval128(node->lhs), b = eval128(node->rhs);
+      if (node->lhs->ty->is_unsigned)
+        return node->kind == ND_EQ ? a == b : node->kind == ND_NE ? a != b :
+               node->kind == ND_LT ? (unsigned __int128)a < (unsigned __int128)b
+                                   : (unsigned __int128)a <= (unsigned __int128)b;
       return node->kind == ND_EQ ? a == b : node->kind == ND_NE ? a != b :
              node->kind == ND_LT ? a < b : a <= b;
     }
@@ -4248,13 +4378,14 @@ static bool is_const_expr(Node *node) {
   if (node->kind == ND_CAST && is_complex(node->lhs->ty))
     return is_const_complex(node->lhs);
 
-  // A 128-bit constant is an integer constant converted to one, with a
-  // value that fits in 64 bits, which eval() computes exactly.
-  if (is_int128(node->ty))
-    return node->kind == ND_CAST && is_integer(node->lhs->ty) &&
-           !is_int128(node->lhs->ty) && is_const_expr(node->lhs) &&
-           (!node->lhs->ty->is_unsigned || node->lhs->ty->size < 8 ||
-            eval(node->lhs) >= 0);
+  // A 128-bit constant counts if its value fits in 64 bits, which eval()
+  // returns exactly (see is_const_int128()).
+  if (is_int128(node->ty)) {
+    if (!is_const_int128(node))
+      return false;
+    __int128 v = eval128(node);
+    return v == (int64_t)v;
+  }
 
   switch (node->kind) {
   case ND_ADDR:
@@ -5794,6 +5925,104 @@ static int rmw_builtin(Token *tok) {
   return -1;
 }
 
+// The overflow builtins on __int128 call this helper, defined from C
+// (see define_helper()): `op` is 0, 1 or 2 for add, sub or mul, and a
+// and b are 128-bit values, signed if `as` or `bs`. It stores the result
+// in the `size`-byte integer at `res`, signed if `rs`, and returns whether
+// the exact result didn't fit. The exact result is a sign, a magnitude
+// and the magnitude's bits above 128 (hi), up to 256 for a product.
+static char *overflow128_text =
+  "static _Bool __mucc_overflow128(int op, unsigned __int128 a, int as,\n"
+  "                                unsigned __int128 b, int bs, void *res, int size, int rs) {\n"
+  "  _Bool an = as && (__int128)a < 0, bn = bs && (__int128)b < 0, rn;\n"
+  "  unsigned __int128 am = an ? -a : a, bm = bn ? -b : b, rm, hi = 0;\n"
+  "  if (op == 2) {\n"
+  "    unsigned __int128 a0 = (unsigned long)am, a1 = am >> 64;\n"
+  "    unsigned __int128 b0 = (unsigned long)bm, b1 = bm >> 64;\n"
+  "    unsigned __int128 p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;\n"
+  "    unsigned __int128 mid = (p00 >> 64) + (unsigned long)p01 + (unsigned long)p10;\n"
+  "    rm = mid << 64 | (unsigned long)p00;\n"
+  "    hi = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);\n"
+  "    rn = an != bn && (rm || hi);\n"
+  "  } else {\n"
+  "    if (op == 1)\n"
+  "      bn = !bn && bm;\n"
+  "    if (an == bn) {\n"
+  "      rm = am + bm;\n"
+  "      hi = rm < am;\n"
+  "      rn = an;\n"
+  "    } else if (am >= bm) {\n"
+  "      rm = am - bm;\n"
+  "      rn = an && rm;\n"
+  "    } else {\n"
+  "      rm = bm - am;\n"
+  "      rn = bn;\n"
+  "    }\n"
+  "  }\n"
+  "  int bits = size * 8;\n"
+  "  _Bool fits;\n"
+  "  if (hi)\n"
+  "    fits = 0;\n"
+  "  else if (rs)\n"
+  "    fits = rn ? rm <= (unsigned __int128)1 << (bits - 1) : rm < (unsigned __int128)1 << (bits - 1);\n"
+  "  else\n"
+  "    fits = !rn && (bits == 128 || rm >> bits == 0);\n"
+  "  unsigned __int128 v = rn ? -rm : rm;\n"
+  "  unsigned char *p = res;\n"
+  "  for (int i = 0; i < size; i++, v >>= 8)\n"
+  "    p[i] = v;\n"
+  "  return !fits;\n"
+  "}\n";
+
+static Obj *overflow128_fn;
+static Token *overflow128_use;
+
+// A call of the helper above for `*res = a op b`
+static Node *overflow128_call(NodeKind op, Node *a, Node *b, Node *res, Token *tok) {
+  if (!overflow128_fn) {
+    Type *param_tys[] = {ty_int, ty_uint128, ty_int, ty_uint128, ty_int,
+                         pointer_to(ty_void), ty_int, ty_int};
+    Type *ty = func_type(ty_bool);
+    Type head = {};
+    Type *cur = &head;
+    for (int i = 0; i < 8; i++)
+      cur = cur->next = copy_type(param_tys[i]);
+    ty->params = head.next;
+
+    Obj *fn = overflow128_fn = arena_alloc(sizeof(Obj));
+    fn->name = "__mucc_overflow128";
+    fn->ty = ty;
+    fn->align = 1;
+    fn->is_function = true;
+    fn->is_static = true;
+    fn->is_used = true;
+    fn->next = globals;
+    globals = fn;
+    overflow128_use = tok;
+  }
+
+  Type *base = res->ty->base;
+  Node *args[] = {
+    new_num(op == ND_ADD ? 0 : op == ND_SUB ? 1 : 2, tok),
+    new_cast(a, ty_uint128), new_num(!a->ty->is_unsigned, tok),
+    new_cast(b, ty_uint128), new_num(!b->ty->is_unsigned, tok),
+    new_cast(res, pointer_to(ty_void)), new_num(base->size, tok),
+    new_num(!base->is_unsigned, tok),
+  };
+  Node *call = new_unary(ND_FUNCALL, new_var_node(overflow128_fn, tok), tok);
+  call->func_ty = overflow128_fn->ty;
+  call->ty = ty_bool;
+  Node head = {};
+  Node *cur = &head;
+  for (int i = 0; i < 8; i++) {
+    add_type(args[i]);
+    cur = cur->next = args[i];
+  }
+  call->args = head.next;
+  add_type(call->lhs);
+  return call;
+}
+
 // For `__builtin_add_overflow` (or sub, mul), its op, with *ty NULL; for
 // the typed forms, like `__builtin_saddl_overflow`, also the type they
 // take: int, long or long long, signed (s) or unsigned (u). False if
@@ -6361,9 +6590,9 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
       error_tok(res->tok, "pointer to an integer type expected");
     if (overflow_ty && res->ty->base->size != overflow_ty->size)
       error_tok(res->tok, "pointer to '%s' expected", type_name(overflow_ty));
-    // (They're checked in 64 bits.)
+    // On __int128, a helper does it (as the rest is checked in 64 bits).
     if (is_int128(a->ty) || is_int128(b->ty) || is_int128(res->ty->base))
-      error_tok(start, "overflow builtins on __int128 are not supported");
+      return overflow128_call(overflow_op, a, b, res, start);
 
     Node *node = new_node(ND_OVERFLOW, start);
     node->lhs = new_cast(a, a->ty->is_unsigned ? ty_ulong : ty_long);
@@ -7051,9 +7280,26 @@ static char *fill_complex_text(char *text, int i) {
   return buf;
 }
 
-// Defines the helpers that were called, in a scope of their own, so that
-// the program's names can't change what they mean. Their tokens are put
-// at the line of the first call, for the debug info.
+// Defines helper function `fn` from C `text`, in a scope of its own, so
+// that the program's names can't change what it means. Its tokens are put
+// at the line of `use`, its first call, for the debug info.
+static void define_helper(Obj *fn, char *text, Token *use) {
+  Token *tok = tokenize(new_file("<built-in>", use->file->file_no, text));
+  for (Token *t = tok; t; t = t->next) {
+    t->line_no = use->line_no;
+    t->line_delta = use->line_delta;
+  }
+  convert_pp_tokens(tok);
+
+  Scope *saved = scope;
+  scope = arena_alloc(sizeof(Scope));
+  push_scope(fn->name)->var = fn;
+  while (tok->kind != TK_EOF)
+    tok = top_level_item(tok);
+  scope = saved;
+}
+
+// Defines the complex helpers that were called (see define_helper()).
 static void define_complex_helpers(void) {
   // RBIG, RMIN and RMIN2: half the largest number, the smallest normal
   // one and the epsilon of double and long double
@@ -7078,21 +7324,7 @@ static void define_complex_helpers(void) {
         text = format("static _Complex $ __mucc_div#c3($ a, $ b, $ c, $ d) {\n%s%s%s",
                       limits[i], complex_div_text, complex_div_end_text);
 
-      Token *use = complex_helper_uses[is_div][i];
-      Token *tok = tokenize(new_file("<built-in>", use->file->file_no,
-                                     fill_complex_text(text, i)));
-      for (Token *t = tok; t; t = t->next) {
-        t->line_no = use->line_no;
-        t->line_delta = use->line_delta;
-      }
-      convert_pp_tokens(tok);
-
-      Scope *saved = scope;
-      scope = arena_alloc(sizeof(Scope));
-      push_scope(fn->name)->var = fn;
-      while (tok->kind != TK_EOF)
-        tok = top_level_item(tok);
-      scope = saved;
+      define_helper(fn, fill_complex_text(text, i), complex_helper_uses[is_div][i]);
     }
   }
 }
@@ -7678,7 +7910,7 @@ static void warn_switch(Node *sw) {
     return;
   bool uns = ty->is_unsigned && ty->size >= 4;
   for (EnumConst *e = ty->enum_consts; e; e = e->next) {
-    int64_t v = case_value(ty, e->val);
+    int64_t v = to_case_type(ty, e->val);
     Node *c = sw->case_next;
     while (c && !(uns ? (uint64_t)c->begin <= (uint64_t)v && (uint64_t)v <= (uint64_t)c->end
                       : c->begin <= v && v <= c->end))
@@ -8453,6 +8685,8 @@ Obj *parse(Token *tok) {
   while (tok->kind != TK_EOF)
     tok = top_level_item_or_skip(tok);
   define_complex_helpers();
+  if (overflow128_fn)
+    define_helper(overflow128_fn, overflow128_text, overflow128_use);
 
   // An alias's target must be defined here, as with gcc, and is kept.
   for (Obj *var = globals; var; var = var->next) {
