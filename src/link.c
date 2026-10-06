@@ -1049,8 +1049,11 @@ static uint64_t image_size;  // its sections' part (the tables follow)
 
 static void put32(unsigned char *p, int64_t val, bool is_signed, InSec *sec, int type) {
   bool fits = is_signed ? val == (int32_t)val : (uint64_t)val == (uint32_t)val;
+  // Code reaches data in 32 bits (x86-64's small code model, as gcc
+  // uses by default), so static data past 2 GiB is out of reach.
   if (!fits)
-    fail("%s: relocation type %d in %s out of range", sec->file->name, type, sec->name);
+    fail("%s: relocation type %d in %s out of range (is static data over 2 GiB?)",
+         sec->file->name, type, sec->name);
   memcpy(p, &val, 4);
 }
 

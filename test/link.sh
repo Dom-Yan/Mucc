@@ -106,6 +106,10 @@ printf 'int f(void) { return 2; }\nint main(void) { return f(); }\n' > $tmp/d2.c
     grep -q "multiple definition of 'f' (in $tmp/d1.c and $tmp/d2.c)" $tmp/err
 check 'multiple definition'
 
+printf 'char b1[3L << 30], b2[3L << 30];\nint main(void) { return b1[0] + b2[0]; }\n' > $tmp/big.c
+! $mucc -static -o $tmp/big $tmp/big.c 2> $tmp/err && grep -q "is static data over 2 GiB" $tmp/err
+check 'static data over 2 GiB'
+
 # mucc links itself statically, and the result works.
 for f in src/*.c; do $mucc -c -o $tmp/src_$(basename $f .c).o $f || exit 1; done
 static_link -o $tmp/mucc-static $tmp/src_*.o &&

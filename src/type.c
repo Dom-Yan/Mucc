@@ -33,7 +33,7 @@ Type *ty_ldouble = &(Type){TY_LDOUBLE, 16, 16};
 
 //---------- Type predicates -------------------------------------------------
 
-static Type *new_type(TypeKind kind, int size, int align) {
+static Type *new_type(TypeKind kind, int64_t size, int align) {
   Type *ty = arena_alloc(sizeof(Type));
   ty->kind = kind;
   ty->size = size;
@@ -313,7 +313,7 @@ Type *func_type(Type *return_ty) {
   return ty;
 }
 
-Type *array_of(Type *base, int len) {
+Type *array_of(Type *base, int64_t len) {
   Type *ty = new_type(TY_ARRAY, base->size * len, base->align);
   ty->base = base;
   ty->array_len = len;
@@ -789,19 +789,19 @@ static char *unqual_type_name(Type *ty) {
   case TY_DOUBLE: return "double";
   case TY_LDOUBLE: return "long double";
   case TY_ENUM: return "enum";
-  case TY_VECTOR: return format("__vector(%d) %s", ty->array_len, type_name(ty->elem));
+  case TY_VECTOR: return format("__vector(%ld) %s", ty->array_len, type_name(ty->elem));
   case TY_FUNC: return format("%s (%s)", type_name(ty->return_ty), param_names(ty));
   case TY_VLA: return format("%s[*]", type_name(ty->base));
   case TY_ARRAY:
     if (ty->array_len < 0) // of unknown length
       return format("%s[]", type_name(ty->base));
-    return format("%s[%d]", type_name(ty->base), ty->array_len);
+    return format("%s[%ld]", type_name(ty->base), ty->array_len);
   case TY_PTR: {
     if (ty->base->kind == TY_FUNC)
       return format("%s (*)(%s)", type_name(ty->base->return_ty),
                     param_names(ty->base));
     if (ty->base->kind == TY_ARRAY)
-      return format("%s (*)[%d]", type_name(ty->base->base), ty->base->array_len);
+      return format("%s (*)[%ld]", type_name(ty->base->base), ty->base->array_len);
     char *base = type_name(ty->base);
     return format("%s%s*", base, base[strlen(base) - 1] == '*' ? "" : " ");
   }

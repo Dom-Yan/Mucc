@@ -466,6 +466,23 @@ expect_error "1:7: error: size of array is negative" <<'EOF'
 int a[-4];
 EOF
 
+expect_error "1:8: error: size of array is too large" <<'EOF'
+char a[1L << 62][4];
+EOF
+
+# Objects over 2 GiB are fine, but a stack frame's offsets are 32 bits.
+expect_ok 'a 3 GiB static local and a pointer to a 3 GiB array' <<'EOF'
+void f(void) { static char a[3L << 30]; char (*p)[3L << 30] = &a; (*p)[0] = 1; }
+EOF
+
+expect_error "1:21: error: a local variable of more than 1 GiB is not supported (a static or malloc() one can be larger)" <<'EOF'
+void f(void) { char a[2L << 30]; a[0] = 1; }
+EOF
+
+expect_error "1:6: error: local variables of more than 1 GiB are not supported" <<'EOF'
+void f(void) { char a[1 << 29], b[1 << 29], c[1 << 29]; a[0] = b[0] = c[0]; }
+EOF
+
 # enum E : type: values must fit the type, and it must be an integer type.
 expect_error "1:30: error: enumerator value 256 is outside the range of 'unsigned char'" <<'EOF'
 enum E : unsigned char { A = 256 };

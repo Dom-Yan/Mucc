@@ -232,7 +232,7 @@ struct Obj {
   bool is_tls;
   bool is_string; // a string literal, which goes in .rodata
   char *init_data;
-  int flex_size;      // the bytes an initialized flexible array member
+  int64_t flex_size;  // the bytes an initialized flexible array member
                       // adds after the type's size
   Relocation *rel;
 
@@ -271,7 +271,7 @@ struct Obj {
 typedef struct Relocation Relocation;
 struct Relocation {
   Relocation *next;
-  int offset;
+  int64_t offset;
   char **label;
   long addend;
 };
@@ -501,7 +501,7 @@ typedef enum {
 
 struct Type {
   TypeKind kind;
-  int size;           // sizeof() value
+  int64_t size;       // sizeof() value
   int align;          // alignment
   bool is_unsigned;   // unsigned or signed
   bool is_atomic;     // true if _Atomic
@@ -530,7 +530,7 @@ struct Type {
   Obj *param_var; // parameter: its variable, which later parameters can use
 
   // Array, or vector: its number of elements
-  int array_len;
+  int64_t array_len;
 
   // Vector: its element type. (Not `base`, which makes a type a pointer
   // or an array in many places.)
@@ -575,7 +575,7 @@ struct Member {
   int idx;
   int align;
   int attr_align; // aligned(N) or _Alignas on the member, or 0
-  int offset;
+  int64_t offset;
 
   // Bitfield
   bool is_bitfield;
@@ -625,7 +625,7 @@ Type *unqual(Type *ty);
 void complete_variants(Type *ty);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
-Type *array_of(Type *base, int size);
+Type *array_of(Type *base, int64_t len);
 Type *vector_of(Type *elem, int size);
 Type *vla_of(Type *base, Node *expr);
 Type *enum_type(void);
@@ -639,7 +639,7 @@ void check_assign(Type *to, Node *from, char *what);
 //---------- cgen.c: code generator (stage 4) --------------------------------
 
 void codegen(Obj *prog, FILE *out);
-int align_to(int n, int align);
+int64_t align_to(int64_t n, int64_t align);
 extern bool has_inline_asm;
 
 //---------- asm.c: assembler (stage 5) --------------------------------------

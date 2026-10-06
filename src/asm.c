@@ -28,14 +28,14 @@ typedef struct Section Section;
 
 typedef struct {
   unsigned char *data;
-  int len;
-  int cap;
+  int64_t len;
+  int64_t cap;
 } Bytes;
 
 typedef struct Sym {
   char *name;
   Section *sec;       // where it's defined, or NULL
-  int pos;            // offset in sec->bytes where it's defined
+  int64_t pos;        // offset in sec->bytes where it's defined
   int njumps;         // number of jumps in sec before it
   uint64_t value;     // its address in sec, after layout
   bool is_global;     // .globl, or undefined
@@ -273,12 +273,13 @@ static unsigned char *reserve(int64_t n) {
   return b->data + b->len - n;
 }
 
-static void out_zeros(int n) {
+static void out_zeros(int64_t n) {
+  if (n <= 0)
+    return;
   if (cur->type == SHT_NOBITS)
     cur->bytes.len += n;
   else
-    while (n-- > 0)
-      out(0);
+    memset(reserve(n), 0, n);
 }
 
 // Leaves a `size`-byte hole for the linker or for pass 3.
@@ -2112,7 +2113,7 @@ static void directive(char *name, int len) {
   } else if (IS(".comm")) {
     Sym *sym = read_sym();
     expect_comma();
-    int size = read_int();
+    int64_t size = read_int();
     expect_comma();
     int align = read_int();
     if (sym->is_local) {

@@ -109,7 +109,7 @@ typedef struct {
 typedef struct EmbedRun EmbedRun;
 struct EmbedRun {
   EmbedRun *next;
-  int idx;    // the first element it sets
+  int64_t idx; // the first element it sets
   Token *tok; // the TK_EMBED token
 };
 
@@ -219,7 +219,7 @@ static Type *typeof_specifier(Token **rest, Token *tok);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs);
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
-static void array_initializer2(Token **rest, Token *tok, Initializer *init, int i);
+static void array_initializer2(Token **rest, Token *tok, Initializer *init, int64_t i);
 static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem,
                                 bool after_comma);
 static void initializer2(Token **rest, Token *tok, Initializer *init);
@@ -286,7 +286,7 @@ static void warn_switch(Node *sw);
 
 //---------- Scopes and name lookup ------------------------------------------
 
-static int align_down(int n, int align) {
+static int64_t align_down(int64_t n, int64_t align) {
   return align_to(n - align + 1, align);
 }
 
@@ -524,9 +524,9 @@ static Initializer *new_initializer(Type *ty, bool is_flexible) {
 // The initializer of element `i` of an array, or of the member with index
 // `i` (mem->idx) of a struct or union, made when first needed. `ty` is
 // its type; `flex` is for a flexible struct's flexible array member.
-static Initializer *child_init(Initializer *init, int i, Type *ty, bool flex) {
+static Initializer *child_init(Initializer *init, int64_t i, Type *ty, bool flex) {
   if (!init->children) {
-    int len = init->ty->array_len;
+    int64_t len = init->ty->array_len;
     if (init->ty->kind != TY_ARRAY) {
       len = 0;
       for (Member *mem = init->ty->members; mem; mem = mem->next)
@@ -542,7 +542,7 @@ static Initializer *child_init(Initializer *init, int i, Type *ty, bool flex) {
   return init->children[i];
 }
 
-static Initializer *elem_init(Initializer *init, int i) {
+static Initializer *elem_init(Initializer *init, int64_t i) {
   return child_init(init, i, init->ty->base, false);
 }
 
@@ -551,7 +551,7 @@ static Initializer *mem_init(Initializer *init, Member *mem) {
 }
 
 // The child that sets element or member `i`, or NULL if nothing does.
-static Initializer *get_child(Initializer *init, int i) {
+static Initializer *get_child(Initializer *init, int64_t i) {
   return init->children ? init->children[i] : NULL;
 }
 
@@ -1470,7 +1470,8 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
   int64_t len = eval(expr);
   if (len < 0)
     error_tok(start, "size of array is negative");
-  if (len > INT32_MAX / MAX(ty->size, 1))
+  // No object can be larger than PTRDIFF_MAX bytes, as gcc has it.
+  if (len > INT64_MAX / MAX(ty->size, 1))
     error_tok(start, "size of array is too large");
   return array_of(ty, len);
 }
@@ -2099,7 +2100,7 @@ static Node *compute_vla_size(Type *ty, Token *tok) {
   if (ty->base->kind == TY_VLA)
     base_sz = new_var_node(ty->base->vla_size, tok);
   else
-    base_sz = new_num(ty->base->size, tok);
+    base_sz = new_long(ty->base->size, tok);
 
   ty->vla_size = new_lvar("", ty_ulong);
   Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
@@ -2320,7 +2321,7 @@ static void string_initializer(Token **rest, Token *tok, Initializer *init) {
 // array `init`, with no node for each: a byte's value converted to the
 // element type is the same bytes but for a _Bool. False if they don't
 // fit or an operator follows the last: they are a list then.
-static bool embed_init(Token **rest, Token *tok, Initializer *init, int i) {
+static bool embed_init(Token **rest, Token *tok, Initializer *init, int64_t i) {
   if (tok->kind != TK_EMBED || !is_integer(init->ty->base) ||
       i + tok->val > init->ty->array_len || !(equal(tok->next, ",") || equal(tok->next, "}")))
     return false;
@@ -2387,7 +2388,8 @@ static uint32_t str_elem(Initializer *init, int i) {
 //   struct { int a, b, c; } x = { .c=5 };
 //
 // The above initializer sets x.c to 5.
-static void array_designator(Token **rest, Token *tok, Type *ty, int *begin, int *end) {
+static void array_designator(Token **rest, Token *tok, Type *ty, int64_t *begin,
+                             int64_t *end) {
   *begin = const_expr(&tok, tok->next);
   if (*begin >= ty->array_len)
     error_tok(tok, "array designator index exceeds array bounds");
@@ -2397,7 +2399,7 @@ static void array_designator(Token **rest, Token *tok, Type *ty, int *begin, int
     if (*end >= ty->array_len)
       error_tok(tok, "array designator index exceeds array bounds");
     if (*end < *begin)
-      error_tok(tok, "array designator range [%d, %d] is empty", *begin, *end);
+      error_tok(tok, "array designator range [%ld, %ld] is empty", *begin, *end);
   } else {
     *end = *begin;
   }
@@ -2446,11 +2448,11 @@ static void designation(Token **rest, Token *tok, Initializer *init) {
     if (init->ty->kind != TY_ARRAY)
       error_tok(tok, "array index in non-array initializer");
 
-    int begin, end;
+    int64_t begin, end;
     array_designator(&tok, tok, init->ty, &begin, &end);
 
     Token *tok2;
-    for (int i = begin; i <= end; i++)
+    for (int64_t i = begin; i <= end; i++)
       designation(&tok2, tok, elem_init(init, i));
     array_initializer2(rest, tok2, init, begin + 1);
     return;
@@ -2497,7 +2499,7 @@ static Token *skip_scalar_init(Token *tok) {
 // An array length can be omitted if an array has an initializer
 // (e.g. `int x[] = {1,2,3}`). If it's omitted, count the number
 // of initializer elements.
-static int count_array_init_elements(Token *tok, Type *ty) {
+static int64_t count_array_init_elements(Token *tok, Type *ty) {
   bool first = true;
   Initializer *dummy = new_initializer(ty->base, true);
 
@@ -2507,7 +2509,7 @@ static int count_array_init_elements(Token *tok, Type *ty) {
   bool scalar = is_complex(base) ||
                 (base->kind != TY_ARRAY && base->kind != TY_STRUCT && base->kind != TY_UNION);
 
-  int i = 0, max = 0;
+  int64_t i = 0, max = 0;
 
   while (!consume_end(&tok, tok)) {
     if (!first)
@@ -2553,17 +2555,17 @@ static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
 
   bool first = true;
 
-  for (int i = 0; !consume_end(rest, tok); i++) {
+  for (int64_t i = 0; !consume_end(rest, tok); i++) {
     if (!first)
       tok = skip(tok, ",");
     first = false;
 
     if (equal(tok, "[")) {
-      int begin, end;
+      int64_t begin, end;
       array_designator(&tok, tok, init->ty, &begin, &end);
 
       Token *tok2;
-      for (int j = begin; j <= end; j++)
+      for (int64_t j = begin; j <= end; j++)
         designation(&tok2, tok, elem_init(init, j));
       tok = tok2;
       i = end;
@@ -2584,7 +2586,7 @@ static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
 }
 
 // array-initializer2 = initializer ("," initializer)*
-static void array_initializer2(Token **rest, Token *tok, Initializer *init, int i) {
+static void array_initializer2(Token **rest, Token *tok, Initializer *init, int64_t i) {
   if (init->is_flexible) {
     int len = count_array_init_elements(tok, init->ty);
     *init = *new_initializer(array_of(init->ty->base, len), false);
@@ -3020,13 +3022,13 @@ static void write_bitfield(Initializer *init, Member *mem, char *buf) {
 }
 
 static Relocation *
-write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int offset) {
+write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int64_t offset) {
   // Nothing sets it: it stays zero.
   if (!init)
     return cur;
 
   if (ty->kind == TY_ARRAY) {
-    int sz = ty->base->size;
+    int64_t sz = ty->base->size;
     if (init->str) {
       int len = MIN(ty->array_len, init->str->ty->array_len);
       for (int i = 0; i < len; i++)
@@ -3035,7 +3037,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     for (EmbedRun *run = init->embeds; run; run = run->next)
       for (int j = 0; j < run->tok->val; j++)
         write_buf(buf + offset + sz * (run->idx + j), embed_elem(run, j, ty->base), sz);
-    for (int i = 0; init->children && i < ty->array_len; i++)
+    for (int64_t i = 0; init->children && i < ty->array_len; i++)
       cur = write_gvar_data(cur, init->children[i], ty->base, buf, offset + sz * i);
     return cur;
   }
@@ -5173,7 +5175,7 @@ static Node *shift(Token **rest, Token *tok) {
 // pointer value. This function takes care of the scaling.
 // Integer `n` times `size`, as a long: how many bytes `ptr + n` moves.
 // For 1-byte elements that's just n converted to long.
-static Node *scale(Node *n, int size, Token *tok) {
+static Node *scale(Node *n, int64_t size, Token *tok) {
   if (size == 1)
     return new_cast(n, ty_long);
   return new_binary(ND_MUL, n, new_long(size, tok), tok);
@@ -5258,7 +5260,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   if (lhs->ty->base && rhs->ty->base) {
     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
     node->ty = ty_long;
-    return new_binary(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
+    return new_binary(ND_DIV, node, new_long(lhs->ty->base->size, tok), tok);
   }
 
   error_tok(tok, "invalid operands");
@@ -5641,7 +5643,7 @@ static void place_loose_bitfields(Type *ty) {
     if (!mem->is_bitfield || !mem->name)
       continue;
 
-    int start = mem->offset * 8 + mem->bit_offset;
+    int64_t start = mem->offset * 8 + mem->bit_offset;
     mem->offset = start / 8;
     mem->bit_offset = start % 8;
     mem->unit = (mem->bit_offset + mem->bit_width + 7) / 8;
@@ -5650,7 +5652,7 @@ static void place_loose_bitfields(Type *ty) {
                 " is not supported");
 
     for (int sz = 1; sz <= 8; sz *= 2) {
-      int off = MIN(start / 8, ty->size - sz);
+      int64_t off = MIN(start / 8, ty->size - sz);
       if (off >= 0 && start + mem->bit_width <= (off + sz) * 8) {
         mem->offset = off;
         mem->bit_offset = start - off * 8;
@@ -5670,7 +5672,7 @@ static Type *struct_decl(Token **rest, Token *tok) {
     return ty;
 
   // Assign offsets within the struct to members.
-  int bits = 0;
+  int64_t bits = 0;
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (mem->is_bitfield && mem->bit_width == 0) {
@@ -5726,7 +5728,7 @@ static Type *union_decl(Token **rest, Token *tok) {
       continue;
     mem->unit = mem->ty->size;
     ty->align = MAX(ty->align, member_align(ty, mem));
-    int size = mem->is_bitfield ? (mem->bit_width + 7) / 8 : mem->ty->size;
+    int64_t size = mem->is_bitfield ? (mem->bit_width + 7) / 8 : mem->ty->size;
     ty->size = MAX(ty->size, size);
   }
   ty->size = align_to(ty->size, ty->align);

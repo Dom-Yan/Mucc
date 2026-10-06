@@ -192,7 +192,7 @@ static void popf(int reg) {
 
 // Round up `n` to the nearest multiple of `align`. For instance,
 // align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
-int align_to(int n, int align) {
+int64_t align_to(int64_t n, int64_t align) {
   return (n + align - 1) / align * align;
 }
 
@@ -316,7 +316,14 @@ static void gen_addr(Node *node) {
     return;
   case ND_MEMBER:
     gen_addr(node->lhs);
-    println("  add $%d, %%rax", node->member->offset);
+    // add takes a 32-bit immediate: a larger offset, in a struct of more
+    // than 2 GiB, goes through %rdx.
+    if (node->member->offset == (int32_t)node->member->offset) {
+      println("  add $%ld, %%rax", node->member->offset);
+    } else {
+      println("  mov $%ld, %%rdx", node->member->offset);
+      println("  add %%rdx, %%rax");
+    }
     return;
   case ND_FUNCALL:
     if (node->ret_buffer) {
@@ -495,11 +502,23 @@ static void store_unit(int unit) {
   }
 }
 
+// Copies `size` bytes from (%rax) to (%rdi), with rep movsb, which takes
+// %rsi, %rdi and %rcx. %rax stays.
+static void copy_bytes(int64_t size) {
+  println("  mov %%rax, %%rsi");
+  println("  mov $%ld, %%rcx", size);
+  println("  rep movsb");
+}
+
 // Store %rax to an address that the stack top is pointing to.
 static void store(Type *ty) {
   pop("%rdi");
 
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+    if (ty->size > 16) {
+      copy_bytes(ty->size);
+      return;
+    }
     for (int i = 0; i < ty->size; i++) {
       println("  mov %d(%%rax), %%r8b", i);
       println("  mov %%r8b, %d(%%rdi)", i);
@@ -520,7 +539,7 @@ static void cmp_zero(Type *ty) {
     load_from(part, "(%rcx)");
     cmp_zero(part);
     println("  setne %%r8b");
-    load_from(part, format("%d(%%rcx)", part->size));
+    load_from(part, format("%ld(%%rcx)", part->size));
     cmp_zero(part);
     println("  setne %%al");
     println("  or %%r8b, %%al");
@@ -1122,7 +1141,7 @@ static void cast_vector(Type *from, Type *to) {
   if (is_vector(to)) {
     if (from->size < to->size) {
       for (int i = 0; i < to->array_len; i++)
-        store_to(from, format("%d(%%rsp)", -16 + i * from->size));
+        store_to(from, format("%ld(%%rsp)", -16 + i * from->size));
       println("  %s -16(%%rsp), %%xmm0", vec_move(to->size));
     } else if (is_int128(from)) {
       println("  movq %%rax, %%xmm0");
@@ -1294,7 +1313,7 @@ static void gen_vector_unary(Node *node) {
     println("  pxor %%xmm1, %%xmm0");
   } else if (is_flonum(elem)) {
     all_ones(1);
-    println("  psll%s $%d, %%xmm1", int_suffix(elem->size), elem->size * 8 - 1);
+    println("  psll%s $%ld, %%xmm1", int_suffix(elem->size), elem->size * 8 - 1);
     println("  pxor %%xmm1, %%xmm0");
   } else {
     println("  pxor %%xmm1, %%xmm1");
@@ -1647,7 +1666,7 @@ static void gen_va_arg(Node *node) {
     println("  add $15, %%rax");
     println("  and $-16, %%rax");
   }
-  println("  lea %d(%%rax), %%rdx", align_to(ty->size, 8));
+  println("  lea %ld(%%rax), %%rdx", align_to(ty->size, 8));
   println("  mov %%rdx, 8(%%rcx)");
   println(".L.va_end.%d:", c);
 }
@@ -1927,20 +1946,12 @@ static void copy_struct_mem(void) {
   Obj *var = current_fn->params; // the hidden pointer to the return buffer
 
   println("  mov %s, %%rdi", var_operand(var));
-
-  int i = 0;
-  for (; i + 8 <= ty->size; i += 8) {
-    println("  mov %d(%%rax), %%rdx", i);
-    println("  mov %%rdx, %d(%%rdi)", i);
-  }
-  for (; i < ty->size; i++) {
-    println("  mov %d(%%rax), %%dl", i);
-    println("  mov %%dl, %d(%%rdi)", i);
-  }
+  println("  mov %%rdi, %%r8");
+  copy_bytes(ty->size);
 
   // As the psABI says, the buffer's address comes back in %rax: a caller
   // reads the value from there.
-  println("  mov %%rdi, %%rax");
+  println("  mov %%r8, %%rax");
 }
 
 static void builtin_alloca(void) {
@@ -2225,17 +2236,23 @@ static void gen_expr(Node *node) {
     // A scalar member is loaded from base + offset in one instruction,
     // e.g. `mov 8(%rax), %rax` for p->x, or `mov -24(%rbp), %rax` for
     // s.x when s is a local struct.
-    if (is_aggregate(node->ty)) {
+    if (is_aggregate(node->ty) || mem->offset != (int32_t)mem->offset) {
       gen_addr(node);
+      if (!is_aggregate(node->ty)) {
+        if (mem->is_bitfield)
+          load_unit(mem->unit, "(%rax)");
+        else
+          load_from(node->ty, "(%rax)");
+      }
     } else {
       char addr[32];
       Node *base = node->lhs;
       if (base->kind == ND_VAR && base->var->is_local && base->ty->kind != TY_VLA &&
           !base->var->is_overaligned) {
-        snprintf(addr, sizeof(addr), "%d(%%rbp)", base->var->offset + mem->offset);
+        snprintf(addr, sizeof(addr), "%ld(%%rbp)", base->var->offset + mem->offset);
       } else {
         gen_addr(base);
-        snprintf(addr, sizeof(addr), "%d(%%rax)", mem->offset);
+        snprintf(addr, sizeof(addr), "%ld(%%rax)", mem->offset);
       }
       // A bit-field's whole unit, not its promoted type (see add_type())
       if (mem->is_bitfield)
@@ -2347,7 +2364,7 @@ static void gen_expr(Node *node) {
     }
 
     // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
-    println("  mov $%d, %%rcx", node->var->ty->size);
+    println("  mov $%ld, %%rcx", node->var->ty->size);
     addr_of_local(node->var, "%rdi");
     println("  mov $0, %%al");
     println("  rep stosb");
@@ -3583,8 +3600,8 @@ static void assign_lvar_offsets(Obj *prog) {
     // If a function has many parameters, some parameters are
     // inevitably passed by stack rather than by register.
     // The first passed-by-stack parameter resides at RBP+16.
-    int top = 16;
-    int bottom = 0;
+    int64_t top = 16;
+    int64_t bottom = 0;
 
     int gp = 0, fp = 0;
 
@@ -3658,6 +3675,14 @@ static void assign_lvar_offsets(Obj *prog) {
       bottom = align_to(bottom, align);
       var->offset = -bottom;
     }
+
+    // A frame's offsets are 32 bits, and a stack is megabytes anyway.
+    for (Obj *var = fn->locals; var; var = var->next)
+      if (var->ty->size > (1L << 30) && var->tok)
+        error_tok(var->tok, "a local variable of more than 1 GiB is not supported "
+                  "(a static or malloc() one can be larger)");
+    if (bottom > (1L << 30))
+      error_tok(fn->tok, "local variables of more than 1 GiB are not supported");
 
     // Slots to save the callee-saved registers the function uses.
     bottom = align_to(bottom, 8) + fn->nregs * 8;
@@ -3766,7 +3791,7 @@ static void emit_data(Obj *prog) {
     bool common = var->common ? var->common > 0 : opt_fcommon;
     if (common && var->is_tentative && !var->is_tls && !is_weak(prog, var) &&
         !var->section) {
-      println("  .comm %s, %d, %d", var->name, var->ty->size, align);
+      println("  .comm %s, %ld, %d", var->name, var->ty->size, align);
       continue;
     }
 
@@ -3779,16 +3804,16 @@ static void emit_data(Obj *prog) {
       else
         println(ro ? "  .section .rodata" : "  .data");
 
-      int size = var->ty->size + var->flex_size;
+      int64_t size = var->ty->size + var->flex_size;
       println("  .type %s, @object", var->name);
-      println("  .size %s, %d", var->name, size);
+      println("  .size %s, %ld", var->name, size);
       println("  .align %d", align);
       println("%s:", var->name);
 
       // Runs of zeros as .zero, other bytes 16 to a line: a big array
       // with a few values set is a few lines.
       Relocation *rel = var->rel;
-      int pos = 0;
+      int64_t pos = 0;
       while (pos < size) {
         if (rel && rel->offset == pos) {
           println("  .quad %s%+ld", *rel->label, rel->addend);
@@ -3797,12 +3822,12 @@ static void emit_data(Obj *prog) {
           continue;
         }
 
-        int end = rel ? rel->offset : size;
-        int n = 0;
+        int64_t end = rel ? rel->offset : size;
+        int64_t n = 0;
         while (pos + n < end && !var->init_data[pos + n])
           n++;
         if (n >= 8) {
-          println("  .zero %d", n);
+          println("  .zero %ld", n);
           pos += n;
           continue;
         }
@@ -3829,7 +3854,7 @@ static void emit_data(Obj *prog) {
 
     println("  .align %d", align);
     println("%s:", var->name);
-    println("  .zero %d", var->ty->size);
+    println("  .zero %ld", var->ty->size);
   }
 }
 
@@ -3904,7 +3929,7 @@ static void emit_text(Obj *prog) {
     for (Obj *var = fn->locals; var; var = var->next) {
       if (!var->is_overaligned)
         continue;
-      println("  sub $%d, %%rsp", var->ty->size);
+      println("  sub $%ld, %%rsp", var->ty->size);
       println("  and $%d, %%rsp", -var->align);
       println("  mov %%rsp, %d(%%rbp)", var->offset);
     }
@@ -4090,9 +4115,9 @@ static char *type_key(Type *ty) {
   case TY_VLA: // its length is read from its variables
     return format("vla%p", ty);
   case TY_ARRAY:
-    return format("[%d]%s", ty->array_len, type_key(ty->base));
+    return format("[%ld]%s", ty->array_len, type_key(ty->base));
   case TY_VECTOR:
-    return format("v%d%s", ty->array_len, type_key(ty->elem));
+    return format("v%ld%s", ty->array_len, type_key(ty->elem));
   case TY_FUNC: {
     char *s = format("(%s", ty->return_ty->kind == TY_VOID ? "void" : type_key(ty->return_ty));
     for (Type *p = ty->params; p; p = p->next)
@@ -4180,7 +4205,7 @@ static void emit_type_die(Type *ty, char *label) {
     dw_udata(AB_BASE);
     dw_string(format("complex %s", type_name(complex_part(ty))));
     println("  .byte 3"); // DW_ATE_complex_float
-    println("  .byte %d", ty->size);
+    println("  .byte %ld", ty->size);
     return;
   }
 
@@ -4290,7 +4315,7 @@ static void emit_type_die(Type *ty, char *label) {
     } else {
       dw_udata(AB_ENUM_ANON);
     }
-    println("  .byte %d", MAX(ty->size, 1));
+    println("  .byte %ld", MAX(ty->size, 1));
     for (EnumConst *e = ty->enum_consts; e; e = e->next) {
       dw_udata(AB_ENUMERATOR);
       dw_string(strndup(e->name->loc, e->name->len));
@@ -4304,7 +4329,7 @@ static void emit_type_die(Type *ty, char *label) {
     dw_udata(AB_BASE);
     dw_string(name);
     println("  .byte %d", encoding);
-    println("  .byte %d", ty->size);
+    println("  .byte %ld", ty->size);
   }
   }
 }
