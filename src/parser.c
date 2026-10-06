@@ -153,6 +153,12 @@ struct InitDesg {
 // accumulated to this list.
 static Obj *locals;
 
+// The scope new locals are in, inside the function's own (see LexBlock),
+// and whether the next compound_stmt() is a function's body, which is the
+// function's own scope
+static LexBlock *current_block;
+static bool is_fn_body;
+
 // Likewise, global variables are accumulated to this list.
 static Obj *globals;
 
@@ -542,7 +548,21 @@ static Obj *new_lvar(char *name, Type *ty) {
   var->is_local = true;
   var->next = locals;
   locals = var;
+  var->block = current_block;
+  if (current_block && name[0])
+    current_block->has_vars = true;
   return var;
+}
+
+// A scope of its own inside a function, for `node` (see LexBlock): the
+// new current_block, which the caller sets back to the old one after.
+static LexBlock *enter_block(Node *node) {
+  static int last_id;
+  LexBlock *b = arena_alloc(sizeof(LexBlock));
+  b->parent = current_block;
+  b->id = ++last_id;
+  node->block = current_block = b;
+  return b;
 }
 
 static Obj *new_gvar(char *name, Type *ty) {
@@ -3706,6 +3726,8 @@ static Node *stmt(Token **rest, Token *tok) {
     tok = skip(tok->next, "(");
 
     enter_scope();
+    LexBlock *outer_block = current_block;
+    enter_block(node);
 
     char *brk = brk_label;
     char *cont = cont_label;
@@ -3736,6 +3758,7 @@ static Node *stmt(Token **rest, Token *tok) {
     node->then = stmt(rest, tok);
 
     leave_scope();
+    current_block = outer_block;
     brk_label = brk;
     cont_label = cont;
     brk_cleanups = brk_c;
@@ -3956,6 +3979,10 @@ static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr) {
   Cleanup *outer = cleanups;
 
   enter_scope();
+  LexBlock *outer_block = current_block;
+  if (!is_fn_body)
+    enter_block(node);
+  is_fn_body = false;
 
   // Statements after one that can't finish (a return, a goto, `if (1)
   // return x;`) run only if a jump reaches them, through a label. Until
@@ -3971,6 +3998,7 @@ static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr) {
   }
 
   leave_scope();
+  current_block = outer_block;
 
   if (!error_count)
     for (Node *n = head.next; n; n = n->next)
@@ -6912,7 +6940,9 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "(") && equal(tok->next, "{")) {
     // This is a GNU statement expresssion.
     Node *node = new_node(ND_STMT_EXPR, tok);
-    node->body = compound_stmt(&tok, tok->next->next, true)->body;
+    Node *blk = compound_stmt(&tok, tok->next->next, true);
+    node->body = blk->body;
+    node->block = blk->block;
     *rest = skip(tok, ")");
     return node;
   }
@@ -8411,6 +8441,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
 
   current_fn = fn;
   locals = NULL;
+  current_block = NULL;
   enter_scope();
   create_param_lvars(ty->params);
 
@@ -8452,6 +8483,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   push_scope("__PRETTY_FUNCTION__")->var = fn_name;
 
   Token *body = tok;
+  is_fn_body = true;
   fn->body = compound_stmt(&tok, tok, false);
   if (vla_head.next) {
     vla_cur->next = fn->body->body;
@@ -8637,11 +8669,13 @@ static void declare_builtin_functions(void) {
   builtin_alloca->is_definition = false;
 
   // __builtin_va_list, which <stdarg.h> calls va_list: one 24-byte
-  // element (gp_offset, fp_offset, overflow_arg_area, reg_save_area, as
-  // the psABI lays it out). Only the code for va_arg reads the fields.
-  va_elem_ty = struct_type();
-  va_elem_ty->size = 24;
-  va_elem_ty->align = 8;
+  // element, as the psABI lays it out. Only the code for va_arg reads the
+  // fields; they're declared for -g, as gcc names them.
+  Token *tok = tokenize(new_file("<built-in>", 0,
+                                 "struct __va_list_tag { unsigned gp_offset, fp_offset;"
+                                 " void *overflow_arg_area, *reg_save_area; }"));
+  convert_pp_tokens(tok);
+  va_elem_ty = declspec(&tok, tok, NULL);
   push_scope("__builtin_va_list")->type_def = array_of(va_elem_ty, 1);
 
   // gcc's names for the 128-bit integers

@@ -45,6 +45,8 @@ static int loc_line;
 static void gen_expr(Node *node);
 static void gen_discard(Node *node);
 static void gen_stmt(Node *node);
+static bool block_begin(Node *node);
+static void block_end(Node *node);
 static void cast_int128(Type *from, Type *to);
 static char *high_half(char *addr);
 
@@ -2024,16 +2026,20 @@ static void gen_expr(Node *node) {
     if (node->lhs->ty->is_atomic)
       println("  mfence");
     return;
-  case ND_STMT_EXPR:
+  case ND_STMT_EXPR: {
     // The value of the last statement, if it's an expression, is the
     // result, so it's computed with gen_expr, not discarded.
+    bool labeled = block_begin(node);
     for (Node *n = node->body; n; n = n->next) {
       if (!n->next && n->kind == ND_EXPR_STMT)
         gen_expr(n->lhs);
       else
         gen_stmt(n);
     }
+    if (labeled)
+      block_end(node);
     return;
+  }
   case ND_COMMA:
     gen_discard(node->lhs);
     gen_expr(node->rhs);
@@ -2939,6 +2945,21 @@ static char *case_operand(int64_t val, bool is64) {
   return "%rdx";
 }
 
+// -g: labels around the code of a block with variables (see LexBlock),
+// the first time it's written. True if the begin label was.
+static bool block_begin(Node *node) {
+  LexBlock *b = node->block;
+  if (!opt_g || !b || !b->has_vars || b->emitted)
+    return false;
+  println(".L.block.%d.begin:", b->id);
+  b->emitted = true;
+  return true;
+}
+
+static void block_end(Node *node) {
+  println(".L.block.%d.end:", node->block->id);
+}
+
 static void gen_stmt(Node *node) {
   emit_loc(node->tok);
 
@@ -2956,6 +2977,7 @@ static void gen_stmt(Node *node) {
   }
   case ND_FOR: {
     int c = count();
+    bool labeled = block_begin(node);
     if (node->init)
       gen_stmt(node->init);
     println(".L.begin.%d:", c);
@@ -2967,6 +2989,8 @@ static void gen_stmt(Node *node) {
       gen_discard(node->inc);
     println("  jmp .L.begin.%d", c);
     println("%s:", node->brk_label);
+    if (labeled)
+      block_end(node);
     return;
   }
   case ND_DO: {
@@ -3042,10 +3066,14 @@ static void gen_stmt(Node *node) {
     println("%s:", node->label);
     gen_stmt(node->lhs);
     return;
-  case ND_BLOCK:
+  case ND_BLOCK: {
+    bool labeled = block_begin(node);
     for (Node *n = node->body; n; n = n->next)
       gen_stmt(n);
+    if (labeled)
+      block_end(node);
     return;
+  }
   case ND_GOTO:
     if (node->lhs)
       gen_stmt(node->lhs); // cleanups
@@ -3667,9 +3695,10 @@ static void emit_text(Obj *prog) {
 // (an offset from %rbp, a callee-saved register, an address). The line
 // table comes from the .loc directives: the assembler (asm.c, or GNU as)
 // writes it into the .debug_line named here. Numbers in LEB128 are
-// encoded here and written as .byte lists. Typedef names, qualifiers and
-// block scopes aren't recorded: gdb shows a size_t as unsigned long, and
-// all of a function's locals at once.
+// encoded here and written as .byte lists. A block's variables are in a
+// lexical block, which gdb shows them in only (see LexBlock). Typedef
+// names and qualifiers aren't recorded: gdb shows a size_t as unsigned
+// long.
 
 // Abbreviation codes, for the table in emit_debug_abbrev()
 enum {
@@ -3678,7 +3707,7 @@ enum {
   AB_UNION, AB_UNION_ANON, AB_UNION_DECL, AB_MEMBER, AB_MEMBER_ANON,
   AB_BITFIELD, AB_ARRAY, AB_SUBRANGE, AB_SUBRANGE_NOCOUNT, AB_ENUM,
   AB_ENUM_ANON, AB_ENUMERATOR, AB_SUBR, AB_SUBR_VOID, AB_SUBR_PARAM,
-  AB_VARARGS,
+  AB_VARARGS, AB_BLOCK, AB_SUBRANGE_EXPR,
 };
 
 // The DWARF numbers of regs64[]'s registers: %rbx, %r12 to %r15
@@ -3733,8 +3762,9 @@ static int type_queue_len, type_queue_cap;
 static char *type_key(Type *ty) {
   switch (ty->kind) {
   case TY_PTR:
-  case TY_VLA: // a VLA variable holds a pointer to its elements
     return format("*%s", ty->base->kind == TY_VOID ? "void" : type_key(ty->base));
+  case TY_VLA: // its length is read from its variables
+    return format("vla%p", ty);
   case TY_ARRAY:
     return format("[%d]%s", ty->array_len, type_key(ty->base));
   case TY_FUNC: {
@@ -3800,6 +3830,22 @@ static char *base_type_name(Type *ty, int *encoding) {
   unreachable();
 }
 
+// DWARF expression operations, as a .byte list, that push the value of
+// local `var`: from its callee-saved register, or its place in the frame.
+static char *var_value_ops(Obj *var) {
+  if (var->reg)
+    return format("%d,0", 0x70 + dwarf_regs[var->reg - 1]); // DW_OP_bregN 0
+  return format("0x91,%s,6", leb128(var->offset, true)); // DW_OP_fbreg, DW_OP_deref
+}
+
+// The number of bytes in a .byte list
+static int byte_count(char *list) {
+  int n = 1;
+  for (char *p = list; *p; p++)
+    n += *p == ',';
+  return n;
+}
+
 static void emit_type_die(Type *ty, char *label) {
   println("%s:", label);
 
@@ -3813,8 +3859,25 @@ static void emit_type_die(Type *ty, char *label) {
   }
 
   switch (ty->kind) {
-  case TY_PTR:
-  case TY_VLA: {
+  case TY_VLA:
+    // An array whose length is its size, a variable, over its element's
+    // size (another variable, for a VLA of VLAs)
+    dw_udata(AB_ARRAY);
+    dw_ref(type_die(ty->base));
+    if (ty->vla_size) {
+      Type *base = ty->base;
+      char *elem = base->kind == TY_VLA && base->vla_size
+                     ? var_value_ops(base->vla_size)
+                     : format("0x10,%s", leb128(base->size, false)); // DW_OP_constu
+      char *ops = format("%s,%s,0x1b", var_value_ops(ty->vla_size), elem); // DW_OP_div
+      dw_udata(AB_SUBRANGE_EXPR);
+      println("  .byte %d,%s", byte_count(ops), ops);
+    } else {
+      dw_udata(AB_SUBRANGE_NOCOUNT);
+    }
+    println("  .byte 0");
+    return;
+  case TY_PTR: {
     char *base = type_die(ty->base);
     dw_udata(base ? AB_PTR : AB_PTR_VOID);
     println("  .byte 8");
@@ -3929,6 +3992,7 @@ static void emit_debug_abbrev(void) {
     STRUCTURE_TYPE = 0x13, UNION_TYPE = 0x17, MEMBER = 0x0d,
     ARRAY_TYPE = 0x01, SUBRANGE_TYPE = 0x21, ENUMERATION_TYPE = 0x04,
     ENUMERATOR = 0x28, SUBROUTINE_TYPE = 0x15, UNSPECIFIED_PARAMETERS = 0x18,
+    LEXICAL_BLOCK = 0x0b,
     // Attributes
     NAME = 0x03, BYTE_SIZE = 0x0b, BIT_SIZE = 0x0d, STMT_LIST = 0x10,
     LOW_PC = 0x11, HIGH_PC = 0x12, LANGUAGE = 0x13, COMP_DIR = 0x1b,
@@ -3982,6 +4046,8 @@ static void emit_debug_abbrev(void) {
     AB_SUBR_VOID, SUBROUTINE_TYPE, 1, PROTOTYPED, FLAG_PRESENT, 0, 0,
     AB_SUBR_PARAM, FORMAL_PARAMETER, 0, TYPE, REF4, 0, 0,
     AB_VARARGS, UNSPECIFIED_PARAMETERS, 0, 0, 0,
+    AB_BLOCK, LEXICAL_BLOCK, 1, LOW_PC, ADDR, HIGH_PC, DATA8, 0, 0,
+    AB_SUBRANGE_EXPR, SUBRANGE_TYPE, 0, COUNT, EXPRLOC, 0, 0,
   };
 
   println("  .section .debug_abbrev,\"\",@progbits");
@@ -3996,6 +4062,12 @@ static void emit_debug_abbrev(void) {
 // frame, at an offset from %rbp (the frame base), which for a variable
 // aligned above 16 holds its address.
 static void emit_var_location(Obj *var) {
+  // A VLA's variable holds the array's address.
+  if (var->ty->kind == TY_VLA) {
+    char *ops = var_value_ops(var);
+    println("  .byte %d,%s", byte_count(ops), ops);
+    return;
+  }
   if (var->reg) {
     println("  .byte 1,%d", 0x50 + dwarf_regs[var->reg - 1]); // DW_OP_regN
     return;
@@ -4015,6 +4087,44 @@ static void emit_decl(char *name, Token *tok) {
 static bool is_user_var(Obj *var) {
   return var->tok && var->name[0] && strncmp(var->name, "__", 2) &&
          strncmp(var->name, ".L", 2);
+}
+
+// The block whose lexical block DIE `b`'s variables go in: b, or the
+// nearest one around it whose code was written (see LexBlock). NULL is
+// the function's own scope.
+static LexBlock *written_block(LexBlock *b) {
+  while (b && !b->emitted)
+    b = b->parent;
+  return b;
+}
+
+// The DIEs of the variables in `scope` (NULL: the function's), then of the
+// lexical blocks directly in it, each with its own, in declaration order.
+static void emit_scope_dies(Obj **vars, int n, LexBlock *scope) {
+  for (int i = 0; i < n; i++) {
+    Obj *var = vars[i];
+    if (written_block(var->block) != scope)
+      continue;
+    dw_udata(AB_VAR);
+    emit_decl(var->name, var->tok);
+    dw_ref(type_die(var->ty));
+    emit_var_location(var);
+  }
+
+  for (int i = 0; i < n; i++) {
+    // The block in `scope` that vars[i] is in, if one is
+    LexBlock *b = written_block(vars[i]->block);
+    while (b && written_block(b->parent) != scope)
+      b = written_block(b->parent);
+    if (!b || b == scope || b->in_dwarf)
+      continue;
+    b->in_dwarf = true;
+    dw_udata(AB_BLOCK);
+    println("  .quad .L.block.%d.begin", b->id);
+    println("  .quad .L.block.%d.end - .L.block.%d.begin", b->id, b->id);
+    emit_scope_dies(vars, n, b);
+    println("  .byte 0");
+  }
 }
 
 static void emit_function_die(Obj *fn) {
@@ -4042,20 +4152,14 @@ static void emit_function_die(Obj *fn) {
   // Locals, in the order they're declared (the list is newest first)
   int n = 0;
   for (Obj *var = fn->locals; var; var = var->next)
-    n++;
+    if (is_user_var(var) && !is_param(fn, var))
+      n++;
   Obj **vars = calloc(n, sizeof(Obj *));
   int i = n;
   for (Obj *var = fn->locals; var; var = var->next)
-    vars[--i] = var;
-  for (i = 0; i < n; i++) {
-    Obj *var = vars[i];
-    if (!is_user_var(var) || is_param(fn, var))
-      continue;
-    dw_udata(AB_VAR);
-    emit_decl(var->name, var->tok);
-    dw_ref(type_die(var->ty));
-    emit_var_location(var);
-  }
+    if (is_user_var(var) && !is_param(fn, var))
+      vars[--i] = var;
+  emit_scope_dies(vars, n, NULL);
   println("  .byte 0");
 }
 

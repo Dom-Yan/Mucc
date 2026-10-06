@@ -82,6 +82,7 @@ typedef struct Member Member;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
 typedef struct Cleanup Cleanup;
+typedef struct LexBlock LexBlock;
 typedef struct EnumConst EnumConst;
 
 //---------- strings.c: string arrays, format() ------------------------------
@@ -211,6 +212,7 @@ struct Obj {
   int uses;     // how often it's used, weighted by loop depth (cgen.c)
   bool is_addr_taken;
   bool is_register; // declared `register`, so it has no address
+  LexBlock *block;  // the block it's declared in, or NULL for the function's own
 
   // Global variable or function
   bool is_function;
@@ -354,6 +356,17 @@ typedef struct {
   char **label;
 } AsmOperand;
 
+// A scope inside a function (a block, a for loop, a statement
+// expression), for -g: gdb shows its variables only in its code, which
+// cgen.c labels .L.block.<id>.begin and .end.
+struct LexBlock {
+  LexBlock *parent; // or NULL for the function's own scope
+  int id;
+  bool has_vars;
+  bool emitted;     // its code and labels were written
+  bool in_dwarf;    // its DIE was written
+};
+
 // AST node type
 // There is one for each part of every expression and statement, which is
 // hundreds of thousands for a big file, so what only a few kinds use
@@ -412,6 +425,10 @@ struct Node {
 
   // Variable
   Obj *var;
+
+  // A block, for loop or statement expression with a scope of its own:
+  // its variables' block, for -g
+  LexBlock *block;
 
   // Numeric literal
   int64_t val;

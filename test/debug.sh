@@ -147,3 +147,52 @@ else
     cat $tmp/diff
     exit 1
 fi
+
+# A VLA shows as an array of its length, va_list with its fields, and a
+# variable of a block, loop or statement expression only in its code.
+cat > $tmp/s.c <<'EOF'
+#include <stdarg.h>
+int sum(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  int s = 0;
+  for (int i = 0; i < n; i++)
+    s += va_arg(ap, int);
+  va_end(ap);
+  return s; // line 9
+}
+int vla(int n, int m) {
+  int a[n];
+  int b[n][m];
+  for (int i = 0; i < n; i++) {
+    int k = i * 10;
+    a[i] = k;
+    for (int j = 0; j < m; j++)
+      b[i][j] = i + j; // line 18
+  }
+  int r = ({ int t = a[1]; t + b[1][2]; });
+  return r; // line 21
+}
+int main(void) {
+  int v = vla(3, 4);
+  return sum(3, 1, 2, 3) + v != 19;
+}
+EOF
+$mucc -g -o $tmp/s $tmp/s.c &&
+    gdb -batch -nx -ex 'break 18 if j == 1' -ex 'break 21' -ex 'break 9' -ex run \
+        -ex 'print j' -ex 'print k' -ex 'print i' -ex 'delete 1' -ex continue \
+        -ex 'info locals' -ex 'ptype b' -ex continue -ex 'print ap' -ex 'ptype ap' $tmp/s 2>&1 |
+    grep -E '^([a-z]+ = |\$|type =|    |\})' | sed -E 's/0x[0-9a-f]{4,}/ADDR/g' > $tmp/got
+printf '%s\n' '$1 = 1' '$2 = 0' '$3 = 0' \
+    'a = {0, 10, 20}' 'b = {{0, 1, 2, 3}, {1, 2, 3, 4}, {2, 3, 4, 5}}' 'r = 13' \
+    'type = int [3][4]' \
+    '$4 = {{gp_offset = 32, fp_offset = 48, overflow_arg_area = ADDR, reg_save_area = ADDR}}' \
+    'type = struct __va_list_tag {' '    unsigned int gp_offset;' '    unsigned int fp_offset;' \
+    '    void *overflow_arg_area;' '    void *reg_save_area;' '} [1]' > $tmp/want
+if diff $tmp/want $tmp/got > $tmp/diff; then
+    echo "testing debug VLAs, va_list and block scopes ... passed"
+else
+    echo "testing debug VLAs, va_list and block scopes ... failed"
+    cat $tmp/diff
+    exit 1
+fi
