@@ -1369,6 +1369,118 @@ enum E { A };
 enum E { B };
 EOF
 
+expect_error "1:37: error: conflicting types for 'x'" <<'EOF'
+void g(void) { extern int x; } long x;
+EOF
+
+# Other code that C forbids, which gcc rejects
+expect_error "1:21: error: duplicate label 'a'" <<'EOF'
+void f(void) { a: ; a: ; }
+EOF
+
+expect_error "1:19: error: invalid application of 'sizeof' to incomplete type 'struct S'" <<'EOF'
+struct S; int x = sizeof(struct S);
+EOF
+
+expect_error "1:25: error: invalid application of 'sizeof' to incomplete type 'int[]'" <<'EOF'
+extern int a[]; int x = sizeof a;
+EOF
+
+expect_error "1:36: error: 'sizeof' applied to a bit-field" <<'EOF'
+struct S { int a : 3; } s; int x = sizeof(s.a);
+EOF
+
+expect_error "1:20: error: negative width in bit-field 'a'" <<'EOF'
+struct S { int a : -1; };
+EOF
+
+expect_error "1:20: error: width of 'a' exceeds its type" <<'EOF'
+struct S { int a : 33; };
+EOF
+
+expect_error "1:22: error: width of 'b' exceeds its type" <<'EOF'
+struct S { _Bool b : 2; };
+EOF
+
+expect_error "1:20: error: zero width for bit-field 'a'" <<'EOF'
+struct S { int a : 0; };
+EOF
+
+expect_error "1:20: error: bit-field 'a' width not an integer constant" <<'EOF'
+struct S { int a : 1.5; };
+EOF
+
+expect_error "1:27: error: redeclaration of 'x' with no linkage" <<'EOF'
+void f(void) { int x; int x; }
+EOF
+
+expect_error "1:35: error: 't' redeclared as a different kind of symbol" <<'EOF'
+void f(void) { typedef int t; int t; }
+EOF
+
+expect_error "1:41: error: address of register variable 'r' requested" <<'EOF'
+void f(void) { register int r; int *p = &r; }
+EOF
+
+expect_error "1:8: error: multiple storage classes in declaration specifiers" <<'EOF'
+static extern int x;
+EOF
+
+expect_error "1:16: error: flexible array member not at end of struct" <<'EOF'
+struct S { int a[]; int b; };
+EOF
+
+expect_error "1:7: error: 'void' must be the only parameter and unnamed" <<'EOF'
+int f(void x);
+EOF
+
+expect_error "1:12: error: 'void' must be the only parameter and unnamed" <<'EOF'
+int f(int, void);
+EOF
+
+expect_error "1:28: error: declaration of an array of functions" <<'EOF'
+typedef int F(void); F arr[3];
+EOF
+
+expect_error "1:8: error: declaration of an array of voids" <<'EOF'
+void v[3];
+EOF
+
+expect_error "1:6: error: storage size of 'v' isn't known" <<'EOF'
+void v;
+EOF
+
+expect_error "1:14: error: duplicate macro parameter 'a'" <<'EOF'
+#define M(a, a) a
+EOF
+
+expect_error "2:1: error: expected parameter name before end of line" <<'EOF'
+#define f(
+x) x
+EOF
+
+expect_ok 'what those errors leave alone' <<'EOF'
+typedef void V;
+int f(V);
+extern void ev;
+struct Flex { int n; int a[]; };
+struct Only { int a[]; };
+struct Bits { int : 0; int a : 32; _Bool b : 1; unsigned c : 1; };
+int fsize = sizeof(f);
+void g(int n) {
+  int (a[3]);
+  int b[n][2];
+  void *p[2];
+  register int r = 1;
+  { int r = 2; (void)r; }
+  typedef int t;
+  { t t = 1; (void)t; }
+  (void)a; (void)b; (void)p; (void)r;
+  x: ;
+}
+void h(void) { x: ; }
+EOF
+
 expect_ok 'declarations that agree' <<'EOF'
 int f(); int f(int x) { return x; }
 int g(const int); int g(int x) { return x; }

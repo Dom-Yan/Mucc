@@ -669,7 +669,10 @@ static char *unqual_type_name(Type *ty) {
   case TY_ENUM: return "enum";
   case TY_FUNC: return format("%s (%s)", type_name(ty->return_ty), param_names(ty));
   case TY_VLA: return format("%s[*]", type_name(ty->base));
-  case TY_ARRAY: return format("%s[%d]", type_name(ty->base), ty->array_len);
+  case TY_ARRAY:
+    if (ty->array_len < 0) // of unknown length
+      return format("%s[]", type_name(ty->base));
+    return format("%s[%d]", type_name(ty->base), ty->array_len);
   case TY_PTR: {
     if (ty->base->kind == TY_FUNC)
       return format("%s (*)(%s)", type_name(ty->base->return_ty),

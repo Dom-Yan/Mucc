@@ -1043,15 +1043,19 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
           attr->is_static + attr->is_extern + attr->is_inline + attr->is_tls > 1)
         error_tok(tok, "typedef may not be used together with static,"
                   " extern, inline, __thread or _Thread_local");
+      if (attr->is_static + attr->is_extern + attr->is_register > 1)
+        error_tok(tok, "multiple storage classes in declaration specifiers");
       tok = tok->next;
       continue;
     }
 
-    // `register` only matters with an asm label: `register long x
-    // asm("r10")` puts x in that register for asm statements.
+    // `register` matters with an asm label: `register long x asm("r10")`
+    // puts x in that register for asm statements. And x has no address.
     if (equal(tok, "register")) {
       if (attr)
         attr->is_register = true;
+      if (attr && attr->is_static + attr->is_extern + attr->is_register > 1)
+        error_tok(tok, "multiple storage classes in declaration specifiers");
       tok = tok->next;
       continue;
     }
@@ -1309,8 +1313,18 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
       break;
     }
 
+    Token *param_start = tok;
     Type *ty2 = declspec(&tok, tok, NULL);
     ty2 = declarator(&tok, tok, ty2, NULL);
+    if (ty2->kind == TY_VOID) {
+      // `(V)` with `typedef void V;` is `(void)`.
+      if (cur == &head && !ty2->name && equal(tok, ")")) {
+        leave_scope();
+        *rest = tok->next;
+        return func_type(ty);
+      }
+      error_tok(param_start, "'void' must be the only parameter and unnamed");
+    }
 
     Token *name = ty2->name;
 
@@ -1355,6 +1369,15 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   return ty;
 }
 
+// An array's elements can't be functions or void. (A void of size 0 is
+// the placeholder of a lookahead or a nested declarator, not void.)
+static void check_array_element(Type *ty, Token *tok) {
+  if (ty->kind == TY_FUNC)
+    error_tok(tok, "declaration of an array of functions");
+  if (ty->kind == TY_VOID && ty->size)
+    error_tok(tok, "declaration of an array of voids");
+}
+
 // array-dimensions = ("static" | type-qualifier)* ("*" | const-expr)? "]"
 //                    type-suffix
 static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
@@ -1370,6 +1393,7 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
 
   if (equal(tok, "]")) {
     ty = type_suffix(rest, tok->next, ty);
+    check_array_element(ty, tok);
     return array_of(ty, -1);
   }
 
@@ -1378,6 +1402,7 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
   Node *expr = assign(&tok, tok);
   tok = skip(tok, "]");
   ty = type_suffix(rest, tok, ty);
+  check_array_element(ty, start);
 
   if (ty->kind == TY_VLA || !is_const_expr(expr))
     return vla_of(ty, expr);
@@ -2081,6 +2106,14 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       error_tok(all.asm_label_tok,
                 "an asm label is only supported on a register variable");
 
+    // A name in a block is declared once there, as C requires (a local
+    // variable has no linkage).
+    VarScope *prev = hashmap_get(&scope->vars, get_ident(name));
+    if (prev && prev->type_def)
+      error_tok(name, "'%s' redeclared as a different kind of symbol", get_ident(name));
+    if (prev)
+      error_tok(name, "redeclaration of '%s' with no linkage", get_ident(name));
+
     if (attr && attr->is_static) {
       // static local variable
       no_cleanup(&all, "a static variable");
@@ -2141,6 +2174,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     Obj *var = new_lvar(get_ident(ty->name), ty);
     var->tok = ty->name;
     var->is_used = is_unused;
+    var->is_register = attr && attr->is_register;
     if (all.asm_label_tok)
       set_asm_register(var, &all);
     if (attr && attr->align)
@@ -3819,6 +3853,9 @@ static Node *stmt(Token **rest, Token *tok) {
   if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
     Node *node = new_node(ND_LABEL, tok);
     node->label = strndup(tok->loc, tok->len);
+    for (Node *l = labels; l; l = l->goto_next)
+      if (!strcmp(l->label, node->label))
+        error_tok(tok, "duplicate label '%s'", node->label);
     node->unique_label = new_unique_name();
     node->cleanups = cleanups;
     // Attributes right after a label, like `unused`, are the label's.
@@ -5166,6 +5203,8 @@ static Node *unary(Token **rest, Token *tok) {
     add_type(lhs);
     if (lhs->kind == ND_MEMBER && lhs->member->is_bitfield)
       error_tok(tok, "cannot take address of bitfield");
+    if (lhs->kind == ND_VAR && lhs->var->is_register)
+      error_tok(tok, "address of register variable '%s' requested", lhs->var->name);
     return new_unary(ND_ADDR, lhs, tok);
   }
 
@@ -5257,6 +5296,10 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       continue;
     }
 
+    // An array of unknown length is only the last member.
+    if (cur != &head && cur->ty->kind == TY_ARRAY && cur->ty->array_len < 0)
+      error_tok(cur->name ? cur->name : tok, "flexible array member not at end of struct");
+
     VarAttr attr = {};
     Type *basety = declspec(&tok, tok, &attr);
     bool first = true;
@@ -5276,6 +5319,8 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
     while (!consume(&tok, tok, ";")) {
       if (!first)
         tok = skip_decl_comma(tok);
+      if (!first && cur->ty->kind == TY_ARRAY && cur->ty->array_len < 0)
+        error_tok(cur->name, "flexible array member not at end of struct");
       first = false;
 
       Member *mem = arena_alloc(sizeof(Member));
@@ -5293,7 +5338,22 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
         if (is_complex(mem->ty))
           error_tok(tok, "a bit-field can't be complex");
         mem->is_bitfield = true;
-        mem->bit_width = const_expr(&tok, tok);
+
+        // Its width: an integer constant from 0 to its type's width, and
+        // 0 only for an unnamed one, as C requires
+        char *name = mem->name ? get_ident(mem->name) : "(anonymous)";
+        Token *width_tok = tok;
+        Node *width = conditional(&tok, tok);
+        add_type(width);
+        if (!is_integer(width->ty) || !is_const_expr(width))
+          error_tok(width_tok, "bit-field '%s' width not an integer constant", name);
+        mem->bit_width = eval(width);
+        if (mem->bit_width < 0)
+          error_tok(width_tok, "negative width in bit-field '%s'", name);
+        if (mem->bit_width > (mem->ty->kind == TY_BOOL ? 1 : mem->ty->size * 8))
+          error_tok(width_tok, "width of '%s' exceeds its type", name);
+        if (mem->bit_width == 0 && mem->name)
+          error_tok(width_tok, "zero width for bit-field '%s'", name);
         tok = attributes(tok, &all, true);
       }
 
@@ -6876,6 +6936,9 @@ static Node *primary(Token **rest, Token *tok) {
       return new_binary(ND_COMMA, lhs, rhs, tok);
     }
 
+    if (ty->size < 0)
+      error_tok(start, "invalid application of 'sizeof' to incomplete type '%s'",
+                type_name(ty));
     return new_ulong(ty->size, start);
   }
 
@@ -6884,6 +6947,11 @@ static Node *primary(Token **rest, Token *tok) {
     add_type(node);
     if (node->ty->kind == TY_VLA)
       return new_var_node(node->ty->vla_size, tok);
+    if (node->ty->size < 0)
+      error_tok(tok, "invalid application of 'sizeof' to incomplete type '%s'",
+                type_name(node->ty));
+    if (node->kind == ND_MEMBER && node->member->is_bitfield)
+      error_tok(tok, "'sizeof' applied to a bit-field");
     return new_ulong(node->ty->size, tok);
   }
 
@@ -8406,6 +8474,10 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
 
 //---------- Top level: global variables -------------------------------------
 
+// Globals declared `extern` in a block, by name: later declarations of
+// the name must agree with them too (see global_variable()).
+static HashMap block_externs;
+
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
   bool first = true;
 
@@ -8442,17 +8514,27 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
 
     // Its declarations must agree: `extern int v; extern long v;` is an
     // error (autoconf's tests rely on it), `extern int a[]; int a[3];` not.
+    // So must one in a block, which is out of scope later.
     if (prev && prev->var && !prev->var->is_local) {
       if (prev->var->is_function)
         error_tok(name, "'%s' redeclared as a different kind of symbol", prev->var->name);
       if (!is_compatible(prev->var->ty, ty))
         error_tok(name, "conflicting types for '%s'", prev->var->name);
     }
+    Obj *in_block = hashmap_get2(&block_externs, name->loc, name->len);
+    if (in_block && !is_compatible(in_block->ty, ty))
+      error_tok(name, "conflicting types for '%s'", in_block->name);
+
+    // A variable of type void can only be declared.
+    if (ty->kind == TY_VOID && !attr->is_extern)
+      error_tok(name, "storage size of '%.*s' isn't known", name->len, name->loc);
 
     Obj *var = new_gvar(get_ident(name), ty);
     var->tok = name;
     var->is_definition = !attr->is_extern;
     var->is_static = attr->is_static;
+    if (scope->next)
+      hashmap_put2(&block_externs, name->loc, name->len, var);
     var->is_tls = attr->is_tls;
     if (attr->align)
       var->align = attr->align;

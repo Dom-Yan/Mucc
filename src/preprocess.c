@@ -556,9 +556,16 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
   MacroParam head = {};
   MacroParam *cur = &head;
 
-  while (!equal(tok, ")")) {
+  // The list is on the directive's line, and names each parameter once.
+  for (;;) {
+    if (tok->at_bol)
+      error_tok(tok, "expected parameter name before end of line");
+    if (equal(tok, ")"))
+      break;
     if (cur != &head)
       tok = skip(tok, ",");
+    if (tok->at_bol)
+      error_tok(tok, "expected parameter name before end of line");
 
     if (equal(tok, "...")) {
       *va_args_name = "__VA_ARGS__";
@@ -568,6 +575,9 @@ static MacroParam *read_macro_params(Token **rest, Token *tok, char **va_args_na
 
     if (tok->kind != TK_IDENT)
       error_tok(tok, "expected an identifier");
+    for (MacroParam *p = head.next; p; p = p->next)
+      if (equal(tok, p->name))
+        error_tok(tok, "duplicate macro parameter '%s'", p->name);
 
     if (equal(tok->next, "...")) {
       *va_args_name = strndup(tok->loc, tok->len);
