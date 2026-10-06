@@ -118,6 +118,8 @@ Then, the same day:
   in a block, & of a register variable, two storage classes, a flexible
   array member not last, void parameters, arrays of functions or void,
   block-scope extern conflicts, duplicate macro parameters.
+- `e47c156` -g: a VLA is an array of its length, va_list has gcc's
+  fields, and a block's variables show only in its code.
 
 Found on the way:
 - stb includes `<emmintrin.h>` on every x86-64 build, `__GNUC__` or
@@ -132,16 +134,14 @@ Found on the way:
 
 In order:
 
-1. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
-   loop variable shows after its scope.
-2. **Memory, more**: implicit casts are full nodes and copy their type
+1. **Memory, more**: implicit casts are full nodes and copy their type
    (49 MB and 27 MB of sqlite3.c's); a function's tokens and AST could
    be freed once it is emitted. Macro expansion: musl's `<tgmath.h>`
    nested three deep takes over 4 GB (gcc: 1.2 GB).
-3. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
+2. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
    `vector_size`): stb and many other libraries use them on x86-64
    without a fallback. The biggest gap left for real code bases.
-4. **Bigger and rare**: arrays of 2 GiB or more (sizes are `int` all
+3. **Bigger and rare**: arrays of 2 GiB or more (sizes are `int` all
    through: types, offsets, codegen); `__int128` bit-fields (layout,
    loads and stores in 128 bits, static initializers).
 
