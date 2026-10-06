@@ -3942,12 +3942,35 @@ static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr) {
 
   node->body = head.next;
   if (cleanups != outer) {
-    // A statement expression's VLAs are freed when the function returns.
-    if (is_stmt_expr && runs_cleanup_fn(cleanups, outer))
-      error_tok(tok, "a variable with a cleanup at the end of a statement "
-                "expression is not supported");
     if (falls_through(node) && !is_stmt_expr)
       cur->next = cleanup_calls(cleanups, outer, tok);
+
+    // A statement expression's value is kept in a variable while the
+    // cleanup functions run, as with gcc. (Its VLAs are freed when the
+    // function returns.)
+    if (falls_through(node) && is_stmt_expr && runs_cleanup_fn(cleanups, outer)) {
+      Obj *tmp = NULL;
+      if (cur != &head && cur->kind == ND_EXPR_STMT)
+        add_type(cur->lhs);
+      if (cur != &head && cur->kind == ND_EXPR_STMT && cur->lhs->ty->kind != TY_VOID) {
+        Type *ty = cur->lhs->ty;
+        if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+          ty = pointer_to(ty->base);
+        else if (ty->kind == TY_FUNC)
+          ty = pointer_to(ty);
+        tmp = new_lvar("", unqual(ty));
+        cur->lhs = new_binary(ND_ASSIGN, new_var_node(tmp, tok), cur->lhs, tok);
+      }
+      for (Cleanup *c = cleanups; c != outer; c = c->next)
+        if (c->fn)
+          cur = cur->next = cleanup_call(c, tok);
+      // Its value: the variable, or none, as before
+      if (tmp)
+        cur = cur->next = new_unary(ND_EXPR_STMT, new_var_node(tmp, tok), tok);
+      else
+        cur = cur->next = new_node(ND_BLOCK, tok);
+      node->body = head.next;
+    }
     cleanups = outer;
   }
   *rest = skip(tok, "}");

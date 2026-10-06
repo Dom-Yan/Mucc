@@ -122,6 +122,17 @@ int main() {
   kinds();
   ASSERT(0, strcmp(take(), "vi"));
 
+  // [GNU] At the end of a statement expression: its value first, then
+  // the cleanups, last variable first
+  ASSERT(3, ({ int y __attribute__((cleanup(note))) = 3; y; }));
+  ASSERT(0, strcmp(take(), "3"));
+  ASSERT(45, ({ int y __attribute__((cleanup(note))) = 4;
+                int z __attribute__((cleanup(note))) = 5; y * 10 + z; }));
+  ASSERT(0, strcmp(take(), "54"));
+  ASSERT(6, ({ int y __attribute__((cleanup(zero))) = 6; y; }));
+  ({ int y __attribute__((cleanup(note))) = 7; (void)y; });
+  ASSERT(0, strcmp(take(), "7"));
+
   printf("OK\n");
   return 0;
 }
