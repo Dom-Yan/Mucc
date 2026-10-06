@@ -97,6 +97,10 @@ Then, the same day:
 - `f6dbcae` `#embed`'s bytes are one token, copied into the data: 2 MB
   1.7 GB -> 33 MB.
 - `7c41ca3` `-E` printed adjacent string literals as only the first.
+- `0b4cbbd` Conflicting redeclarations (functions, globals, typedefs,
+  struct/union/enum definitions) are errors. sed's `make check` passes
+  now, gnulib's tests too (the ioctl wrapper). A prototype after `int
+  f()` becomes f's type.
 
 Found on the way:
 - stb includes `<emmintrin.h>` on every x86-64 build, `__GNUC__` or
@@ -111,37 +115,34 @@ Found on the way:
 
 In order:
 
-1. **Conflicting redeclarations compile silently**: `int f(int); int
-   f(long);`, `extern int v; extern long v;`, a typedef or struct
-   redefined differently. autoconf and gnulib probes rely on these
-   errors (gnulib decided sed needs no ioctl wrapper).
-2. **Still rejected, accepted by gcc**: `__auto_type`; `int a[k = 3]`;
+1. **Still rejected, accepted by gcc**: `__auto_type`; `int a[k = 3]`;
    `char c = "xyz"[1];` at file scope; `int x = {1, 2};` (gcc warns);
    arrays of 2 GiB or more; `__int128` constants beyond 64 bits in
    static initializers, `__int128` bit-fields and switches; a cleanup
    variable at the end of a statement expression; overflow builtins on
    `__int128`.
-3. **Driver**: `@file` response files; `-MM`, `-MG`, `-dM`, `-imacros`,
+2. **Driver**: `@file` response files; `-MM`, `-MG`, `-dM`, `-imacros`,
    `-iquote`, `-nostdinc`, `-fsyntax-only`, `-Xassembler`, `-specs=`,
    `--param`, `-mcmodel=`, `-print-search-dirs`, `-x c-header`; `mucc
    a.c -l` says `cannot find -l--library=c`; `creal`, `cimag` and
    `conj` as builtins (gcc needs no -lm for them).
-4. **Accepted, rejected by gcc**: duplicate labels, sizeof an
+3. **Accepted, rejected by gcc**: duplicate labels, sizeof an
    incomplete struct or a bit-field, bad bit-field widths, `int x; int
    x;` in a block, `&` of a register variable, `static extern`, a
-   flexible array member not last, `int f(void x)`, arrays of
+   flexible array member not last, a block-scope `extern int x;` and a
+   later file-scope `long x;`, `int f(void x)`, arrays of
    functions, duplicate macro parameters, `#define f(` with parameters
    on the next line.
-5. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
+4. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
    loop variable shows after its scope.
-6. **Memory, more**: implicit casts are full nodes and copy their type
+5. **Memory, more**: implicit casts are full nodes and copy their type
    (49 MB and 27 MB of sqlite3.c's); a function's tokens and AST could
    be freed once it is emitted. Macro expansion: musl's `<tgmath.h>`
    nested three deep takes over 4 GB (gcc: 1.2 GB).
-7. **glibc's `<tgmath.h>`** wants gcc 8's `__builtin_tgmath`, or
+6. **glibc's `<tgmath.h>`** wants gcc 8's `__builtin_tgmath`, or
    `_Float128` (gcc 4.3+, clang). musl's works with glibc too (its
    results match gcc's): ship it as `include/tgmath.h`.
-8. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
+7. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
    `vector_size`): stb and many other libraries use them on x86-64
    without a fallback. The biggest gap left for real code bases.
 
