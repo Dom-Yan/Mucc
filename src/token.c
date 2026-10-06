@@ -361,9 +361,33 @@ bool consume(Token **rest, Token *tok, char *str) {
 
 //---------- Identifiers, punctuators and keywords ---------------------------
 
+// Tokens nothing points to any more, those of a skipped #if group (see
+// skip_cond_incl() in preprocess.c), are reused before new memory is
+// taken: in a big file they are a third of all tokens.
+static Token *free_list;
+
+Token *alloc_token(void) {
+  Token *tok = free_list;
+  if (!tok)
+    return arena_alloc(sizeof(Token));
+  free_list = tok->next;
+  memset(tok, 0, sizeof(Token));
+  return tok;
+}
+
+// Frees the tokens from `tok` up to `end`.
+void free_tokens(Token *tok, Token *end) {
+  while (tok != end) {
+    Token *next = tok->next;
+    tok->next = free_list;
+    free_list = tok;
+    tok = next;
+  }
+}
+
 // Create a new token.
 static Token *new_token(TokenKind kind, char *start, char *end) {
-  Token *tok = arena_alloc(sizeof(Token));
+  Token *tok = alloc_token();
   tok->kind = kind;
   tok->loc = start;
   tok->len = end - start;

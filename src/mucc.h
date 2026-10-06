@@ -177,6 +177,8 @@ File *add_input_file(char *path, char *contents);
 Token *tokenize_string_literal(Token *tok, Type *basety);
 Token *tokenize(File *file);
 Token *tokenize_file(char *filename);
+Token *alloc_token(void);
+void free_tokens(Token *tok, Token *end);
 
 #define unreachable() \
   error("internal error at %s:%d", __FILE__, __LINE__)

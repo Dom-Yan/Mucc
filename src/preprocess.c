@@ -85,7 +85,7 @@ static Token *skip_line(Token *tok) {
 }
 
 static Token *copy_token(Token *tok) {
-  Token *t = arena_alloc(sizeof(Token));
+  Token *t = alloc_token();
   *t = *tok;
   t->next = NULL;
   return t;
@@ -138,17 +138,18 @@ static Hideset *hideset_intersection(Hideset *hs1, Hideset *hs2) {
 }
 
 // Append tok2 to the end of tok1.
+// Puts an included file's tokens, `tok1`, in place of its EOF before
+// `tok2`. They are only its own (each #include tokenizes the file again),
+// so they are linked, not copied.
 static Token *append(Token *tok1, Token *tok2) {
   if (tok1->kind == TK_EOF)
     return tok2;
 
-  Token head = {};
-  Token *cur = &head;
-
-  for (; tok1->kind != TK_EOF; tok1 = tok1->next)
-    cur = cur->next = copy_token(tok1);
-  cur->next = tok2;
-  return head.next;
+  Token *last = tok1;
+  while (last->next->kind != TK_EOF)
+    last = last->next;
+  last->next = tok2;
+  return tok1;
 }
 
 //---------- Skipping #if blocks ---------------------------------------------
@@ -168,9 +169,11 @@ static Token *skip_cond_incl2(Token *tok) {
   return tok;
 }
 
-// Skip until next `#else`, `#elif` or `#endif`.
-// Nested `#if` and `#endif` are skipped.
+// Skip until next `#else`, `#elif` or `#endif`. Nested `#if` and
+// `#endif` are skipped. The skipped tokens are freed: nothing points to
+// them (see alloc_token()).
 static Token *skip_cond_incl(Token *tok) {
+  Token *start = tok;
   while (tok->kind != TK_EOF) {
     if (is_hash(tok) &&
         (equal(tok->next, "if") || equal(tok->next, "ifdef") ||
@@ -186,6 +189,7 @@ static Token *skip_cond_incl(Token *tok) {
       break;
     tok = tok->next;
   }
+  free_tokens(start, tok);
   return tok;
 }
 
