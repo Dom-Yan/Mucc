@@ -550,6 +550,25 @@ int main() {
   ASSERT('b', WIDE_STR(ab)[1]);
   ASSERT(0, strcmp(__FILE_NAME__, "macro.c"));
 
+  // An expansion ending in one that is empty leaves the next line's
+  // directive a directive (oniguruma's CASE_OP(x) ends in an empty
+  // MATCH_DEBUG_OUT(0)).
+#define EMPTY_OUT(x)
+#define EMPTY_OBJ
+#define CASE_F(x) x = 1; EMPTY_OUT(0)
+#define CASE_O(x) x = 2; EMPTY_OBJ
+  int case_f, case_o;
+  CASE_F(case_f)
+#ifdef NOT_DEFINED_ANYWHERE
+  case_f = 3;
+#endif
+  CASE_O(case_o)
+#ifndef EMPTY_OBJ
+  case_o = 3;
+#endif
+  ASSERT(1, case_f);
+  ASSERT(2, case_o);
+
   printf("OK\n");
   return 0;
 }

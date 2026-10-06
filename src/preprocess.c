@@ -982,6 +982,18 @@ static Token *expansion(Token *body, Hideset *hs, Token *origin, Token *rest,
   return head.next;
 }
 
+// An expansion's first token takes the place of the macro's name `name`.
+// An empty one's is the token after it, `after`, which keeps a start of
+// line of its own: `#define E` then `E` before a line `#if ...` leaves
+// that a directive.
+static void take_place(Token *first, Token *name, Token *after) {
+  if (first == after)
+    first->at_bol |= name->at_bol;
+  else
+    first->at_bol = name->at_bol;
+  first->has_space = name->has_space;
+}
+
 // If tok is a macro, expand it and return true.
 // Otherwise, do nothing and return false.
 static bool expand_macro(Token **rest, Token *tok) {
@@ -1010,8 +1022,7 @@ static bool expand_macro(Token **rest, Token *tok) {
   if (m->is_objlike) {
     Hideset *hs = hideset_union(tok->hideset, new_hideset(m->name));
     *rest = expansion(m->body, hs, tok, tok->next, false);
-    (*rest)->at_bol = tok->at_bol;
-    (*rest)->has_space = tok->has_space;
+    take_place(*rest, tok, tok->next);
     return true;
   }
 
@@ -1034,8 +1045,7 @@ static bool expand_macro(Token **rest, Token *tok) {
   hs = hideset_union(hs, new_hideset(m->name));
 
   *rest = expansion(subst(m->body, args), hs, macro_token, tok->next, true);
-  (*rest)->at_bol = macro_token->at_bol;
-  (*rest)->has_space = macro_token->has_space;
+  take_place(*rest, macro_token, tok->next);
   return true;
 }
 
