@@ -145,6 +145,10 @@ at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
   ...), atomics (`__sync_*`, `__atomic_*`), floating point
   (`__builtin_isnan`, `__builtin_inf`, `__builtin_fabs`, ...) and the C
   library (`__builtin_memcpy`, `__builtin_strlen`, ...)
+- SIMD: gcc's vector types (`__attribute__((vector_size(N)))` of 4, 8 or
+  16 bytes, with their operators, passed in XMM registers as the psABI
+  says) and the x86 intrinsics, `<immintrin.h>` and the rest up to SSE4.2,
+  AES and PCLMUL, which give the same results as gcc's
 - Debugging: `-g` writes DWARF debug info, so gdb shows variables,
   parameters, globals, structs and backtraces as with `gcc -g -O0`
 - gcc's warnings: `-Wall` adds format checks for `printf` and `scanf`,
@@ -163,8 +167,9 @@ at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
 - Linux's own headers (`<linux/*.h>`, `<asm/*.h>`, ...) come with the
   bundled musl, for programs that use the kernel directly: USB through
   usbfs, input devices, netlink, ioctls
-- Not supported: C++, `_BitInt`, K&R function definitions, optimization
-  beyond register allocation and constant folding
+- Not supported: C++, `_BitInt`, K&R function definitions, AVX (code that
+  checks `__AVX__` uses its SSE path), optimization beyond register
+  allocation and constant folding
 
 ## Testing
 

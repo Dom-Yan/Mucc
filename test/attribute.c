@@ -54,8 +54,8 @@ static int attr_std_after [[maybe_unused]];
 // what it rejects or doesn't know. __has_builtin likewise.
 #if defined(__has_attribute) && __has_attribute(packed) && \
     __has_attribute(__aligned__) && __has_attribute(cleanup) && \
-    __has_attribute(format) && !__has_attribute(vector_size) && \
-    !__has_attribute(bogus)
+    __has_attribute(format) && __has_attribute(vector_size) && \
+    !__has_attribute(ifunc) && !__has_attribute(bogus)
 static int has_attribute_ok = 1;
 #endif
 #if defined(__has_builtin) && __has_builtin(__builtin_unreachable) && \
@@ -146,6 +146,13 @@ int main() {
   ASSERT(2, sizeof(mode_uhi));
   ASSERT(65535, ({ mode_uhi h = -1; h; }));
   ASSERT(8, sizeof(mode_di));
+  {
+    // On a local variable, which a declaration in a block first looks at
+    // as a possible function
+    int local_qi __attribute__((mode(QI))) = 300;
+    ASSERT(1, sizeof(local_qi));
+    ASSERT(44, local_qi);
+  }
   ASSERT(8, sizeof(mode_word));
   ASSERT(1, ({ mode_word w = -1; w > 0; }));
   ASSERT(16, sizeof(mode_ti));

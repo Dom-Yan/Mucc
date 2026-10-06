@@ -81,6 +81,8 @@ typedef struct {
   Token *asm_label_tok; // `asm("name")` after a declarator, or NULL
   char *asm_label;
   Token *mode_tok;      // the name in mode(name), or NULL
+  Token *vector_tok;    // vector_size(N), or NULL
+  int vector_size;      // its N
   Token *transparent_tok; // transparent_union, or NULL
   int8_t common;          // common (1) or nocommon (-1), or 0
   Token *common_tok;
@@ -266,6 +268,8 @@ static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
 static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr);
 static Type *mode_type(Type *ty, Token *tok);
+static Type *vector_type(Type *ty, Attrs *a);
+static Node *vector_elem(Node *vec, Node *idx, Token *tok);
 static bool is_function(Token *tok, Type *basety);
 static bool falls_through(Node *node);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
@@ -651,7 +655,7 @@ static char *ignored_attributes[] = {
 // Attributes gcc has that would change what a program does, which mucc
 // doesn't implement (yet): they are errors, never silently ignored.
 static char *unsupported_attributes[] = {
-  "retain", "weakref", "vector_size", "ifunc", "naked", "target",
+  "retain", "weakref", "ifunc", "naked", "target",
   "target_clones", "copy",
   "symver", "scalar_storage_order", "noinit", "persistent", "hardbool",
 };
@@ -684,7 +688,7 @@ static char *attribute_name(Token *tok) {
 static char *implemented_attributes[] = {
   "noreturn", "used", "weak", "packed", "aligned", "constructor",
   "destructor", "cleanup", "alias", "section", "visibility", "gnu_inline",
-  "mode", "transparent_union", "common", "nocommon",
+  "mode", "transparent_union", "common", "nocommon", "vector_size",
 };
 
 // __has_attribute(name) in the preprocessor: does mucc accept attribute
@@ -774,6 +778,17 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
     return;
   }
 
+  // vector_size(N): a vector of N bytes of the declared type. See
+  // vector_type().
+  if (!strcmp(name, "vector_size")) {
+    if (!args)
+      error_tok(tok, "attribute 'vector_size' needs a size");
+    a->vector_size = const_expr(&args, args);
+    skip(args, ")");
+    a->vector_tok = tok;
+    return;
+  }
+
   // On a global: as -fcommon or -fno-common, for it alone
   if (!strcmp(name, "common") || !strcmp(name, "nocommon")) {
     if (!allow_decl)
@@ -851,6 +866,10 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
 static void merge_attrs(Attrs *dst, Attrs *src) {
   if (src->mode_tok)
     dst->mode_tok = src->mode_tok;
+  if (src->vector_tok) {
+    dst->vector_tok = src->vector_tok;
+    dst->vector_size = src->vector_size;
+  }
   if (src->common) {
     dst->common = src->common;
     dst->common_tok = src->common_tok;
@@ -1048,6 +1067,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     if (is_attribute(tok)) {
       Attrs a = {};
       tok = attributes(tok, &a, attr != NULL);
+      if (!attr && a.vector_tok)
+        error_tok(a.vector_tok, "attribute 'vector_size' is only supported in a declaration");
       if (attr) {
         attr->is_noreturn |= a.is_noreturn;
         attr->is_unused |= a.is_unused;
@@ -1569,6 +1590,8 @@ static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs) {
     *rest = attributes(tok, attrs, true);
     if (attrs->mode_tok)
       ty = copy_type(mode_type(ty, attrs->mode_tok));
+    if (attrs->vector_tok)
+      ty = vector_type(ty, attrs);
     ty->name = name;
     ty->name_pos = name_pos;
   }
@@ -1606,6 +1629,32 @@ static Type *mode_type(Type *ty, Token *tok) {
       return ty_ldouble;
   }
   error_tok(tok, "mode '%s' is not supported for type '%s'", m, type_name(ty));
+}
+
+// [GNU] The type `ty` becomes with attribute vector_size(N): a vector of
+// N bytes of ty, which must be a number other than _Bool and __int128. Of
+// a pointer or an array, as gcc has it, the elements are vectors:
+// `int __attribute__((vector_size(16))) *p` points to one. SSE's registers
+// hold 16 bytes, so mucc takes vectors of 4, 8 or 16.
+static Type *vector_type(Type *ty, Attrs *a) {
+  if (ty->kind == TY_PTR)
+    return pointer_to(vector_type(ty->base, a));
+  if (ty->kind == TY_ARRAY)
+    return array_of(vector_type(ty->base, a), ty->array_len);
+
+  int n = a->vector_size;
+  if ((!is_integer(ty) && ty->kind != TY_FLOAT && ty->kind != TY_DOUBLE) ||
+      ty->kind == TY_BOOL || is_int128(ty))
+    error_tok(a->vector_tok, "invalid vector type for attribute 'vector_size'");
+  if (n <= 0 || n % ty->size || (n & (n - 1)))
+    error_tok(a->vector_tok, "vector size must be a power of 2 and a multiple of the "
+              "element size");
+  if (n < 4 || n > 16)
+    error_tok(a->vector_tok, "vectors of %d bytes are not supported (only 4, 8 or 16)", n);
+  Type *vec = vector_of(ty, n);
+  vec->is_const = ty->is_const;
+  vec->is_volatile = ty->is_volatile;
+  return vec;
 }
 
 // abstract-declarator = attributes pointers attributes
@@ -2689,6 +2738,31 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
     return;
   }
 
+  // [GNU] A vector, from another or from its elements in braces, in
+  // order (gcc takes no designators): init's children are its elements.
+  if (is_vector(init->ty)) {
+    if (equal(tok, "{")) {
+      Type *ty = init->ty;
+      init->ty = array_of(ty->elem, ty->array_len); // for elem_init()
+      tok = tok->next;
+      for (int i = 0; !consume_end(rest, tok); i++) {
+        if (i > 0)
+          tok = skip(tok, ",");
+        if (equal(tok, "[") || equal(tok, "."))
+          error_tok(tok, "a designator in a vector initializer");
+        if (i < ty->array_len)
+          initializer2(&tok, tok, elem_init(init, i));
+        else
+          tok = skip_excess_element(tok);
+      }
+      init->ty = ty;
+      return;
+    }
+    init->expr = assign(rest, tok);
+    check_assign(init->ty, init->expr, "initialization");
+    return;
+  }
+
   // A complex number, from any number. Braces are a scalar's, as with
   // gcc: `{1, 2}` is not the parts.
   if (is_complex(init->ty)) {
@@ -2848,6 +2922,21 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
     return node;
   }
 
+  // A vector's elements, through a pointer to the first
+  if (is_vector(ty) && !init->expr) {
+    Node *node = new_node(ND_NULL_EXPR, tok);
+    for (int i = 0; init->children && i < ty->array_len; i++) {
+      if (!init->children[i] || !init->children[i]->expr)
+        continue;
+      Node *addr = new_cast(new_unary(ND_ADDR, init_desg_expr(desg, tok), tok),
+                            pointer_to(ty->elem));
+      Node *lhs = new_unary(ND_DEREF, new_add(addr, new_num(i, tok), tok), tok);
+      Node *rhs = new_binary(ND_ASSIGN, lhs, init->children[i]->expr, tok);
+      node = new_binary(ND_COMMA, node, rhs, tok);
+    }
+    return node;
+  }
+
   if (ty->kind == TY_STRUCT && !init->expr) {
     Node *node = new_node(ND_NULL_EXPR, tok);
 
@@ -2948,6 +3037,15 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
         write_buf(buf + offset + sz * (run->idx + j), embed_elem(run, j, ty->base), sz);
     for (int i = 0; init->children && i < ty->array_len; i++)
       cur = write_gvar_data(cur, init->children[i], ty->base, buf, offset + sz * i);
+    return cur;
+  }
+
+  if (is_vector(ty)) {
+    if (init->expr)
+      error_tok(init->expr->tok, "a vector initializer must be its elements in braces");
+    for (int i = 0; init->children && i < ty->array_len; i++)
+      cur = write_gvar_data(cur, init->children[i], ty->elem, buf,
+                            offset + ty->elem->size * i);
     return cur;
   }
 
@@ -3431,7 +3529,7 @@ static Node *asm_stmt(Token **rest, Token *tok) {
     if (op->kind == 'r' && !is_integer(ty) && ty->kind != TY_PTR)
       error_tok(op->tok, "an operand of type '%s' can't go in a general register",
                 type_name(ty));
-    if (op->kind == 'x' && ty->kind != TY_FLOAT && ty->kind != TY_DOUBLE &&
+    if (op->kind == 'x' && ty->kind != TY_FLOAT && ty->kind != TY_DOUBLE && !is_vector(ty) &&
         !((is_integer(ty) || ty->kind == TY_PTR) && (ty->size == 4 || ty->size == 8)))
       error_tok(op->tok, "an operand of type '%s' can't go in an SSE register",
                 type_name(ty));
@@ -5086,12 +5184,18 @@ static bool is_number(Type *ty) {
   return is_numeric(ty) || is_complex(ty);
 }
 
+// A number or a vector, which `+` and `-` take as they are (see
+// vector_binary() in type.c)
+static bool is_arith(Type *ty) {
+  return is_number(ty) || is_vector(ty);
+}
+
 static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
 
   // num + num
-  if (is_number(lhs->ty) && is_number(rhs->ty))
+  if (is_arith(lhs->ty) && is_arith(rhs->ty))
     return new_binary(ND_ADD, lhs, rhs, tok);
 
   if (lhs->ty->base && rhs->ty->base)
@@ -5126,7 +5230,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   add_type(rhs);
 
   // num - num
-  if (is_number(lhs->ty) && is_number(rhs->ty))
+  if (is_arith(lhs->ty) && is_arith(rhs->ty))
     return new_binary(ND_SUB, lhs, rhs, tok);
 
   if (!lhs->ty->base)
@@ -5206,6 +5310,18 @@ static Node *mul(Token **rest, Token *tok) {
   }
 }
 
+// [GNU] A cast to or from a vector keeps the bits, so the other type
+// must be a vector or an integer of the same size.
+static void check_vector_cast(Node *node) {
+  Type *from = node->lhs->ty, *to = node->ty;
+  if ((!is_vector(from) && !is_vector(to)) || to->kind == TY_VOID)
+    return;
+  Type *other = is_vector(from) ? to : from;
+  if ((!is_vector(other) && !is_integer(other)) || from->size != to->size)
+    error_tok(node->tok, "cannot convert '%s' to '%s': vector casts keep the bits, "
+              "so the sizes must match", type_name(from), type_name(to));
+}
+
 // cast = "(" type-name ")" cast | unary
 static Node *cast(Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(tok->next)) {
@@ -5220,6 +5336,7 @@ static Node *cast(Token **rest, Token *tok) {
     // type cast, whose result has no qualifiers
     Node *node = new_cast(cast(rest, tok), unqual(ty));
     node->tok = start;
+    check_vector_cast(node);
     return node;
   }
 
@@ -5235,7 +5352,7 @@ static Node *unary(Token **rest, Token *tok) {
   if (equal(tok, "+")) {
     Node *node = cast(rest, tok->next);
     add_type(node);
-    if (!is_number(node->ty))
+    if (!is_arith(node->ty))
       error_tok(tok, "invalid argument type to unary '+'");
     if (is_integer(node->ty) && node->ty->size < 4)
       return new_cast(node, ty_int);
@@ -5753,7 +5870,11 @@ static Node *postfix(Token **rest, Token *tok) {
       Token *start = tok;
       Node *idx = expr(&tok, tok->next);
       tok = skip(tok, "]");
-      node = new_unary(ND_DEREF, new_add(node, idx, start), start);
+      add_type(node);
+      if (is_vector(node->ty))
+        node = vector_elem(node, idx, start);
+      else
+        node = new_unary(ND_DEREF, new_add(node, idx, start), start);
       continue;
     }
 
@@ -5786,6 +5907,28 @@ static Node *postfix(Token **rest, Token *tok) {
     *rest = tok;
     return node;
   }
+}
+
+// [GNU] v[i] on a vector v: its element i, through a pointer to the
+// first. One that isn't in memory, like a call's value, is copied to a
+// temporary first.
+static Node *vector_elem(Node *vec, Node *idx, Token *tok) {
+  Type *ty = vec->ty;
+  Node *first = NULL;
+  if (vec->kind != ND_VAR && vec->kind != ND_DEREF && vec->kind != ND_MEMBER) {
+    Obj *tmp = new_lvar("", ty);
+    first = new_binary(ND_ASSIGN, new_var_node(tmp, tok), vec, tok);
+    vec = new_var_node(tmp, tok);
+  } else if (vec->kind == ND_VAR && vec->var->is_register) {
+    error_tok(tok, "subscripting register vector '%s'", vec->var->name);
+  }
+
+  Type *elem = qualified(ty->elem, ty->is_const, ty->is_volatile);
+  Node *addr = new_cast(new_unary(ND_ADDR, vec, tok), pointer_to(elem));
+  Node *node = new_unary(ND_DEREF, new_add(addr, idx, tok), tok);
+  if (first)
+    return new_binary(ND_COMMA, first, node, tok);
+  return node;
 }
 
 // funcall = (assign ("," assign)*)? ")"
@@ -8645,7 +8788,8 @@ static bool is_function(Token *tok, Type *basety) {
     return false;
 
   // A lookahead only: the attributes are checked when the real parse runs.
-  Type dummy = {};
+  // The dummy is an int, which mode(QI) and vector_size(16) can apply to.
+  Type dummy = *ty_int;
   Attrs ignored = {};
   Type *ty = declarator(&tok, tok, &dummy, &ignored);
   return ty->kind == TY_FUNC || (ty == &dummy && basety->kind == TY_FUNC);

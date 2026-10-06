@@ -506,7 +506,7 @@ check '#include_next of a header found before'
 # whose hidesets name many macros. Hidesets are shared, not copied for
 # each token: this took over 600 MB, and takes 210.
 printf '#include <tgmath.h>\nfloat f;\ndouble g(void) { return cos(sin(tan(f))); }\n' > $tmp/tgmath.c
-(ulimit -v 500000; $mucc -c -o $tmp/tgmath.o $tmp/tgmath.c)
+(ulimit -v 500000; $mucc -Iinclude -c -o $tmp/tgmath.o $tmp/tgmath.c)
 check 'nested <tgmath.h> macros in bounded memory'
 
 # A default include directory also given with -I is searched once, so
@@ -692,6 +692,17 @@ echo 'int main() { return 0; }' > $tmp/march.c
 $mucc -march=native -mtune=generic -o $tmp/march $tmp/march.c && $tmp/march
 check '-march= -mtune='
 
+# x86-64's SSE and SSE2 are on; -msse4.1 and the like define the macros of
+# their extensions and those before; AVX's are accepted and define nothing
+printf '#if !defined __SSE__ || !defined __SSE2__ || !defined __MMX__ || defined __SSE3__\n#error\n#endif\n' > $tmp/isa.c
+$mucc -fsyntax-only $tmp/isa.c
+check 'SSE2 macros'
+$mucc -E -dM -msse4.1 -maes -mavx2 -mfma -x c /dev/null > $tmp/isa.out &&
+  grep -q __SSE4_1__ $tmp/isa.out && grep -q __SSSE3__ $tmp/isa.out &&
+  grep -q __AES__ $tmp/isa.out && ! grep -q __SSE4_2__ $tmp/isa.out &&
+  ! grep -q __AVX $tmp/isa.out
+check '-msse4.1 -maes -mavx2'
+
 # An unknown extension is an object file for the linker, as with gcc
 echo 'int seven(void) { return 7; }' > $tmp/seven-lo.c
 echo 'int seven(void); int main() { return seven(); }' > $tmp/main-lo.c
@@ -771,18 +782,18 @@ $mucc -fno-as-fallback -c -o $tmp/answer3.o -x assembler-with-cpp $tmp/answer3.a
 check '-x assembler-with-cpp'
 
 # ... an instruction it doesn't know in a .s file: a note, then `as`
-printf '  .text\n  .globl f\nf:\n  movups %%xmm0, %%xmm1\n  ret\n' > $tmp/unknown.s
+printf '  .text\n  .globl f\nf:\n  fwait\n  ret\n' > $tmp/unknown.s
 $mucc -c -o $tmp/unknown.o $tmp/unknown.s 2>&1 | grep -q 'using the system assembler'
 check 'unknown instruction in a .s file falls back to as'
 
 # ... and in an asm() statement: quietly `as`
-echo 'int main() { asm("movups %xmm0, %xmm1"); return 0; }' > $tmp/unknown.c
+echo 'int main() { asm("fwait"); return 0; }' > $tmp/unknown.c
 $mucc -o $tmp/unknown $tmp/unknown.c 2> $tmp/err && [ ! -s $tmp/err ] && $tmp/unknown
 check 'unknown instruction in asm() falls back to as'
 
 # -fno-as-fallback: either one is an error instead, naming the reason
 $mucc -fno-as-fallback -c -o $tmp/unknown.o $tmp/unknown.s 2>&1 |
-    grep -q "unknown.s: the built-in assembler can't assemble this: unknown instruction 'movups'"
+    grep -q "unknown.s: the built-in assembler can't assemble this: unknown instruction 'fwait'"
 check '-fno-as-fallback with a .s file'
 
 $mucc -fno-as-fallback -c -o $tmp/unknown.o $tmp/unknown.c 2>&1 |

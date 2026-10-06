@@ -469,7 +469,39 @@ static char *ignored_options[] = {
   "-specs=*",
   // The small code model is the one mucc's code always has.
   "-mcmodel=small",
+  // Extensions past SSE4.2 (see isa_option())
+  "-mavx*", "-mfma", "-mfma4", "-mf16c", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe",
+  "-msha", "-mvaes", "-mvpclmulqdq", "-mgfni", "-mrdrnd", "-mrdseed", "-mxsave*",
 };
+
+// SSE's later extensions, each implying those before it, and the macros
+// they define. (-msse, -msse2 and -mmmx are x86-64's own.) AVX and later
+// extensions are ignored options: mucc's vectors are 16 bytes at most, so
+// code that checks for them takes its SSE path.
+static bool isa_option(char *arg) {
+  static char *opts[] = {"-msse3", "-mssse3", "-msse4.1", "-msse4.2"};
+  static char *macros[] = {"__SSE3__", "__SSSE3__", "__SSE4_1__", "__SSE4_2__"};
+  if (!strcmp(arg, "-msse4"))
+    arg = "-msse4.2";
+  for (int i = 0; i < 4; i++) {
+    if (strcmp(arg, opts[i]))
+      continue;
+    for (int j = 0; j <= i; j++)
+      define(macros[j]);
+    return true;
+  }
+
+  if (!strcmp(arg, "-maes"))
+    define("__AES__");
+  else if (!strcmp(arg, "-mpclmul"))
+    define("__PCLMUL__");
+  else if (!strcmp(arg, "-mpopcnt"))
+    define("__POPCNT__");
+  else if (strcmp(arg, "-msse") && strcmp(arg, "-msse2") && strcmp(arg, "-mmmx") &&
+           strcmp(arg, "-mfxsr"))
+    return false;
+  return true;
+}
 
 static bool is_ignored_option(char *arg) {
   for (int i = 0; i < sizeof(ignored_options) / sizeof(*ignored_options); i++) {
@@ -937,6 +969,12 @@ static void parse_args(int argc, char **argv) {
     // mucc emits only baseline x86-64 instructions, which every x86-64
     // CPU runs, so a CPU choice like -march=native changes nothing.
     if (!strncmp(argv[i], "-march=", 7) || !strncmp(argv[i], "-mtune=", 7))
+      continue;
+
+    // -msse4.1 and the like define gcc's macros for the extension and those
+    // before it, so code takes its paths for them. mucc's headers have
+    // their intrinsics, and its assembler their instructions, either way.
+    if (isa_option(argv[i]))
       continue;
 
     if (argv[i][0] == '-' && argv[i][1] != '\0')

@@ -182,3 +182,38 @@ double call_va_kinds(double (*fn)(int, ...)) {
   return fn(12, 1, 1.0, 1, 2.0, 1, 3.0, 1, 4.0, 6, sd, 6, sd, 6, sd, 4, s16,
             1, 5.0, 4, s16, 0, 7, 2, 2.5L);
 }
+
+// [GNU] Vectors: in XMM registers, whole, then on the stack (16-byte
+// aligned), and a struct of only a 16-byte vector in one register. See
+// test/vector.c.
+typedef float Tv4sf __attribute__((vector_size(16)));
+typedef int Tv2si __attribute__((vector_size(8)));
+typedef struct { Tv4sf v; } Tvwrap;
+
+Tv4sf abi_vec1(Tv4sf a, double b, Tv2si c, Tv4sf d, Tv4sf e, Tv4sf f, Tv4sf g,
+               Tv4sf h, int k, Tv4sf i, Tv2si j, Tvwrap w) {
+  return a + (float)b + (float)c[1] + d + e + f + g + h + (float)k + i + (float)j[0] + w.v;
+}
+
+Tvwrap abi_vec2(Tvwrap w, Tv2si s) {
+  return (Tvwrap){w.v * (float)s[0] + (float)s[1]};
+}
+
+Tv4sf abi_vec_va(int n, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, n);
+  Tv4sf s = {0, 0, 0, 0};
+  for (int i = 0; i < n; i++)
+    s += __builtin_va_arg(ap, Tv4sf);
+  __builtin_va_end(ap);
+  return s;
+}
+
+Tv4sf abi_vec_call(Tv4sf (*fn)(Tv4sf, double, Tv2si, Tv4sf, Tv4sf, Tv4sf, Tv4sf, Tv4sf,
+                               int, Tv4sf, Tv2si, Tvwrap),
+                   Tv4sf (*va)(int, ...)) {
+  Tv4sf one = {1, 1, 1, 1};
+  return fn(one, 2, (Tv2si){0, 3}, one, one, one, one, one, 4, (Tv4sf){1, 2, 3, 4},
+            (Tv2si){5, 0}, (Tvwrap){{10, 20, 30, 40}}) +
+         va(3, one, one, (Tv4sf){0, 0, 0, 100});
+}

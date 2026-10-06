@@ -795,7 +795,7 @@ EOF
 
 # Every attribute gcc has that would change what a program does, but mucc
 # doesn't implement, is an error (unsupported_attributes in src/parser.c).
-for a in retain weakref vector_size ifunc naked target target_clones \
+for a in retain weakref ifunc naked target target_clones \
          copy symver scalar_storage_order noinit persistent hardbool; do
   expect_error "1:22: error: attribute '$a' is not supported" <<EOF
 int x __attribute__((__${a}__(1)));
@@ -1513,6 +1513,61 @@ EOF
 
 expect_error "1:1: error: unterminated attribute" <<'EOF'
 [[gnu::constr(ctor(101)]] static void f(void) {}
+EOF
+
+# [GNU] Vectors
+expect_error "1:32: error: invalid vector type for attribute 'vector_size'" <<'EOF'
+typedef _Bool b __attribute__((vector_size(16)));
+EOF
+
+expect_error '1:32: error: vectors of 32 bytes are not supported (only 4, 8 or 16)' <<'EOF'
+typedef float v __attribute__((vector_size(32)));
+EOF
+
+expect_error '1:32: error: vector size must be a power of 2 and a multiple of the element size' <<'EOF'
+typedef float v __attribute__((vector_size(12)));
+EOF
+
+expect_error "3:35: error: invalid operands to vectors '__vector(4) float' and '__vector(4) int'" <<'EOF'
+typedef float v4sf __attribute__((vector_size(16)));
+typedef int v4si __attribute__((vector_size(16)));
+v4sf f(v4sf a, v4si b) { return a + b; }
+EOF
+
+expect_error "2:35: error: invalid operands to vector '__vector(4) float'" <<'EOF'
+typedef float v4sf __attribute__((vector_size(16)));
+v4sf f(v4sf a, v4sf b) { return a % b; }
+EOF
+
+expect_error "2:27: error: cannot convert '__vector(4) float' to 'double': vector casts keep the bits, so the sizes must match" <<'EOF'
+typedef float v4sf __attribute__((vector_size(16)));
+double f(v4sf a) { return (double)a; }
+EOF
+
+expect_error "2:21: error: '__vector(4) int' used where a scalar is required" <<'EOF'
+typedef int v4si __attribute__((vector_size(16)));
+int f(v4si a) { if (a) return 1; return 0; }
+EOF
+
+expect_error "2:25: error: cannot convert 'int' to '__vector(4) int' in initialization" <<'EOF'
+typedef int v4si __attribute__((vector_size(16)));
+void f(void) { v4si a = 1; }
+EOF
+
+expect_error '2:26: error: a designator in a vector initializer' <<'EOF'
+typedef int v4si __attribute__((vector_size(16)));
+void f(void) { v4si a = {[1] = 2}; }
+EOF
+
+expect_error "1:25: error: attribute 'vector_size' is only supported in a declaration" <<'EOF'
+int x = (__attribute__((vector_size(16))) int)0;
+EOF
+
+expect_ok 'vectors from other vectors of their size' <<'EOF'
+typedef int v4si __attribute__((vector_size(16)));
+typedef unsigned v4su __attribute__((vector_size(16)));
+typedef float v4sf __attribute__((vector_size(16)));
+v4su f(v4si a, v4sf b) { v4su u = a; u = (v4su)b; return u + a; }
 EOF
 
 expect_ok 'a thread-local tentative definition twice' <<'EOF'

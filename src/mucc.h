@@ -496,6 +496,7 @@ typedef enum {
   TY_VLA, // variable-length array
   TY_STRUCT,
   TY_UNION,
+  TY_VECTOR, // [GNU] vector_size: in %xmm0 as a value (see cgen.c)
 } TypeKind;
 
 struct Type {
@@ -528,8 +529,12 @@ struct Type {
   Token *name_pos;
   Obj *param_var; // parameter: its variable, which later parameters can use
 
-  // Array
+  // Array, or vector: its number of elements
   int array_len;
+
+  // Vector: its element type. (Not `base`, which makes a type a pointer
+  // or an array in many places.)
+  Type *elem;
 
   // Variable-length array
   Node *vla_len; // # of elements
@@ -608,6 +613,7 @@ Type *complex_type(Type *part);
 Type *complex_part(Type *ty);
 bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
+bool is_vector(Type *ty);
 bool has_ldouble(Type *ty);
 bool is_ret_in_memory(Type *ty);
 bool has_unaligned_member(Type *ty);
@@ -620,6 +626,7 @@ void complete_variants(Type *ty);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);
+Type *vector_of(Type *elem, int size);
 Type *vla_of(Type *base, Node *expr);
 Type *enum_type(void);
 Type *struct_type(void);

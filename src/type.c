@@ -64,6 +64,10 @@ bool is_numeric(Type *ty) {
   return is_integer(ty) || is_flonum(ty);
 }
 
+bool is_vector(Type *ty) {
+  return ty->kind == TY_VECTOR;
+}
+
 // Counts the scalars in `ty` that are long doubles (into *nld) and that
 // aren't (into *nother).
 static void count_ldouble(Type *ty, int *nld, int *nother) {
@@ -220,6 +224,8 @@ static bool is_compatible_unqual(Type *t1, Type *t2) {
       return false;
     return t1->array_len < 0 || t2->array_len < 0 ||
            t1->array_len == t2->array_len;
+  case TY_VECTOR:
+    return t1->size == t2->size && is_compatible_unqual(t1->elem, t2->elem);
   }
   return false;
 }
@@ -314,6 +320,17 @@ Type *array_of(Type *base, int len) {
   return ty;
 }
 
+// [GNU] A vector of `size` bytes of `elem`s, as attribute vector_size
+// makes it: `float __attribute__((vector_size(16)))` is SSE's __m128. It
+// is aligned to its size. Operators work on each element (see "Vectors"
+// in cgen.c).
+Type *vector_of(Type *elem, int size) {
+  Type *ty = new_type(TY_VECTOR, size, size);
+  ty->elem = unqual(elem);
+  ty->array_len = size / elem->size;
+  return ty;
+}
+
 Type *vla_of(Type *base, Node *len) {
   Type *ty = new_type(TY_VLA, 8, 8);
   ty->base = base;
@@ -385,6 +402,12 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty2->kind == TY_FUNC)
     return pointer_to(ty2);
 
+  // [GNU] As in `c ? v : w`: a vector (see vector_binary() for operators)
+  if (is_vector(ty1))
+    return unqual(ty1);
+  if (is_vector(ty2))
+    return unqual(ty2);
+
   // With a complex operand, the result is complex, of the real types'
   // common type.
   if (is_complex(ty1) || is_complex(ty2))
@@ -448,13 +471,61 @@ static void usual_arith_conv(Node **lhs, Node **rhs) {
 
 // A condition, or an operand of an arithmetic, comparison or logical
 // operator, must be a number or a pointer: `if (s)` or `s * 2` on a
-// struct s is an error, not code that reads its address.
+// struct s is an error, not code that reads its address. (A vector is
+// one for arithmetic, see vector_binary(), but not for `if` or `!`.)
 void check_scalar(Node *node) {
   add_type(node);
   Type *ty = node->ty;
-  if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION || ty->kind == TY_VOID) &&
+  if (ty && (ty->kind == TY_STRUCT || ty->kind == TY_UNION || ty->kind == TY_VOID ||
+             ty->kind == TY_VECTOR) &&
       !is_complex(ty))
     error_tok(node->tok, "'%s' used where a scalar is required", type_name(ty));
+}
+
+// The signed integer type of `size` bytes
+static Type *signed_type(int size) {
+  switch (size) {
+  case 1: return ty_schar;
+  case 2: return ty_short;
+  case 4: return ty_int;
+  }
+  return ty_long;
+}
+
+// [GNU] Types binary operator `node` with a vector operand. Both are
+// vectors of the same size and length, or one is a number, which is
+// converted to the element type and then to the vector: each element is
+// it, as in `v * 2`. Comparisons give vectors of signed integers as wide
+// as the elements, -1 where true and 0 where false.
+static void vector_binary(Node *node) {
+  Type *lt = node->lhs->ty, *rt = node->rhs->ty;
+  Type *vec = is_vector(lt) ? lt : rt;
+
+  if (is_vector(lt) && is_vector(rt)) {
+    if (lt->size != rt->size || lt->array_len != rt->array_len ||
+        is_flonum(lt->elem) != is_flonum(rt->elem))
+      error_tok(node->tok, "invalid operands to vectors '%s' and '%s'",
+                type_name(lt), type_name(rt));
+    if (!is_compatible_unqual(lt, rt))
+      node->rhs = new_cast(node->rhs, unqual(lt));
+  } else {
+    Node **num = is_vector(lt) ? &node->rhs : &node->lhs;
+    if (!is_numeric((*num)->ty) || is_int128((*num)->ty))
+      error_tok(node->tok, "invalid operands to vector '%s' and '%s'",
+                type_name(lt), type_name(rt));
+    *num = new_cast(convert(*num, vec->elem), unqual(vec));
+  }
+
+  switch (node->kind) {
+  case ND_MOD: case ND_BITAND: case ND_BITOR: case ND_BITXOR: case ND_SHL: case ND_SHR:
+    if (is_flonum(vec->elem))
+      error_tok(node->tok, "invalid operands to vector '%s'", type_name(vec));
+    break;
+  case ND_EQ: case ND_NE: case ND_LT: case ND_LE:
+    node->ty = vector_of(signed_type(vec->elem->size), vec->size);
+    return;
+  }
+  node->ty = unqual(vec);
 }
 
 // Does a node of `kind` have the fields of statements (cond, body and the
@@ -500,6 +571,10 @@ void add_type(Node *node) {
   case ND_BITAND:
   case ND_BITOR:
   case ND_BITXOR:
+    if (is_vector(node->lhs->ty) || is_vector(node->rhs->ty)) {
+      vector_binary(node);
+      return;
+    }
     check_scalar(node->lhs);
     check_scalar(node->rhs);
     // A complex result; a real operand stays real, as C wants for
@@ -515,6 +590,10 @@ void add_type(Node *node) {
     node->ty = node->lhs->ty;
     return;
   case ND_NEG: {
+    if (is_vector(node->lhs->ty)) {
+      node->ty = unqual(node->lhs->ty);
+      return;
+    }
     check_scalar(node->lhs);
     Type *ty = get_common_type(ty_int, node->lhs->ty);
     node->lhs = convert(node->lhs, ty);
@@ -532,6 +611,10 @@ void add_type(Node *node) {
   case ND_NE:
   case ND_LT:
   case ND_LE:
+    if (is_vector(node->lhs->ty) || is_vector(node->rhs->ty)) {
+      vector_binary(node);
+      return;
+    }
     check_scalar(node->lhs);
     check_scalar(node->rhs);
     if ((node->kind == ND_LT || node->kind == ND_LE) &&
@@ -554,6 +637,16 @@ void add_type(Node *node) {
   case ND_BITNOT:
   case ND_SHL:
   case ND_SHR:
+    if (node->rhs && (is_vector(node->lhs->ty) || is_vector(node->rhs->ty))) {
+      vector_binary(node);
+      return;
+    }
+    if (!node->rhs && is_vector(node->lhs->ty)) { // ~v
+      if (is_flonum(node->lhs->ty->elem))
+        error_tok(node->tok, "invalid operand to vector '%s'", type_name(node->lhs->ty));
+      node->ty = unqual(node->lhs->ty);
+      return;
+    }
     check_scalar(node->lhs);
     if (node->rhs)
       check_scalar(node->rhs);
@@ -696,6 +789,7 @@ static char *unqual_type_name(Type *ty) {
   case TY_DOUBLE: return "double";
   case TY_LDOUBLE: return "long double";
   case TY_ENUM: return "enum";
+  case TY_VECTOR: return format("__vector(%d) %s", ty->array_len, type_name(ty->elem));
   case TY_FUNC: return format("%s (%s)", type_name(ty->return_ty), param_names(ty));
   case TY_VLA: return format("%s[*]", type_name(ty->base));
   case TY_ARRAY:
@@ -817,6 +911,8 @@ bool is_assignable(Type *to, Node *from) {
            (is_integer(ty) && is_null_const(from));
   if (is_numeric(to) && is_numeric(ty))
     return true;
+  if (is_vector(to) && is_vector(ty))
+    return to->size == ty->size;
   return is_compatible_unqual(to, ty);
 }
 
@@ -843,6 +939,11 @@ void check_assign(Type *to, Node *from, char *what) {
   if ((is_numeric(to) || is_complex(to)) && (is_numeric(ty) || is_complex(ty)))
     return;
   if (to->kind == TY_BOOL && ty->kind == TY_PTR)
+    return;
+
+  // [GNU] A vector from one of the same size, its bits as they are (gcc
+  // wants -flax-vector-conversions where the element types differ)
+  if (is_vector(to) && is_vector(ty) && to->size == ty->size)
     return;
 
   if ((to->kind == TY_STRUCT || to->kind == TY_UNION) &&

@@ -48,7 +48,9 @@ static void gen_stmt(Node *node);
 static bool block_begin(Node *node);
 static void block_end(Node *node);
 static void cast_int128(Type *from, Type *to);
+static void cast_vector(Type *from, Type *to);
 static char *high_half(char *addr);
+static char *vec_move(int size);
 
 //---------- Output and stack helpers ----------------------------------------
 
@@ -392,6 +394,9 @@ static void load_from(Type *ty, char *addr) {
     println("  mov %s, %%rdx", high_half(addr));
     println("  mov %s, %%rax", addr);
     return;
+  case TY_VECTOR:
+    println("  %s %s, %%xmm0", vec_move(ty->size), addr);
+    return;
   }
 
   char *insn = ty->is_unsigned ? "movz" : "movs";
@@ -442,6 +447,9 @@ static void store_to(Type *ty, char *addr) {
   case TY_INT128:
     println("  mov %%rax, %s", addr);
     println("  mov %%rdx, %s", high_half(addr));
+    return;
+  case TY_VECTOR:
+    println("  %s %%xmm0, %s", vec_move(ty->size), addr);
     return;
   }
 
@@ -691,6 +699,11 @@ static void cast(Type *from, Type *to) {
     cmp_zero(from);
     println("  setne %%al");
     println("  movzx %%al, %%eax");
+    return;
+  }
+
+  if (is_vector(from) || is_vector(to)) {
+    cast_vector(from, to);
     return;
   }
 
@@ -1057,6 +1070,239 @@ static void emit_int128_routines(void) {
   println("  ret");
 }
 
+//---------- Vectors ---------------------------------------------------------
+//
+// [GNU] A vector's value (of 4, 8 or 16 bytes, see vector_type() in
+// parser.c) is in %xmm0, its elements from the low end, where the psABI
+// passes one. Pushed, it takes 16 bytes, or 8 if it has 8 or less. An
+// operator that SSE2 has an instruction for, for the element type, is
+// that instruction on %xmm0 and %xmm1: every one on floats and doubles,
+// and + - & | ^ == != on integers, * on shorts and < <= on signed integers
+// of up to 4 bytes. The others are done an element at a time (see
+// vector_by_element()). Nothing past SSE2 is used, so the code runs on any
+// x86-64 CPU.
+
+// The instruction that moves a vector of `size` bytes between an XMM
+// register and memory
+static char *vec_move(int size) {
+  return size == 16 ? "movdqu" : size == 8 ? "movq" : "movd";
+}
+
+static void push_vec(Type *ty) {
+  int sz = ty->size == 16 ? 16 : 8;
+  println("  sub $%d, %%rsp", sz);
+  println("  %s %%xmm0, (%%rsp)", vec_move(ty->size));
+  depth += sz / 8;
+}
+
+static void pop_vec(Type *ty, int reg) {
+  int sz = ty->size == 16 ? 16 : 8;
+  println("  %s (%%rsp), %%xmm%d", vec_move(ty->size), reg);
+  println("  add $%d, %%rsp", sz);
+  depth -= sz / 8;
+}
+
+// The suffix of SSE2's integer instructions for elements of `size` bytes
+static char *int_suffix(int size) {
+  return size == 1 ? "b" : size == 2 ? "w" : size == 4 ? "d" : "q";
+}
+
+// Sets XMM register `reg` to all one bits.
+static void all_ones(int reg) {
+  println("  pcmpeqd %%xmm%d, %%xmm%d", reg, reg);
+}
+
+// A cast to or from a vector keeps the bits (see check_vector_cast() in
+// parser.c), but for a number to a larger vector, which the parser makes
+// only of a number of the element type: every element is it, as in `v + 1`.
+static void cast_vector(Type *from, Type *to) {
+  if (is_vector(from) && is_vector(to))
+    return;
+
+  if (is_vector(to)) {
+    if (from->size < to->size) {
+      for (int i = 0; i < to->array_len; i++)
+        store_to(from, format("%d(%%rsp)", -16 + i * from->size));
+      println("  %s -16(%%rsp), %%xmm0", vec_move(to->size));
+    } else if (is_int128(from)) {
+      println("  movq %%rax, %%xmm0");
+      println("  movq %%rdx, %%xmm1");
+      println("  punpcklqdq %%xmm1, %%xmm0");
+    } else {
+      println(from->size == 8 ? "  movq %%rax, %%xmm0" : "  movd %%eax, %%xmm0");
+    }
+    return;
+  }
+
+  if (is_int128(to)) {
+    println("  movq %%xmm0, %%rax");
+    println("  pshufd $0xee, %%xmm0, %%xmm0");
+    println("  movq %%xmm0, %%rdx");
+  } else {
+    println(to->size == 8 ? "  movq %%xmm0, %%rax" : "  movd %%xmm0, %%eax");
+  }
+}
+
+// Loads the vector element at `off`(%rsp), of type `ty`, into 64-bit
+// register `reg` ("ax" or "di"), extended as its type says.
+static void load_elem(Type *ty, int off, char *reg) {
+  char *insn = ty->is_unsigned ? "movz" : "movs";
+  switch (ty->size) {
+  case 1: println("  %sbq %d(%%rsp), %%r%s", insn, off, reg); return;
+  case 2: println("  %swq %d(%%rsp), %%r%s", insn, off, reg); return;
+  case 4:
+    if (ty->is_unsigned)
+      println("  mov %d(%%rsp), %%e%s", off, reg);
+    else
+      println("  movslq %d(%%rsp), %%r%s", off, reg);
+    return;
+  }
+  println("  mov %d(%%rsp), %%r%s", off, reg);
+}
+
+// Integer operator `node` on vectors %xmm0 and %xmm1, an element at a
+// time: both are put in the red zone, each pair of elements is computed in
+// %rax and %rdi (as 64-bit values, extended from their type), and the
+// result goes back in place of the left side's element.
+static void vector_by_element(Node *node) {
+  Type *vec = node->lhs->ty;
+  Type *elem = vec->elem;
+  int sz = elem->size;
+  bool u = elem->is_unsigned;
+
+  println("  %s %%xmm0, -32(%%rsp)", vec_move(vec->size));
+  println("  %s %%xmm1, -16(%%rsp)", vec_move(vec->size));
+  for (int i = 0; i < vec->array_len; i++) {
+    int off = -32 + i * sz;
+    load_elem(elem, off, "ax");
+    load_elem(elem, off + 16, "di");
+
+    switch (node->kind) {
+    case ND_ADD: println("  add %%rdi, %%rax"); break;
+    case ND_SUB: println("  sub %%rdi, %%rax"); break;
+    case ND_MUL: println("  imul %%rdi, %%rax"); break;
+    case ND_BITAND: println("  and %%rdi, %%rax"); break;
+    case ND_BITOR: println("  or %%rdi, %%rax"); break;
+    case ND_BITXOR: println("  xor %%rdi, %%rax"); break;
+    case ND_DIV:
+    case ND_MOD:
+      if (u) {
+        println("  xor %%edx, %%edx");
+        println("  div %%rdi");
+      } else {
+        println("  cqo");
+        println("  idiv %%rdi");
+      }
+      if (node->kind == ND_MOD)
+        println("  mov %%rdx, %%rax");
+      break;
+    case ND_SHL:
+    case ND_SHR:
+      println("  mov %%rdi, %%rcx");
+      println("  %s %%cl, %%rax", node->kind == ND_SHL ? "shl" : u ? "shr" : "sar");
+      break;
+    case ND_EQ:
+    case ND_NE:
+    case ND_LT:
+    case ND_LE: {
+      char *cc = node->kind == ND_EQ ? "e" : node->kind == ND_NE ? "ne" :
+                 node->kind == ND_LT ? (u ? "b" : "l") : (u ? "be" : "le");
+      println("  cmp %%rdi, %%rax");
+      println("  set%s %%al", cc);
+      println("  movzbl %%al, %%eax");
+      println("  neg %%rax");
+      break;
+    }
+    default:
+      error_tok(node->tok, "invalid expression");
+    }
+    println("  mov %s, %d(%%rsp)", reg_ax(sz), off);
+  }
+  println("  %s -32(%%rsp), %%xmm0", vec_move(vec->size));
+}
+
+static void gen_vector_binary(Node *node) {
+  Type *vec = node->lhs->ty;
+  Type *elem = vec->elem;
+  gen_expr(node->rhs);
+  push_vec(vec);
+  gen_expr(node->lhs);
+  pop_vec(vec, 1);
+
+  if (is_flonum(elem)) {
+    char *s = elem->kind == TY_FLOAT ? "ps" : "pd";
+    switch (node->kind) {
+    case ND_ADD: println("  add%s %%xmm1, %%xmm0", s); return;
+    case ND_SUB: println("  sub%s %%xmm1, %%xmm0", s); return;
+    case ND_MUL: println("  mul%s %%xmm1, %%xmm0", s); return;
+    case ND_DIV: println("  div%s %%xmm1, %%xmm0", s); return;
+    // cmpps's predicates: 0 is ==, 1 <, 2 <=, 4 != (true for a NaN)
+    case ND_EQ: println("  cmp%s $0, %%xmm1, %%xmm0", s); return;
+    case ND_LT: println("  cmp%s $1, %%xmm1, %%xmm0", s); return;
+    case ND_LE: println("  cmp%s $2, %%xmm1, %%xmm0", s); return;
+    case ND_NE: println("  cmp%s $4, %%xmm1, %%xmm0", s); return;
+    }
+    error_tok(node->tok, "invalid expression");
+  }
+
+  char *c = int_suffix(elem->size);
+  switch (node->kind) {
+  case ND_ADD: println("  padd%s %%xmm1, %%xmm0", c); return;
+  case ND_SUB: println("  psub%s %%xmm1, %%xmm0", c); return;
+  case ND_BITAND: println("  pand %%xmm1, %%xmm0"); return;
+  case ND_BITOR: println("  por %%xmm1, %%xmm0"); return;
+  case ND_BITXOR: println("  pxor %%xmm1, %%xmm0"); return;
+  case ND_MUL:
+    if (elem->size != 2)
+      break;
+    println("  pmullw %%xmm1, %%xmm0");
+    return;
+  case ND_EQ:
+  case ND_NE:
+    if (elem->size == 8)
+      break;
+    println("  pcmpeq%s %%xmm1, %%xmm0", c);
+    if (node->kind == ND_NE) {
+      all_ones(1);
+      println("  pxor %%xmm1, %%xmm0");
+    }
+    return;
+  case ND_LT:
+  case ND_LE:
+    if (elem->size == 8 || elem->is_unsigned)
+      break;
+    if (node->kind == ND_LT) {
+      // a < b is b > a
+      println("  pcmpgt%s %%xmm0, %%xmm1", c);
+      println("  movdqa %%xmm1, %%xmm0");
+    } else {
+      // a <= b is !(a > b)
+      println("  pcmpgt%s %%xmm1, %%xmm0", c);
+      all_ones(1);
+      println("  pxor %%xmm1, %%xmm0");
+    }
+    return;
+  }
+  vector_by_element(node);
+}
+
+// -v and ~v. A floating-point element's sign bit is flipped, as for -x.
+static void gen_vector_unary(Node *node) {
+  Type *elem = node->ty->elem;
+  if (node->kind == ND_BITNOT) {
+    all_ones(1);
+    println("  pxor %%xmm1, %%xmm0");
+  } else if (is_flonum(elem)) {
+    all_ones(1);
+    println("  psll%s $%d, %%xmm1", int_suffix(elem->size), elem->size * 8 - 1);
+    println("  pxor %%xmm1, %%xmm0");
+  } else {
+    println("  pxor %%xmm1, %%xmm1");
+    println("  psub%s %%xmm0, %%xmm1", int_suffix(elem->size));
+    println("  movdqa %%xmm1, %%xmm0");
+  }
+}
+
 //---------- Constant folding ------------------------------------------------
 
 // Integer expressions made only of constants are computed here, at
@@ -1257,7 +1503,7 @@ static bool has_flonum(Type *ty, int lo, int hi, int offset) {
   // A scalar outside the range, or a float or double. (A 16-byte one,
   // like __int128, reaches into the upper half from offset 0.)
   return offset + ty->size <= lo || hi <= offset ||
-         ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
+         ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE || ty->kind == TY_VECTOR;
 }
 
 // Does `ty` have anything (not only padding) in its byte range [lo, hi)?
@@ -1289,11 +1535,29 @@ static bool has_flonum2(Type *ty) {
   return has_flonum(ty, 8, 16, 0);
 }
 
+// A struct or union of only a 16-byte vector, as `struct { __m128 v; }`,
+// is passed and returned whole in one XMM register (the psABI's classes
+// SSE and SSEUP); any other one of 16 bytes, a half in each of two.
+static bool is_vector16(Type *ty) {
+  if (ty->kind == TY_VECTOR)
+    return ty->size == 16;
+  if ((ty->kind != TY_STRUCT && ty->kind != TY_UNION) || ty->size != 16 || !ty->members)
+    return false;
+  for (Member *mem = ty->members; mem; mem = mem->next)
+    if (!is_vector16(mem->ty))
+      return false;
+  return true;
+}
+
 // Counts the registers a struct or union of 16 bytes or less needs: one
 // per 8-byte half, an XMM register if that half holds only floating-point
 // values, otherwise a general-purpose one.
 static void struct_regs(Type *ty, int *ngp, int *nfp) {
   *ngp = *nfp = 0;
+  if (is_vector16(ty)) {
+    *nfp = 1;
+    return;
+  }
   if (has_flonum1(ty))
     (*nfp)++;
   else
@@ -1339,7 +1603,7 @@ static void gen_va_arg(Node *node) {
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
     if (ty->size <= 16 && ty->size && !has_ldouble(ty) && !has_unaligned_member(ty))
       struct_regs(ty, &ngp, &nfp);
-  } else if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE) {
+  } else if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE || is_vector(ty)) {
     nfp = 1;
   } else if (ty->kind != TY_LDOUBLE) {
     ngp = is_int128(ty) ? 2 : 1;
@@ -1357,8 +1621,8 @@ static void gen_va_arg(Node *node) {
     }
 
     // Each 8-byte part, from a general-purpose or an XMM register
-    int nparts = (ty->kind == TY_STRUCT || ty->kind == TY_UNION) ? 1 + has_two_parts(ty)
-                                                                  : ngp + nfp;
+    int nparts = (ty->kind == TY_STRUCT || ty->kind == TY_UNION) && !is_vector16(ty)
+                   ? 1 + has_two_parts(ty) : ngp + nfp;
     for (int i = 0; i < nparts; i++) {
       bool fp = ty->kind == TY_STRUCT || ty->kind == TY_UNION
                   ? has_flonum(ty, i * 8, i * 8 + 8, 0) : nfp > 0;
@@ -1430,6 +1694,9 @@ static void push_args2(Node *args, bool first_pass) {
     break;
   case TY_INT128:
     push128();
+    break;
+  case TY_VECTOR:
+    push_vec(args->ty);
     break;
   default:
     push();
@@ -1510,6 +1777,14 @@ static int push_args(Node *node) {
         stack += arg->stack_pad + 2;
       }
       break;
+    case TY_VECTOR:
+      // On the stack, one of 16 bytes is 16-byte aligned
+      if (fp++ >= FP_MAX) {
+        arg->pass_by_stack = true;
+        arg->stack_pad = ty->size == 16 && stack % 2;
+        stack += arg->stack_pad + (ty->size == 16 ? 2 : 1);
+      }
+      break;
     default:
       if (gp++ >= GP_MAX) {
         arg->pass_by_stack = true;
@@ -1543,6 +1818,11 @@ static void copy_ret_buffer(Obj *var) {
 
   if (!ty->size) // an empty struct (GNU) comes back in no register
     return;
+
+  if (is_vector16(ty)) {
+    println("  movdqu %%xmm0, %d(%%rbp)", var->offset);
+    return;
+  }
 
   // One that is only a long double comes back in %st0, a long double
   // _Complex in %st0 and %st1.
@@ -1597,6 +1877,11 @@ static void copy_struct_reg(void) {
     if (is_complex(ty))
       println("  fldt 16(%%rax)");
     println("  fldt (%%rax)");
+    return;
+  }
+
+  if (is_vector16(ty)) {
+    println("  movdqu (%%rax), %%xmm0");
     return;
   }
 
@@ -1898,6 +2183,10 @@ static void gen_expr(Node *node) {
   }
   case ND_NEG:
     gen_expr(node->lhs);
+    if (is_vector(node->ty)) {
+      gen_vector_unary(node);
+      return;
+    }
 
     switch (node->ty->kind) {
     case TY_FLOAT:
@@ -2081,6 +2370,10 @@ static void gen_expr(Node *node) {
     return;
   case ND_BITNOT:
     gen_expr(node->lhs);
+    if (is_vector(node->ty)) {
+      gen_vector_unary(node);
+      return;
+    }
     println("  not %%rax");
     if (is_int128(node->ty))
       println("  not %%rdx");
@@ -2148,6 +2441,13 @@ static void gen_expr(Node *node) {
         if (arg->pass_by_stack)
           continue;
 
+        if (is_vector16(ty)) {
+          println("  movdqu (%%rsp), %%xmm%d", fp++);
+          println("  add $16, %%rsp");
+          depth -= 2;
+          break;
+        }
+
         if (has_flonum1(ty))
           popf(fp++);
         else
@@ -2176,6 +2476,10 @@ static void gen_expr(Node *node) {
           pop(argreg64[gp++]);
           pop(argreg64[gp++]);
         }
+        break;
+      case TY_VECTOR:
+        if (!arg->pass_by_stack)
+          pop_vec(ty, fp++);
         break;
       default:
         if (gp < GP_MAX)
@@ -2452,6 +2756,11 @@ static void gen_expr(Node *node) {
     println("  xchg %s, (%%rdi)", reg_ax(sz));
     return;
   }
+  }
+
+  if (is_vector(node->lhs->ty)) {
+    gen_vector_binary(node);
+    return;
   }
 
   // Binary operators on float, double and long double operands
@@ -2842,6 +3151,8 @@ static void asm_load(Type *ty, char *src, int reg) {
 
 // The instruction that moves an SSE operand of type `ty`
 static char *sse_move(Type *ty) {
+  if (is_vector(ty))
+    return vec_move(ty->size);
   if (ty->kind == TY_FLOAT)
     return "movss";
   if (ty->kind == TY_DOUBLE)
@@ -3294,6 +3605,7 @@ static void assign_lvar_offsets(Obj *prog) {
         break;
       case TY_FLOAT:
       case TY_DOUBLE:
+      case TY_VECTOR:
         if (fp++ < FP_MAX)
           continue;
         break;
@@ -3626,6 +3938,10 @@ static void emit_text(Obj *prog) {
       case TY_STRUCT:
       case TY_UNION:
         assert(ty->size <= 16);
+        if (is_vector16(ty)) {
+          println("  movdqu %%xmm%d, %d(%%rbp)", fp++, var->offset);
+          break;
+        }
         if (has_flonum(ty, 0, 8, 0))
           store_fp(fp++, var->offset, MIN(8, ty->size));
         else
@@ -3646,6 +3962,9 @@ static void emit_text(Obj *prog) {
         store_gp(gp++, var->offset, 8);
         store_gp(gp++, var->offset + 8, 8);
         break;
+      case TY_VECTOR:
+        println("  %s %%xmm%d, %d(%%rbp)", vec_move(ty->size), fp++, var->offset);
+        break;
       default:
         store_gp(gp++, var->offset, ty->size);
       }
@@ -3665,8 +3984,8 @@ static void emit_text(Obj *prog) {
       println("  mov %%rax, %d(%%rbp)", off + 16);
       for (int i = 0; i < GP_MAX; i++)
         println("  mov %s, %d(%%rbp)", argreg64[i], off + 24 + i * 8);
-      for (int i = 0; i < FP_MAX; i++)
-        println("  movsd %%xmm%d, %d(%%rbp)", i, off + 72 + i * 16);
+      for (int i = 0; i < FP_MAX; i++) // whole, for vectors
+        println("  movdqu %%xmm%d, %d(%%rbp)", i, off + 72 + i * 16);
     }
 
     // Emit code
@@ -3712,7 +4031,7 @@ enum {
   AB_UNION, AB_UNION_ANON, AB_UNION_DECL, AB_MEMBER, AB_MEMBER_ANON,
   AB_BITFIELD, AB_ARRAY, AB_SUBRANGE, AB_SUBRANGE_NOCOUNT, AB_ENUM,
   AB_ENUM_ANON, AB_ENUMERATOR, AB_SUBR, AB_SUBR_VOID, AB_SUBR_PARAM,
-  AB_VARARGS, AB_BLOCK, AB_SUBRANGE_EXPR,
+  AB_VARARGS, AB_BLOCK, AB_SUBRANGE_EXPR, AB_VECTOR,
 };
 
 // The DWARF numbers of regs64[]'s registers: %rbx, %r12 to %r15
@@ -3772,6 +4091,8 @@ static char *type_key(Type *ty) {
     return format("vla%p", ty);
   case TY_ARRAY:
     return format("[%d]%s", ty->array_len, type_key(ty->base));
+  case TY_VECTOR:
+    return format("v%d%s", ty->array_len, type_key(ty->elem));
   case TY_FUNC: {
     char *s = format("(%s", ty->return_ty->kind == TY_VOID ? "void" : type_key(ty->return_ty));
     for (Type *p = ty->params; p; p = p->next)
@@ -3890,6 +4211,13 @@ static void emit_type_die(Type *ty, char *label) {
       dw_ref(base);
     return;
   }
+  case TY_VECTOR:
+    dw_udata(AB_VECTOR);
+    dw_ref(type_die(ty->elem));
+    dw_udata(AB_SUBRANGE);
+    dw_udata(ty->array_len);
+    println("  .byte 0");
+    return;
   case TY_ARRAY:
     dw_udata(AB_ARRAY);
     dw_ref(type_die(ty->base));
@@ -4053,6 +4381,8 @@ static void emit_debug_abbrev(void) {
     AB_VARARGS, UNSPECIFIED_PARAMETERS, 0, 0, 0,
     AB_BLOCK, LEXICAL_BLOCK, 1, LOW_PC, ADDR, HIGH_PC, DATA8, 0, 0,
     AB_SUBRANGE_EXPR, SUBRANGE_TYPE, 0, COUNT, EXPRLOC, 0, 0,
+    // DW_AT_GNU_vector (0x2107, two bytes in LEB128): an array that is a vector
+    AB_VECTOR, ARRAY_TYPE, 1, 0x87, 0x42, FLAG_PRESENT, TYPE, REF4, 0, 0,
   };
 
   println("  .section .debug_abbrev,\"\",@progbits");

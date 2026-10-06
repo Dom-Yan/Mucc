@@ -74,6 +74,7 @@ test_scripts=\
 	test/link.sh "$(1) --libc=$(LIBC)" && \
 	test/attribute-layout.sh "$(1) --libc=$(LIBC)" && \
 	test/libgcc.sh "$(1) --libc=$(LIBC)" && \
+	test/intrin.sh "$(1) --libc=$(LIBC)" && \
 	test/debug.sh "$(1) --libc=$(LIBC)" && \
 	test/ar.sh $(1)
 

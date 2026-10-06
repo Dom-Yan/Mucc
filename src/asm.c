@@ -807,10 +807,22 @@ typedef enum {
   CALL,
   FIXED,    // fixed bytes: bytes[0..op-1]
   PREFIX,   // a prefix byte (op) before the rest of the statement
-  SSE,      // op xmm/mem, xmm with mandatory prefix `pre`
-  SSEMOV,   // movsd, movss
+  SSE,      // op xmm/mem, xmm with mandatory prefix `pre`. An op above
+            // 0xff is in the 0F 38 or 0F 3A map: 0x3800 | op.
+  SSE_IMM,  // the same with an imm8 first: pshufd $1, %xmm1, %xmm0. The
+            // middle operand may be a GP register (pinsrw), with REX.W if
+            // size is 8 (pinsrq).
+  SSE_CMP,  // cmpeqps and the like: cmpps with predicate ext
+  SSE_SHIFT, // psllw and the like: by xmm/mem (opcode op, or none if 0),
+            // or by an imm8 (opcode bytes[0], /ext)
+  SSE_GP,   // into a GP register from xmm (pmovmskb), and an imm8 first if
+            // there are 3 operands (pextrw)
+  SSE_EXTR, // pextrd $imm, %xmm, r/m: from xmm into a GP register or memory
+  SSEMOV,   // movss, movups, ...: load opcode op, store opcode ext (0: none)
   CVTSI,    // cvtsi2sd, cvtsi2ss (GP -> XMM)
-  CVTTSI,   // cvttsd2si, cvttss2si (XMM -> GP)
+  CVTTSI,   // cvttsd2si, cvtsd2si, ... (XMM -> GP): opcode op
+  MOVD,     // movd: between xmm and a 32-bit GP register or memory
+  CRC32,
   MOVQ,
   X87,      // x87 or MXCSR memory operand: opcode op (1 or 2 bytes), /digit ext,
             // with REX.W if size is 8
@@ -926,15 +938,139 @@ static Insn insns[] = {
   {"comisd", SSE, 0x2f, 0, 0x66}, {"comiss", SSE, 0x2f, 0, 0},
   {"xorpd", SSE, 0x57, 0, 0x66}, {"xorps", SSE, 0x57, 0, 0},
   {"pxor", SSE, 0xef, 0, 0x66},
-  {"movsd", SSEMOV, 0, 0, 0xf2}, {"movss", SSEMOV, 0, 0, 0xf3},
+  // SSE and SSE2 on packed values (mucc's vectors and <emmintrin.h>)
+  {"minpd", SSE, 0x5d, 0, 0x66}, {"minps", SSE, 0x5d, 0, 0},
+  {"maxpd", SSE, 0x5f, 0, 0x66}, {"maxps", SSE, 0x5f, 0, 0},
+  {"rcpps", SSE, 0x53, 0, 0}, {"rcpss", SSE, 0x53, 0, 0xf3},
+  {"rsqrtps", SSE, 0x52, 0, 0}, {"rsqrtss", SSE, 0x52, 0, 0xf3},
+  {"unpcklps", SSE, 0x14, 0, 0}, {"unpckhps", SSE, 0x15, 0, 0},
+  {"unpcklpd", SSE, 0x14, 0, 0x66}, {"unpckhpd", SSE, 0x15, 0, 0x66},
+  {"movhlps", SSE, 0x12, 0, 0}, {"movlhps", SSE, 0x16, 0, 0},
+  {"cvtps2pd", SSE, 0x5a, 0, 0}, {"cvtpd2ps", SSE, 0x5a, 0, 0x66},
+  {"cvtdq2ps", SSE, 0x5b, 0, 0}, {"cvtps2dq", SSE, 0x5b, 0, 0x66},
+  {"cvttps2dq", SSE, 0x5b, 0, 0xf3}, {"cvtdq2pd", SSE, 0xe6, 0, 0xf3},
+  {"cvtpd2dq", SSE, 0xe6, 0, 0xf2}, {"cvttpd2dq", SSE, 0xe6, 0, 0x66},
+  {"punpcklbw", SSE, 0x60, 0, 0x66}, {"punpcklwd", SSE, 0x61, 0, 0x66},
+  {"punpckldq", SSE, 0x62, 0, 0x66}, {"packsswb", SSE, 0x63, 0, 0x66},
+  {"pcmpgtb", SSE, 0x64, 0, 0x66}, {"pcmpgtw", SSE, 0x65, 0, 0x66},
+  {"pcmpgtd", SSE, 0x66, 0, 0x66}, {"packuswb", SSE, 0x67, 0, 0x66},
+  {"punpckhbw", SSE, 0x68, 0, 0x66}, {"punpckhwd", SSE, 0x69, 0, 0x66},
+  {"punpckhdq", SSE, 0x6a, 0, 0x66}, {"packssdw", SSE, 0x6b, 0, 0x66},
+  {"punpcklqdq", SSE, 0x6c, 0, 0x66}, {"punpckhqdq", SSE, 0x6d, 0, 0x66},
+  {"pcmpeqb", SSE, 0x74, 0, 0x66}, {"pcmpeqw", SSE, 0x75, 0, 0x66},
+  {"pcmpeqd", SSE, 0x76, 0, 0x66},
+  {"paddq", SSE, 0xd4, 0, 0x66}, {"pmullw", SSE, 0xd5, 0, 0x66},
+  {"psubusb", SSE, 0xd8, 0, 0x66}, {"psubusw", SSE, 0xd9, 0, 0x66},
+  {"pminub", SSE, 0xda, 0, 0x66}, {"pand", SSE, 0xdb, 0, 0x66},
+  {"paddusb", SSE, 0xdc, 0, 0x66}, {"paddusw", SSE, 0xdd, 0, 0x66},
+  {"pmaxub", SSE, 0xde, 0, 0x66}, {"pandn", SSE, 0xdf, 0, 0x66},
+  {"pavgb", SSE, 0xe0, 0, 0x66}, {"pavgw", SSE, 0xe3, 0, 0x66},
+  {"pmulhuw", SSE, 0xe4, 0, 0x66}, {"pmulhw", SSE, 0xe5, 0, 0x66},
+  {"psubsb", SSE, 0xe8, 0, 0x66}, {"psubsw", SSE, 0xe9, 0, 0x66},
+  {"pminsw", SSE, 0xea, 0, 0x66}, {"por", SSE, 0xeb, 0, 0x66},
+  {"paddsb", SSE, 0xec, 0, 0x66}, {"paddsw", SSE, 0xed, 0, 0x66},
+  {"pmaxsw", SSE, 0xee, 0, 0x66},
+  {"pmuludq", SSE, 0xf4, 0, 0x66}, {"pmaddwd", SSE, 0xf5, 0, 0x66},
+  {"psadbw", SSE, 0xf6, 0, 0x66}, {"maskmovdqu", SSE, 0xf7, 0, 0x66},
+  {"psubb", SSE, 0xf8, 0, 0x66}, {"psubw", SSE, 0xf9, 0, 0x66},
+  {"psubd", SSE, 0xfa, 0, 0x66}, {"psubq", SSE, 0xfb, 0, 0x66},
+  {"paddb", SSE, 0xfc, 0, 0x66}, {"paddw", SSE, 0xfd, 0, 0x66},
+  {"paddd", SSE, 0xfe, 0, 0x66},
+  {"pshufd", SSE_IMM, 0x70, 0, 0x66}, {"pshufhw", SSE_IMM, 0x70, 0, 0xf3},
+  {"pshuflw", SSE_IMM, 0x70, 0, 0xf2},
+  {"shufps", SSE_IMM, 0xc6, 0, 0}, {"shufpd", SSE_IMM, 0xc6, 0, 0x66},
+  {"cmpps", SSE_IMM, 0xc2, 0, 0}, {"cmppd", SSE_IMM, 0xc2, 0, 0x66},
+  {"cmpss", SSE_IMM, 0xc2, 0, 0xf3}, {"cmpsd", SSE_IMM, 0xc2, 0, 0xf2},
+  {"pinsrw", SSE_IMM, 0xc4, 0, 0x66},
+  {"psllw", SSE_SHIFT, 0xf1, 0, 0x66, 6, {0x71}},
+  {"pslld", SSE_SHIFT, 0xf2, 0, 0x66, 6, {0x72}},
+  {"psllq", SSE_SHIFT, 0xf3, 0, 0x66, 6, {0x73}},
+  {"psrlw", SSE_SHIFT, 0xd1, 0, 0x66, 2, {0x71}},
+  {"psrld", SSE_SHIFT, 0xd2, 0, 0x66, 2, {0x72}},
+  {"psrlq", SSE_SHIFT, 0xd3, 0, 0x66, 2, {0x73}},
+  {"psraw", SSE_SHIFT, 0xe1, 0, 0x66, 4, {0x71}},
+  {"psrad", SSE_SHIFT, 0xe2, 0, 0x66, 4, {0x72}},
+  {"pslldq", SSE_SHIFT, 0, 0, 0x66, 7, {0x73}},
+  {"psrldq", SSE_SHIFT, 0, 0, 0x66, 3, {0x73}},
+  {"pmovmskb", SSE_GP, 0xd7, 0, 0x66}, {"movmskps", SSE_GP, 0x50, 0, 0},
+  {"movmskpd", SSE_GP, 0x50, 0, 0x66}, {"pextrw", SSE_GP, 0xc5, 0, 0x66},
+  {"movsd", SSEMOV, 0x10, 0, 0xf2, 0x11}, {"movss", SSEMOV, 0x10, 0, 0xf3, 0x11},
+  {"movups", SSEMOV, 0x10, 0, 0, 0x11}, {"movupd", SSEMOV, 0x10, 0, 0x66, 0x11},
+  {"movaps", SSEMOV, 0x28, 0, 0, 0x29}, {"movapd", SSEMOV, 0x28, 0, 0x66, 0x29},
+  {"movdqu", SSEMOV, 0x6f, 0, 0xf3, 0x7f}, {"movdqa", SSEMOV, 0x6f, 0, 0x66, 0x7f},
+  {"movlps", SSEMOV, 0x12, 0, 0, 0x13}, {"movhps", SSEMOV, 0x16, 0, 0, 0x17},
+  {"movlpd", SSEMOV, 0x12, 0, 0x66, 0x13}, {"movhpd", SSEMOV, 0x16, 0, 0x66, 0x17},
+  {"movntps", SSEMOV, 0, 0, 0, 0x2b}, {"movntpd", SSEMOV, 0, 0, 0x66, 0x2b},
+  {"movntdq", SSEMOV, 0, 0, 0x66, 0xe7},
+  {"movd", MOVD},
+  // SSE3
+  {"addsubps", SSE, 0xd0, 0, 0xf2}, {"addsubpd", SSE, 0xd0, 0, 0x66},
+  {"haddps", SSE, 0x7c, 0, 0xf2}, {"haddpd", SSE, 0x7c, 0, 0x66},
+  {"hsubps", SSE, 0x7d, 0, 0xf2}, {"hsubpd", SSE, 0x7d, 0, 0x66},
+  {"movshdup", SSE, 0x16, 0, 0xf3}, {"movsldup", SSE, 0x12, 0, 0xf3},
+  {"movddup", SSE, 0x12, 0, 0xf2}, {"lddqu", SSE, 0xf0, 0, 0xf2},
+  // SSSE3
+  {"pshufb", SSE, 0x3800, 0, 0x66}, {"phaddw", SSE, 0x3801, 0, 0x66},
+  {"phaddd", SSE, 0x3802, 0, 0x66}, {"phaddsw", SSE, 0x3803, 0, 0x66},
+  {"pmaddubsw", SSE, 0x3804, 0, 0x66}, {"phsubw", SSE, 0x3805, 0, 0x66},
+  {"phsubd", SSE, 0x3806, 0, 0x66}, {"phsubsw", SSE, 0x3807, 0, 0x66},
+  {"psignb", SSE, 0x3808, 0, 0x66}, {"psignw", SSE, 0x3809, 0, 0x66},
+  {"psignd", SSE, 0x380a, 0, 0x66}, {"pmulhrsw", SSE, 0x380b, 0, 0x66},
+  {"pabsb", SSE, 0x381c, 0, 0x66}, {"pabsw", SSE, 0x381d, 0, 0x66},
+  {"pabsd", SSE, 0x381e, 0, 0x66}, {"palignr", SSE_IMM, 0x3a0f, 0, 0x66},
+  // SSE4.1. pblendvb, blendvps and blendvpd take %xmm0 as a third operand,
+  // written first or left out.
+  {"pblendvb", SSE, 0x3810, 0, 0x66}, {"blendvps", SSE, 0x3814, 0, 0x66},
+  {"blendvpd", SSE, 0x3815, 0, 0x66}, {"ptest", SSE, 0x3817, 0, 0x66},
+  {"pmovsxbw", SSE, 0x3820, 0, 0x66}, {"pmovsxbd", SSE, 0x3821, 0, 0x66},
+  {"pmovsxbq", SSE, 0x3822, 0, 0x66}, {"pmovsxwd", SSE, 0x3823, 0, 0x66},
+  {"pmovsxwq", SSE, 0x3824, 0, 0x66}, {"pmovsxdq", SSE, 0x3825, 0, 0x66},
+  {"pmuldq", SSE, 0x3828, 0, 0x66}, {"pcmpeqq", SSE, 0x3829, 0, 0x66},
+  {"movntdqa", SSE, 0x382a, 0, 0x66}, {"packusdw", SSE, 0x382b, 0, 0x66},
+  {"pmovzxbw", SSE, 0x3830, 0, 0x66}, {"pmovzxbd", SSE, 0x3831, 0, 0x66},
+  {"pmovzxbq", SSE, 0x3832, 0, 0x66}, {"pmovzxwd", SSE, 0x3833, 0, 0x66},
+  {"pmovzxwq", SSE, 0x3834, 0, 0x66}, {"pmovzxdq", SSE, 0x3835, 0, 0x66},
+  {"pminsb", SSE, 0x3838, 0, 0x66}, {"pminsd", SSE, 0x3839, 0, 0x66},
+  {"pminuw", SSE, 0x383a, 0, 0x66}, {"pminud", SSE, 0x383b, 0, 0x66},
+  {"pmaxsb", SSE, 0x383c, 0, 0x66}, {"pmaxsd", SSE, 0x383d, 0, 0x66},
+  {"pmaxuw", SSE, 0x383e, 0, 0x66}, {"pmaxud", SSE, 0x383f, 0, 0x66},
+  {"pmulld", SSE, 0x3840, 0, 0x66}, {"phminposuw", SSE, 0x3841, 0, 0x66},
+  {"roundps", SSE_IMM, 0x3a08, 0, 0x66}, {"roundpd", SSE_IMM, 0x3a09, 0, 0x66},
+  {"roundss", SSE_IMM, 0x3a0a, 0, 0x66}, {"roundsd", SSE_IMM, 0x3a0b, 0, 0x66},
+  {"blendps", SSE_IMM, 0x3a0c, 0, 0x66}, {"blendpd", SSE_IMM, 0x3a0d, 0, 0x66},
+  {"pblendw", SSE_IMM, 0x3a0e, 0, 0x66},
+  {"pinsrb", SSE_IMM, 0x3a20, 0, 0x66}, {"insertps", SSE_IMM, 0x3a21, 0, 0x66},
+  {"pinsrd", SSE_IMM, 0x3a22, 0, 0x66}, {"pinsrq", SSE_IMM, 0x3a22, 8, 0x66},
+  {"dpps", SSE_IMM, 0x3a40, 0, 0x66}, {"dppd", SSE_IMM, 0x3a41, 0, 0x66},
+  {"mpsadbw", SSE_IMM, 0x3a42, 0, 0x66},
+  {"pextrb", SSE_EXTR, 0x3a14, 0, 0x66}, {"pextrd", SSE_EXTR, 0x3a16, 0, 0x66},
+  {"pextrq", SSE_EXTR, 0x3a16, 8, 0x66}, {"extractps", SSE_EXTR, 0x3a17, 0, 0x66},
+  // SSE4.2, AES and carry-less multiplication
+  {"pcmpgtq", SSE, 0x3837, 0, 0x66},
+  {"pcmpestrm", SSE_IMM, 0x3a60, 0, 0x66}, {"pcmpestri", SSE_IMM, 0x3a61, 0, 0x66},
+  {"pcmpistrm", SSE_IMM, 0x3a62, 0, 0x66}, {"pcmpistri", SSE_IMM, 0x3a63, 0, 0x66},
+  {"crc32", CRC32}, {"crc32b", CRC32, 0, 1}, {"crc32w", CRC32, 0, 2},
+  {"crc32l", CRC32, 0, 4}, {"crc32q", CRC32, 0, 8},
+  {"aesimc", SSE, 0x38db, 0, 0x66}, {"aesenc", SSE, 0x38dc, 0, 0x66},
+  {"aesenclast", SSE, 0x38dd, 0, 0x66}, {"aesdec", SSE, 0x38de, 0, 0x66},
+  {"aesdeclast", SSE, 0x38df, 0, 0x66},
+  {"aeskeygenassist", SSE_IMM, 0x3adf, 0, 0x66}, {"pclmulqdq", SSE_IMM, 0x3a44, 0, 0x66},
+  {"emms", FIXED, 2, .bytes = {0x0f, 0x77}},
+  {"prefetchnta", X87, 0x0f18, .ext = 0}, {"prefetcht0", X87, 0x0f18, .ext = 1},
+  {"prefetcht1", X87, 0x0f18, .ext = 2}, {"prefetcht2", X87, 0x0f18, .ext = 3},
+  {"prefetchw", X87, 0x0f0d, .ext = 1},
   {"cvtsi2sd", CVTSI, 0, 0, 0xf2}, {"cvtsi2sdl", CVTSI, 0, 4, 0xf2},
   {"cvtsi2sdq", CVTSI, 0, 8, 0xf2},
   {"cvtsi2ss", CVTSI, 0, 0, 0xf3}, {"cvtsi2ssl", CVTSI, 0, 4, 0xf3},
   {"cvtsi2ssq", CVTSI, 0, 8, 0xf3},
-  {"cvttsd2si", CVTTSI, 0, 0, 0xf2}, {"cvttsd2sil", CVTTSI, 0, 4, 0xf2},
-  {"cvttsd2siq", CVTTSI, 0, 8, 0xf2},
-  {"cvttss2si", CVTTSI, 0, 0, 0xf3}, {"cvttss2sil", CVTTSI, 0, 4, 0xf3},
-  {"cvttss2siq", CVTTSI, 0, 8, 0xf3},
+  {"cvttsd2si", CVTTSI, 0x2c, 0, 0xf2}, {"cvttsd2sil", CVTTSI, 0x2c, 4, 0xf2},
+  {"cvttsd2siq", CVTTSI, 0x2c, 8, 0xf2},
+  {"cvttss2si", CVTTSI, 0x2c, 0, 0xf3}, {"cvttss2sil", CVTTSI, 0x2c, 4, 0xf3},
+  {"cvttss2siq", CVTTSI, 0x2c, 8, 0xf3},
+  {"cvtsd2si", CVTTSI, 0x2d, 0, 0xf2}, {"cvtsd2sil", CVTTSI, 0x2d, 4, 0xf2},
+  {"cvtsd2siq", CVTTSI, 0x2d, 8, 0xf2},
+  {"cvtss2si", CVTTSI, 0x2d, 0, 0xf3}, {"cvtss2sil", CVTTSI, 0x2d, 4, 0xf3},
+  {"cvtss2siq", CVTTSI, 0x2d, 8, 0xf3},
   {"movq", MOVQ},
   {"flds", X87, 0xd9, .ext = 0}, {"fldl", X87, 0xdd, .ext = 0},
   {"fldt", X87, 0xdb, .ext = 5},
@@ -969,11 +1105,24 @@ static struct { char *name; int cc; } conds[] = {
   {"le", 14}, {"ng", 14}, {"g", 15}, {"nle", 15},
 };
 
+// cmpps's predicates, as in cmpltps: cmpps $1
+static char *cmp_preds[] = {"eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord"};
+
 static HashMap insn_map;
 
 static void init_tables(void) {
   if (insn_map.capacity)
     return;
+  for (int i = 0; i < 8; i++) {
+    static char *types[] = {"ps", "pd", "ss", "sd"};
+    static int pres[] = {0, 0x66, 0xf3, 0xf2};
+    for (int j = 0; j < 4; j++) {
+      Insn *insn = calloc(1, sizeof(Insn));
+      *insn = (Insn){format("cmp%s%s", cmp_preds[i], types[j]), SSE_CMP, 0xc2, 0,
+                     pres[j], i};
+      hashmap_put(&insn_map, insn->name, insn);
+    }
+  }
   for (int i = 0; i < sizeof(regs) / sizeof(*regs); i++)
     hashmap_put(&reg_map, regs[i].name, &regs[i]);
   for (int i = 0; i < sizeof(insns) / sizeof(*insns); i++)
@@ -1248,14 +1397,28 @@ static void encode_call(Operand *ops, int n) {
 }
 
 // An SSE instruction `op src, dst` where dst is an XMM register, like
-// addsd: [prefix] [REX] 0F op ModRM.
-static void encode_sse(int pre, bool w, int op, Operand *reg, Operand *rm) {
+// addsd: [prefix] [REX] 0F [38 or 3A] op ModRM, and `imm` bytes of
+// immediate after it.
+static void encode_sse_imm(int pre, bool w, int op, int reg, Operand *rm, int imm) {
   if (pre)
     out(pre);
-  rex(w, reg->reg->num, rm, false);
+  rex(w, reg, rm, needs_rex(rm));
   out(0x0f);
-  out(op);
-  modrm(reg->reg->num, rm, 0);
+  if (op > 0xff)
+    out(op >> 8);
+  out(op & 0xff);
+  modrm(reg, rm, imm);
+}
+
+static void encode_sse(int pre, bool w, int op, Operand *reg, Operand *rm) {
+  encode_sse_imm(pre, w, op, reg->reg->num, rm, 0);
+}
+
+// The imm8 operand of an SSE instruction
+static void sse_imm8(Operand *op) {
+  if (op->kind != OP_IMM || op->sym)
+    fail("expected a number");
+  out(op->val & 0xff);
 }
 
 // Encodes one instruction: mnemonic `name` (`len` chars), operands at p.
@@ -1484,20 +1647,95 @@ static void instruction(char *name, int len) {
       out(insn->bytes[i]);
     return;
   case SSE:
+    // pblendvb %xmm0, %xmm1, %xmm2: %xmm0 is implied
+    if (n == 3 && is_xmm(&ops[0]) && ops[0].reg->num == 0) {
+      ops[0] = ops[1];
+      ops[1] = ops[2];
+      n = 2;
+    }
     if (n != 2 || !is_xmm(&ops[1]))
       fail("expected an XMM destination");
     encode_sse(insn->pre, false, insn->op, &ops[1], &ops[0]);
     return;
+  case SSE_IMM:
+    if (n != 3 || !is_xmm(&ops[2]))
+      fail("expected an immediate and an XMM destination");
+    encode_sse_imm(insn->pre, insn->size == 8, insn->op, ops[2].reg->num, &ops[1], 1);
+    sse_imm8(&ops[0]);
+    return;
+  case SSE_CMP:
+    if (n != 2 || !is_xmm(&ops[1]))
+      fail("expected an XMM destination");
+    encode_sse_imm(insn->pre, false, insn->op, ops[1].reg->num, &ops[0], 1);
+    out(insn->ext);
+    return;
+  case SSE_SHIFT:
+    if (n != 2 || !is_xmm(&ops[1]))
+      fail("expected an XMM destination");
+    if (ops[0].kind == OP_IMM) {
+      encode_sse_imm(insn->pre, false, insn->bytes[0], insn->ext, &ops[1], 1);
+      sse_imm8(&ops[0]);
+      return;
+    }
+    if (!insn->op)
+      fail("expected a number as the count");
+    encode_sse(insn->pre, false, insn->op, &ops[1], &ops[0]);
+    return;
+  case SSE_GP: {
+    // [$imm,] %xmm, %r32 (or %r64, the same)
+    Operand *src = &ops[n - 2], *dst = &ops[n - 1];
+    if ((n != 2 && n != 3) || !is_gp(dst) || dst->reg->size < 4 || !is_xmm(src))
+      fail("expected an XMM source and a 32- or 64-bit register destination");
+    encode_sse_imm(insn->pre, false, insn->op, dst->reg->num, src, n == 3);
+    if (n == 3)
+      sse_imm8(&ops[0]);
+    return;
+  }
+  case SSE_EXTR: {
+    // $imm, %xmm, r/m: the xmm is in ModRM.reg
+    if (n != 3 || !is_xmm(&ops[1]) || is_xmm(&ops[2]))
+      fail("expected an immediate, an XMM source and a register or memory destination");
+    encode_sse_imm(insn->pre, insn->size == 8, insn->op, ops[1].reg->num, &ops[2], 1);
+    sse_imm8(&ops[0]);
+    return;
+  }
   case SSEMOV:
     if (n != 2)
       fail("expected 2 operands");
-    if (is_xmm(&ops[1]))
-      encode_sse(insn->pre, false, 0x10, &ops[1], &ops[0]); // load or reg-reg
-    else if (is_xmm(&ops[0]) && ops[1].kind == OP_MEM)
-      encode_sse(insn->pre, false, 0x11, &ops[0], &ops[1]); // store
+    if (is_xmm(&ops[1]) && insn->op)
+      encode_sse(insn->pre, false, insn->op, &ops[1], &ops[0]); // load or reg-reg
+    else if (is_xmm(&ops[0]) && ops[1].kind == OP_MEM && insn->ext)
+      encode_sse(insn->pre, false, insn->ext, &ops[0], &ops[1]); // store
     else
       fail("unsupported operands");
     return;
+  case MOVD:
+    // A 64-bit register makes it movq, as GNU as has it.
+    if (n != 2)
+      fail("expected 2 operands");
+    if (is_xmm(&ops[1]) && !is_xmm(&ops[0])) {
+      bool w = is_gp(&ops[0]) && ops[0].reg->size == 8;
+      encode_sse(0x66, w, 0x6e, &ops[1], &ops[0]);
+      return;
+    }
+    if (is_xmm(&ops[0]) && !is_xmm(&ops[1])) {
+      bool w = is_gp(&ops[1]) && ops[1].reg->size == 8;
+      encode_sse(0x66, w, 0x7e, &ops[0], &ops[1]);
+      return;
+    }
+    fail("unsupported operands");
+  case CRC32: {
+    // crc32 r/m, %r32 or %r64: the size of the source
+    if (n != 2 || !is_gp(&ops[1]) || ops[1].reg->size < 4)
+      fail("expected a 32- or 64-bit register destination");
+    int size = insn->size ? insn->size : is_gp(&ops[0]) ? ops[0].reg->size : 0;
+    if (!size)
+      fail("can't tell the operand size");
+    if (size == 2)
+      out(0x66);
+    encode_sse(0xf2, ops[1].reg->size == 8, size == 1 ? 0x38f0 : 0x38f1, &ops[1], &ops[0]);
+    return;
+  }
   case CVTSI: {
     if (n != 2 || !is_xmm(&ops[1]))
       fail("expected an XMM destination");
@@ -1511,7 +1749,7 @@ static void instruction(char *name, int len) {
     if (n != 2 || !is_gp(&ops[1]))
       fail("expected a register destination");
     int size = insn->size ? insn->size : ops[1].reg->size;
-    encode_sse(insn->pre, size == 8, 0x2c, &ops[1], &ops[0]);
+    encode_sse(insn->pre, size == 8, insn->op, &ops[1], &ops[0]);
     return;
   }
   case MOVQ:
@@ -1525,8 +1763,15 @@ static void instruction(char *name, int len) {
       encode_sse(0x66, true, 0x7e, &ops[0], &ops[1]);
       return;
     }
-    if (is_xmm(&ops[0]) || is_xmm(&ops[1]))
-      fail("unsupported operands");
+    // The low 8 bytes, from xmm or memory (the rest zeroed), or to memory
+    if (is_xmm(&ops[1])) {
+      encode_sse(0xf3, false, 0x7e, &ops[1], &ops[0]);
+      return;
+    }
+    if (is_xmm(&ops[0])) {
+      encode_sse(0x66, false, 0xd6, &ops[0], &ops[1]);
+      return;
+    }
     encode_mov(&(Insn){"movq", MOV, 0, 8}, ops, n);
     return;
   case X87:

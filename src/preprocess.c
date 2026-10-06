@@ -1869,6 +1869,16 @@ void init_macros(void) {
   define_macro("__volatile__", "volatile");
   define_macro("__x86_64", "1");
   define_macro("__x86_64__", "1");
+
+  // The instruction set extensions every x86-64 CPU has, as gcc defines
+  // them; include/*intrin.h has their intrinsics (see mmintrin.h).
+  define_macro("__MMX__", "1");
+  define_macro("__SSE__", "1");
+  define_macro("__SSE2__", "1");
+  define_macro("__FXSR__", "1");
+  define_macro("__SSE_MATH__", "1");
+  define_macro("__SSE2_MATH__", "1");
+  define_macro("__MMX_WITH_SSE__", "1");
   define_macro("__VERSION__", "\"mucc " MUCC_VERSION "\"");
 
   // As clang does, mucc says it is gcc 4.2, so headers take their GNU
