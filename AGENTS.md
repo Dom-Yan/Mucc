@@ -33,8 +33,9 @@ read, and that pull request will be closed.
 - mucc is feature complete. Changes should make it faster, smaller, clearer
   or more correct. Do not add features unless the maintainer asked for one.
 - Run `make test-all` before proposing any change; it must pass.
-- mucc compiles itself, so `src/` may only use C that mucc supports: no
-  K&R definitions or `asm` with operands.
+- mucc compiles itself, and each release is built by the one before it
+  (see `test/bootstrap.sh`), so `src/` may only use C that the latest
+  release compiles. CI's "The latest release builds this" step checks.
 - Add a test in `test/` for every fix or feature.
 - Match the surrounding code's style and comment density.
 - Put new code in the section of its file where it belongs; the guide at

@@ -558,6 +558,7 @@ struct Type {
   Type *params;
   bool is_variadic;
   bool is_oldstyle; // `int f()` before C23: any arguments, but not `int f(...)`
+  Token *kr_names; // `f(a, b)`, as a K&R definition has: its parameter names
   Type *next;
 };
 

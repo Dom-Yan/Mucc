@@ -1352,6 +1352,23 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     return func_type(ty);
   }
 
+  // A K&R definition's `f(a, b)`: only names, typed by the declarations
+  // before its body (see kr_params()). To a caller, it's `f()`.
+  if (tok->kind == TK_IDENT && !is_typename(tok) &&
+      (equal(tok->next, ",") || equal(tok->next, ")"))) {
+    Token *names = tok;
+    while (!equal(tok->next, ")")) {
+      tok = skip(tok->next, ",");
+      if (tok->kind != TK_IDENT)
+        error_tok(tok, "expected a parameter name");
+    }
+    *rest = tok->next->next;
+    ty = func_type(ty);
+    ty->is_variadic = ty->is_oldstyle = true;
+    ty->kr_names = names;
+    return ty;
+  }
+
   Type head = {};
   Type *cur = &head;
   bool is_variadic = false;
@@ -8544,6 +8561,68 @@ static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr) {
 
 // C23 allows unnamed parameters in a definition, as in `int f(int) {...}`;
 // they still get a stack slot, just no name.
+// The declarations of a K&R definition's parameters, before its body:
+// `f(a, b) char *a; { ... }`, where b, not declared, is an int. Each is
+// passed promoted, a char as an int and a float as a double, so that is
+// its parameter's type; `decl` gets each one's declared type, which the
+// body sees (see function()).
+static Type *kr_params(Token **rest, Token *tok, Type *fn_ty, Type ***decl) {
+  int n = 1;
+  for (Token *t = fn_ty->kr_names; !equal(t->next, ")"); t = t->next->next)
+    n++;
+  Token **names = arena_alloc(n * sizeof(Token *));
+  Type **types = arena_alloc(n * sizeof(Type *));
+  Token *t = fn_ty->kr_names;
+  for (int i = 0; i < n; i++, t = t->next->next)
+    names[i] = t;
+
+  while (!equal(tok, "{")) {
+    VarAttr attr = {};
+    Type *basety = declspec(&tok, tok, &attr);
+    do {
+      Type *ty = declarator(&tok, tok, basety, NULL);
+      int i = 0;
+      while (i < n && !(ty->name && equal(names[i], get_ident(ty->name))))
+        i++;
+      if (i == n)
+        error_tok(ty->name ? ty->name : tok, "declaration of a parameter that isn't in the list");
+      if (types[i])
+        error_tok(ty->name, "redeclaration of parameter '%s'", get_ident(ty->name));
+      types[i] = ty;
+    } while (consume(&tok, tok, ","));
+    tok = skip(tok, ";");
+  }
+  *rest = tok;
+
+  Type head = {};
+  Type *cur = &head;
+  for (int i = 0; i < n; i++) {
+    Type *ty = types[i] ? types[i] : ty_int;
+    if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+      ty = pointer_to(ty->base);
+    else if (ty->kind == TY_FUNC)
+      ty = pointer_to(ty);
+    types[i] = ty;
+
+    Type *passed = ty;
+    if (ty->kind == TY_FLOAT)
+      passed = ty_double;
+    else if (is_integer(ty) && ty->size < 4)
+      passed = ty_int;
+    cur = cur->next = copy_type(passed);
+    cur->name = names[i];
+
+    Obj *var = arena_alloc(sizeof(Obj));
+    var->name = get_ident(names[i]);
+    var->ty = cur;
+    var->align = cur->align;
+    var->is_local = true;
+    cur->param_var = var;
+  }
+  *decl = types;
+  return head.next;
+}
+
 static void create_param_lvars(Type *param) {
   if (!param)
     return;
@@ -8620,6 +8699,12 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   Type *ty = declarator(&tok, tok, basety, &da);
   if (!ty->name)
     error_tok(ty->name_pos, "function name omitted");
+
+  // A K&R definition's parameters, declared before its body
+  Type *params = ty->params;
+  Type **kr_decl = NULL;
+  if (ty->kr_names && !equal(tok, ";") && !equal(tok, ","))
+    params = kr_params(&tok, tok, ty, &kr_decl);
   char *name_str = get_ident(ty->name);
   bool is_noreturn = attr->is_noreturn || da.is_noreturn;
 
@@ -8729,7 +8814,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   locals = NULL;
   current_block = NULL;
   enter_scope();
-  create_param_lvars(ty->params);
+  create_param_lvars(params);
 
   // A buffer for a struct/union return value is passed
   // as the hidden first parameter.
@@ -8739,7 +8824,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
 
   fn->params = locals;
 
-  if (ty->is_variadic)
+  if (ty->is_variadic && !kr_decl)
     fn->va_area = new_lvar("__va_area__", array_of(ty_char, 200));
   fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
 
@@ -8748,12 +8833,26 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   // parsed, since pointer arithmetic on `m` uses that size.
   Node vla_head = {};
   Node *vla_cur = &vla_head;
-  for (Type *param = ty->params; param; param = param->next)
+  for (Type *param = params; param; param = param->next)
     if (param->base && is_variably_modified(param->base)) {
       vla_cur = vla_cur->next =
         new_unary(ND_EXPR_STMT, compute_vla_size(param, tok), tok);
       add_type(vla_cur);
     }
+
+  // A K&R parameter declared narrower than it's passed, like a char or a
+  // float, is a local of its declared type, set from it on entry.
+  int i = 0;
+  for (Type *param = params; kr_decl && param; param = param->next, i++) {
+    Type *decl = kr_decl[i];
+    if (decl->kind == param->kind && decl->size == param->size)
+      continue;
+    Obj *var = new_lvar(param->param_var->name, decl);
+    Node *set = new_binary(ND_ASSIGN, new_var_node(var, tok),
+                           new_cast(new_var_node(param->param_var, tok), decl), tok);
+    vla_cur = vla_cur->next = new_unary(ND_EXPR_STMT, set, tok);
+    add_type(vla_cur);
+  }
 
   tok = skip(tok, "{");
 
