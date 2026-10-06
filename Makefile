@@ -200,9 +200,10 @@ build/files.o: mucc build/files.s
 	./mucc -c -o $@ build/files.s
 
 # It's compiled by mucc and linked against musl too, a static program
-# that runs on any x86-64 Linux.
+# that runs on any x86-64 Linux. Releases link it with LDFLAGS_SINGLE=-s,
+# which strips it.
 build/mucc: $(OBJNAMES:%=build/obj/%) build/files.o
-	./mucc --libc=mucc -o $@ $^
+	./mucc --libc=mucc $(LDFLAGS_SINGLE) -o $@ $^
 
 build/obj/%.o: mucc src/%.c src/mucc.h $(MUSL_BUILD)/lib/libc.a
 	mkdir -p build/obj
@@ -215,6 +216,11 @@ test-single: build/mucc
 # the single binary alone in an empty root, then run. See test/programs.sh.
 test-programs: build/mucc
 	test/programs.sh build/mucc
+
+# build/mucc, as stage 1 with no gcc or binutils, builds itself again,
+# byte for byte. A release is built this way from the one before it.
+test-bootstrap: build/mucc
+	test/bootstrap.sh build/mucc
 
 # Install
 
@@ -245,4 +251,4 @@ clean:
 	rm -f $(filter-out test/asm-forms.s,$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
-.PHONY: test clean test-stage2 selfhost install uninstall difftest libc test-libc test-single test-programs
+.PHONY: test clean test-stage2 selfhost install uninstall difftest libc test-libc test-single test-programs test-bootstrap

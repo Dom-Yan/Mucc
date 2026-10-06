@@ -4,7 +4,8 @@ name: Release
 # origin v1.0.0) builds the single binary from the tagged commit, checks
 # the exact file that is published, and attaches it to a GitHub Release
 # with its size and SHA-256 checksum. It only goes ahead if CI (every
-# test, on every distribution) passed on that commit.
+# test, on every distribution) passed on that commit. It is built by the
+# previous release (see below), so no gcc or binutils take part.
 
 on:
   push:
@@ -31,11 +32,34 @@ jobs:
             exit 1
           fi
 
-      - name: Build the single binary, stripped
+      # A release is built by the one before it. Only when that one can't
+      # compile this source (it lacks a feature mucc's source now uses)
+      # does gcc build a first stage, once: tag with a message that has a
+      # line "bootstrap: gcc". Either way the binary is the same bytes
+      # (test/bootstrap.sh, which CI runs).
+      - name: The compiler to build it with
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          make -j"$(nproc)" mucc && make libc && make build/mucc
-          cp build/mucc mucc-x86_64-linux
-          strip mucc-x86_64-linux
+          git fetch -f origin "$GITHUB_REF:$GITHUB_REF"
+          mkdir boot
+          if git for-each-ref "$GITHUB_REF" --format='%(contents)' | grep -qx 'bootstrap: gcc'; then
+            make -j"$(nproc)" mucc && make libc && make build/mucc
+            cp build/mucc boot/mucc
+            echo "BOOT=mucc, bootstrapped from gcc once (the previous release can't compile this source)" >> "$GITHUB_ENV"
+          else
+            prev=$(gh release view --json tagName -q .tagName)
+            gh release download "$prev" --dir boot \
+              --pattern mucc-x86_64-linux --pattern mucc-x86_64-linux.sha256
+            (cd boot && sha256sum -c mucc-x86_64-linux.sha256)
+            mv boot/mucc-x86_64-linux boot/mucc && chmod +x boot/mucc
+            echo "BOOT=mucc $prev, with no gcc or binutils" >> "$GITHUB_ENV"
+          fi
+
+      # With gcc, as, ld, ar and strip made to fail, so only mucc takes part
+      - name: Build the single binary with mucc only, stripped
+        run: |
+          test/bootstrap.sh boot/mucc mucc-x86_64-linux -s
           sha256sum mucc-x86_64-linux > mucc-x86_64-linux.sha256
 
       # Every check runs on mucc-x86_64-linux itself, the file published.
@@ -53,7 +77,7 @@ jobs:
           with its headers and C library (musl) inside it. Download it,
           \`chmod +x\` it, and \`./mucc-x86_64-linux -o hello hello.c\`.
 
-          Built from commit $GITHUB_SHA.
+          Built from commit $GITHUB_SHA by $BOOT.
           Size: $size bytes. SHA-256: \`$sum\`"
           gh release create "$GITHUB_REF_NAME" mucc-x86_64-linux \
             mucc-x86_64-linux.sha256 --title "mucc $GITHUB_REF_NAME" \

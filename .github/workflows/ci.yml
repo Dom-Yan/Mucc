@@ -60,6 +60,21 @@ jobs:
       - name: The single binary on other distributions
         run: test/distros.sh build/mucc
 
+      # With no gcc or binutils, build/mucc builds itself, the same bytes.
+      - name: Bootstrap
+        run: make test-bootstrap
+
+      # Whether the next release can be built by the latest one. If not,
+      # its tag needs "bootstrap: gcc" (see release.yml).
+      - name: The latest release builds this
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --dir latest --pattern mucc-x86_64-linux
+          chmod +x latest/mucc-x86_64-linux
+          test/bootstrap.sh latest/mucc-x86_64-linux latest/next
+
   # On each distribution, with no C compiler, binutils or C headers, the
   # single binary builds zlib, Lua, Tcl, SQLite and mucc, and each passes
   # its own tests (test/thirdparty/distros.sh). About half an hour each.

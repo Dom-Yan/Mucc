@@ -14,7 +14,7 @@ Website: <https://dom-yan.github.io/Mucc/>
 
 - **Fast builds.** It compiles about 2.4x faster than `gcc -O0` and 10x
   faster than `gcc -O2`.
-- **Nothing to install.** One 11 MB file is the whole toolchain. It works in
+- **Nothing to install.** One 8.5 MB file is the whole toolchain. It works in
   an empty container, on old distributions and on machines with no compiler.
 - **Small enough to read.** About 24,000 lines of C that you can understand
   end to end.
@@ -78,6 +78,11 @@ build/mucc --version
 This takes about 15 seconds. Copy `build/mucc` anywhere, for example over
 `~/.local/bin/mucc`.
 
+Releases are built this way, by the release before them, with gcc and
+binutils made to fail so nothing else can take part:
+`test/bootstrap.sh mucc out/mucc -s` does the same. Whichever compiler
+starts the chain, the result is the same bytes (`make test-bootstrap`).
+
 ### With gcc
 
 Install the build tools first:
@@ -121,7 +126,7 @@ for no `sudo`), and `make uninstall` removes it.
 | | |
 | --- | --- |
 | Source | 23,772 lines of C in 13 files |
-| Released binary | about 11 MB, with musl and Linux's headers inside |
+| Released binary | about 8.5 MB, with musl and Linux's headers inside |
 | Compiling its own source | 0.45 s (gcc `-O0`: 1.07 s, gcc `-O2`: 4.33 s) |
 | Tests | 53 programs with 2,302 assertions, 8 Linux programs with 166 checks, plus 432 command-line, error, assembler, linker and debugger checks |
 | Real programs | CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC, QuickJS (its 9 test files pass), the kilo text editor |
