@@ -502,6 +502,120 @@ static void store_unit(int unit) {
   }
 }
 
+// A wide bit-field: an __int128 one, or a packed one over 8 bytes (a
+// long at an odd bit). Its unit, 16 bytes or (packed) fewer, goes in
+// %rdx:%rax, as the two above do for the others.
+static bool is_wide(Member *mem) {
+  return is_int128(mem->ty) || mem->unit > 8;
+}
+
+static void load_unit128(int unit, char *addr) {
+  if (unit == 16) {
+    load_from(ty_int128, addr);
+    return;
+  }
+  println("  lea %s, %%rcx", addr);
+  println("  xor %%eax, %%eax");
+  println("  xor %%edx, %%edx");
+  for (int i = unit - 1; i >= 0; i--) {
+    println("  shld $8, %%rax, %%rdx");
+    println("  shl $8, %%rax");
+    println("  mov %d(%%rcx), %%al", i);
+  }
+}
+
+static void store_unit128(int unit) {
+  if (unit == 16) {
+    println("  mov %%rax, (%%rdi)");
+    println("  mov %%rdx, 8(%%rdi)");
+    return;
+  }
+  for (int i = 0; i < unit; i++) {
+    println("  mov %%al, %d(%%rdi)", i);
+    println("  shrd $8, %%rdx, %%rax");
+    println("  shr $8, %%rdx");
+  }
+}
+
+// Shifts %rdx:%rax by a constant, for __int128 bit-fields.
+static void shl128(int n) {
+  if (n >= 64) {
+    println("  mov %%rax, %%rdx");
+    if (n > 64)
+      println("  shl $%d, %%rdx", n - 64);
+    println("  xor %%eax, %%eax");
+  } else if (n > 0) {
+    println("  shld $%d, %%rax, %%rdx", n);
+    println("  shl $%d, %%rax", n);
+  }
+}
+
+static void shr128(int n, bool is_signed) {
+  char *shr = is_signed ? "sar" : "shr";
+  if (n >= 64) {
+    println("  mov %%rdx, %%rax");
+    if (n > 64)
+      println("  %s $%d, %%rax", shr, n - 64);
+    if (is_signed)
+      println("  sar $63, %%rdx");
+    else
+      println("  xor %%edx, %%edx");
+  } else if (n > 0) {
+    println("  shrd $%d, %%rdx, %%rax", n);
+    println("  %s $%d, %%rdx", shr, n);
+  }
+}
+
+static void load_bitfield_unit(Member *mem, char *addr) {
+  if (is_wide(mem))
+    load_unit128(mem->unit, addr);
+  else
+    load_unit(mem->unit, addr);
+}
+
+// Leaves a bit-field's value in its unit, in %rax or %rdx:%rax, extended
+// as its type says.
+static void extract_bitfield(Member *mem) {
+  bool is_signed = !mem->ty->is_unsigned && mem->ty->kind != TY_BOOL; // a _Bool is 0 or 1
+  if (is_wide(mem)) {
+    shl128(128 - mem->bit_width - mem->bit_offset);
+    shr128(128 - mem->bit_width, is_signed);
+    return;
+  }
+  println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
+  println("  %s $%d, %%rax", is_signed ? "sar" : "shr", 64 - mem->bit_width);
+}
+
+// Stores the value in %rdx:%rax (only %rax is set for a narrow one) to a
+// wide bit-field at the address on the stack top, and leaves the
+// value the field now holds, as gen_expr's ND_ASSIGN does for others.
+static void store_bitfield128(Member *mem) {
+  int w = mem->bit_width;
+  println("  mov %%rax, %%r10");
+  println("  mov %%rdx, %%r11");
+  shl128(128 - w); // cut to its width, then moved to its place
+  shr128(128 - w - mem->bit_offset, false);
+  println("  mov %%rax, %%r8");
+  println("  mov %%rdx, %%r9");
+
+  println("  mov (%%rsp), %%rax");
+  load_unit128(mem->unit, "(%rax)");
+  unsigned __int128 mask = ~(unsigned __int128)0 >> (128 - w) << mem->bit_offset;
+  println("  mov $%ld, %%rcx", (long)~(uint64_t)mask);
+  println("  and %%rcx, %%rax");
+  println("  mov $%ld, %%rcx", (long)~(uint64_t)(mask >> 64));
+  println("  and %%rcx, %%rdx");
+  println("  or %%r8, %%rax");
+  println("  or %%r9, %%rdx");
+  pop("%rdi");
+  store_unit128(mem->unit);
+
+  println("  mov %%r10, %%rax");
+  println("  mov %%r11, %%rdx");
+  shl128(128 - w);
+  shr128(128 - w, !mem->ty->is_unsigned);
+}
+
 // Copies `size` bytes from (%rax) to (%rdi), with rep movsb, which takes
 // %rsi, %rdi and %rcx. %rax stays.
 static void copy_bytes(int64_t size) {
@@ -2240,7 +2354,7 @@ static void gen_expr(Node *node) {
       gen_addr(node);
       if (!is_aggregate(node->ty)) {
         if (mem->is_bitfield)
-          load_unit(mem->unit, "(%rax)");
+          load_bitfield_unit(mem, "(%rax)");
         else
           load_from(node->ty, "(%rax)");
       }
@@ -2256,18 +2370,13 @@ static void gen_expr(Node *node) {
       }
       // A bit-field's whole unit, not its promoted type (see add_type())
       if (mem->is_bitfield)
-        load_unit(mem->unit, addr);
+        load_bitfield_unit(mem, addr);
       else
         load_from(node->ty, addr);
     }
 
-    if (mem->is_bitfield) {
-      println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
-      if (mem->ty->is_unsigned || mem->ty->kind == TY_BOOL) // a _Bool is 0 or 1
-        println("  shr $%d, %%rax", 64 - mem->bit_width);
-      else
-        println("  sar $%d, %%rax", 64 - mem->bit_width);
-    }
+    if (mem->is_bitfield)
+      extract_bitfield(mem);
     return;
   }
   case ND_DEREF:
@@ -2292,6 +2401,10 @@ static void gen_expr(Node *node) {
     gen_expr(node->rhs);
 
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
+      if (is_wide(node->lhs->member)) {
+        store_bitfield128(node->lhs->member);
+        return;
+      }
       println("  mov %%rax, %%r8");
 
       // If the lhs is a bitfield, we need to read the current value
@@ -2306,7 +2419,7 @@ static void gen_expr(Node *node) {
       println("  shl $%d, %%rdi", mem->bit_offset);
 
       println("  mov (%%rsp), %%rax");
-      load_unit(mem->unit, "(%rax)");
+      load_bitfield_unit(mem, "(%rax)");
 
       println("  mov $%ld, %%r9", (long)~(bits << mem->bit_offset));
       println("  and %%r9, %%rax");

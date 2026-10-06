@@ -3015,10 +3015,22 @@ static void write_buf(char *buf, uint64_t val, int sz) {
 static void write_bitfield(Initializer *init, Member *mem, char *buf) {
   if (!init || !init->expr)
     return;
+  Node *expr = new_cast(init->expr, mem->ty);
+  unsigned __int128 val;
+  if (is_int128(mem->ty)) {
+    if (!is_const_int128(expr))
+      error_tok(init->expr->tok, "not a compile-time constant");
+    val = eval128(expr);
+  } else {
+    val = (uint64_t)eval(expr);
+  }
+
+  // A unit is up to 16 bytes (see is_wide() in cgen.c).
+  unsigned __int128 mask = ~(unsigned __int128)0 >> (128 - mem->bit_width);
+  val = (val & mask) << mem->bit_offset;
   char *loc = buf + mem->offset;
-  uint64_t mask = mem->bit_width == 64 ? -1 : (1UL << mem->bit_width) - 1;
-  uint64_t val = (eval(new_cast(init->expr, mem->ty)) & mask) << mem->bit_offset;
-  write_buf(loc, read_buf(loc, mem->unit) | val, mem->unit);
+  for (int i = 0; i < mem->unit; i++)
+    loc[i] |= val >> (i * 8);
 }
 
 static Relocation *
@@ -5499,8 +5511,6 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       mem->idx = idx++;
 
       if (consume(&tok, tok, ":")) {
-        if (is_int128(mem->ty))
-          error_tok(tok, "a bit-field of type __int128 is not supported");
         if (is_complex(mem->ty))
           error_tok(tok, "a bit-field can't be complex");
         mem->is_bitfield = true;
@@ -5635,9 +5645,9 @@ static bool is_loose(Type *ty) {
 }
 
 // Then each named bit-field's unit is the smallest one (1, 2, 4 or 8
-// bytes, unaligned if need be) that holds all of it and lies inside the
-// struct, or else the 3, 5, 6 or 7 bytes it covers, which cgen.c loads
-// and stores a byte at a time.
+// bytes, or 16 for __int128, unaligned if need be) that holds all of it
+// and lies inside the struct, or else the odd number of bytes it covers,
+// which cgen.c loads and stores a byte at a time.
 static void place_loose_bitfields(Type *ty) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (!mem->is_bitfield || !mem->name)
@@ -5647,11 +5657,12 @@ static void place_loose_bitfields(Type *ty) {
     mem->offset = start / 8;
     mem->bit_offset = start % 8;
     mem->unit = (mem->bit_offset + mem->bit_width + 7) / 8;
-    if (mem->unit > 8)
-      error_tok(mem->name, "a packed bit-field spanning more than 8 bytes"
+    if (mem->unit > 16)
+      error_tok(mem->name, "a packed bit-field spanning more than 16 bytes"
                 " is not supported");
 
-    for (int sz = 1; sz <= 8; sz *= 2) {
+    int max = is_int128(mem->ty) ? 16 : 8;
+    for (int sz = 1; sz <= max; sz *= 2) {
       int64_t off = MIN(start / 8, ty->size - sz);
       if (off >= 0 && start + mem->bit_width <= (off + sz) * 8) {
         mem->offset = off;

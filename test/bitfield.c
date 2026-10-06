@@ -18,6 +18,12 @@ struct { int a:3; int :5; int b:4; int :0; int c; } g48 = {1, 2, 3}, g49 = {.c =
 struct { _Bool b : 1; _Bool c : 1; int i : 5; unsigned u : 3; _Bool d : 1; } bool_bf = {2, 0.5, 2.7, 9, 256};
 struct { long l : 40; unsigned long ul : 50; } long_bf = {-1.5, 1e15};
 
+// A packed long bit-field at an odd bit spans 9 bytes.
+#pragma pack(1)
+struct pk9 { char c; int a : 4; long b : 61; char d; };
+#pragma pack()
+struct pk9 g_pk9 = {1, -2, -3, 4};
+
 int main() {
   ASSERT(4, sizeof(struct {int x:1; }));
   ASSERT(8, sizeof(struct {long x:1; }));
@@ -117,6 +123,12 @@ int main() {
   ASSERT(1, bool_bf.d);
   ASSERT(-1, long_bf.l);
   ASSERT(1, long_bf.ul == 1000000000000000);
+
+  ASSERT(11, sizeof(struct pk9));
+  ASSERT(-3, g_pk9.b);
+  ASSERT(1, ({ struct pk9 s = g_pk9; s.b = (1L << 60) - 1; s.b == (1L << 60) - 1 && s.a == -2 && s.c == 1 && s.d == 4; }));
+  ASSERT(1, ({ struct pk9 s = g_pk9; s.b += 1L << 59; s.b == (1L << 59) - 3 && s.d == 4; }));
+  ASSERT(1, ({ struct pk9 s = g_pk9; (s.b = 1L << 60) == -(1L << 60); }));
 
   printf("OK\n");
   return 0;

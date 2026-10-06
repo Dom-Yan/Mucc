@@ -38,6 +38,22 @@ static i128 va_sum(int n, ...) {
 
 struct S { char c; i128 x; };
 
+// Bit-fields, laid out as gcc does (sizes and offsets from gcc)
+struct B {
+  i128 a : 20;
+  u128 b : 32;
+  i128 c : 40;
+  u128 d : 64; // straddles 128 bits, so it starts the next unit
+  i128 e : 100;
+  u128 f : 70;
+};
+struct P { char x; i128 a : 3; i128 b : 90; char y; } __attribute__((packed));
+struct Q { char x; i128 a : 65; char y; };
+union U { u128 all; u128 f : 100; };
+
+struct B gb = {-5, 7, -3, -1, -((i128)1 << 98), 1};
+struct P gp = {1, -2, ((i128)1 << 88) + 3, 4};
+
 static i128 member(struct S s) { return s.x + s.c; }
 
 static struct S make_s(i128 x) { return (struct S){1, x}; }
@@ -235,6 +251,43 @@ int main() {
   ASSERT(1, ({ u128 x = mk(9, 0); x /= 3; x %= mk(2, 0); same(x, 1, 0); }));
   ASSERT(1, ({ struct S s; s.x = mk(4, 5); s.x *= 2; same(s.x, 8, 10); }));
   ASSERT(1, ({ i128 x = 5, y = x--; same(y, 0, 5) && same(x, 0, 4); }));
+
+  // Bit-fields
+  ASSERT(64, sizeof(struct B));
+  ASSERT(16, _Alignof(struct B));
+  ASSERT(14, sizeof(struct P));
+  ASSERT(16, sizeof(struct Q));
+  ASSERT(10, __builtin_offsetof(struct Q, y));
+  ASSERT(16, sizeof(union U));
+  ASSERT(4, ({ struct B s; sizeof(s.a + 0); }));
+  ASSERT(4, ({ struct B s; sizeof(s.b + 0); }));
+  ASSERT(16, ({ struct B s; sizeof(s.c + 0); }));
+  ASSERT(1, ({ struct B s; s.b = -1; s.b + 1 == 0; })); // unsigned int
+  ASSERT(-5, gb.a);
+  ASSERT(7, gb.b);
+  ASSERT(-3, gb.c);
+  ASSERT(1, same(gb.d, 0, -1));
+  ASSERT(1, same(gb.e, -(1L << 34), 0));
+  ASSERT(1, same(gb.f, 0, 1));
+  ASSERT(1, gp.x);
+  ASSERT(-2, gp.a);
+  ASSERT(1, same(gp.b, 1 << 24, 3));
+  ASSERT(4, gp.y);
+  ASSERT(1, ({ struct B s = {0}; s.e = -1; same(s.e, -1, -1) && s.d == 0 && s.f == 0; }));
+  ASSERT(1, ({ struct B s = {0}; s.f = -1; same(s.f, 63, -1) && s.e == 0; }));
+  ASSERT(1, ({ struct B s = {0}; same(s.f = mk(-1, 5), 63, 5); }));
+  ASSERT(1, ({ struct B s = {0}; same(s.e = mk(16, 0), 16, 0); }));
+  ASSERT(1, ({ struct B s = {0}; same(s.e = mk(1L << 35, 0), -(1L << 35), 0); })); // bit 99 is the sign
+  ASSERT(1, ({ struct B s = {0}; s.c = (1L << 39) - 1; s.c++; same(s.c, -1, -(1L << 39)); }));
+  ASSERT(1, ({ struct B s = {0}; s.f = mk(0, -1); s.f += 1; same(s.f, 1, 0); }));
+  ASSERT(1, ({ struct B s = {0}; s.f = 0; s.f--; same(s.f, 63, -1); }));
+  ASSERT(1, ({ struct B s = {0}; s.e = 3; s.e *= mk(1, 0); same(s.e, 3, 0) && s.f == 0; }));
+  ASSERT(1, ({ struct B s = {0}; s.a = -1; s.a == -1 && s.b == 0; }));
+  ASSERT(1, ({ struct P s = gp; s.b = mk(0x3ffffff, -1); same(s.b, -1, -1) && s.a == -2 && s.y == 4; }));
+  ASSERT(1, ({ struct P s = gp; s.b = -7; s.b += 2; same(s.b, -1, -5) && s.x == 1 && s.y == 4; }));
+  ASSERT(1, ({ struct Q s = {9, -1, 8}; same(s.a, -1, -1) && s.x == 9 && s.y == 8; }));
+  ASSERT(1, ({ struct Q s = {9, 0, 8}; s.a = mk(1, 0); same(s.a, -1, 0) && s.y == 8; }));
+  ASSERT(1, ({ union U u = {0}; u.f = -1; same(u.all, (1L << 36) - 1, -1); }));
 
   printf("OK\n");
   return 0;

@@ -967,8 +967,8 @@ expect_error "1:18: error: _Atomic __int128 is not supported" <<'EOF'
 _Atomic __int128 x;
 EOF
 
-expect_error "1:25: error: a bit-field of type __int128 is not supported" <<'EOF'
-struct S { __int128 a : 3; };
+expect_error "1:57: error: a packed bit-field spanning more than 16 bytes is not supported" <<'EOF'
+struct __attribute__((packed)) S { char c : 3; __int128 a : 128; };
 EOF
 
 expect_error "2:26: error: not a compile-time constant" <<'EOF'
@@ -1202,12 +1202,6 @@ EOF
 
 expect_error "1:14: error: #pragma pack takes 1, 2, 4, 8 or 16" <<'EOF'
 #pragma pack(3)
-EOF
-
-# A packed bit-field is loaded and stored in at most 8 bytes.
-expect_error "2:34: error: a packed bit-field spanning more than 8 bytes is not supported" <<'EOF'
-#pragma pack(1)
-struct s { char c; int a:4; long b:61; };
 EOF
 
 # An enumerator can't reuse a name from its own scope, but may hide one
