@@ -22,6 +22,7 @@ bool opt_w; // -w: no warnings
 StringArray opt_warnings; // -Wall, -Wno-format, ... without the -W, in order
 bool opt_g; // -g: debug info for variables and types (see cgen.c)
 bool opt_fcommon = true;
+char *opt_fvisibility; // -fvisibility=hidden and so on: definitions' default
 bool opt_fpic;
 bool opt_asm_cpp; // preprocessing assembly (.S), not C
 int opt_std = 2017; // -std=: 1989, 1999, 2011, 2017 or 2023 (C17 by default, as gcc 14)
@@ -441,7 +442,7 @@ static char *ignored_options[] = {
   "-fomit-frame-pointer", "-fno-strict-aliasing", "-fstrict-aliasing",
   "-fstack-protector*", "-fno-stack-protector", "-fstack-clash-protection",
   "-fno-stack-clash-protection", "-fcf-protection*", "-fno-plt", "-fplt",
-  "-fvisibility=*", "-ffunction-sections", "-fdata-sections",
+  "-ffunction-sections", "-fdata-sections",
   "-fno-function-sections", "-fno-data-sections",
   "-fwrapv", "-fno-strict-overflow", "-fno-delete-null-pointer-checks",
   "-fno-math-errno", "-fexceptions", "-fno-exceptions",
@@ -627,6 +628,15 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-fno-common")) {
       opt_fcommon = false;
+      continue;
+    }
+
+    if (!strncmp(argv[i], "-fvisibility=", 13)) {
+      char *v = argv[i] + 13;
+      if (strcmp(v, "default") && strcmp(v, "hidden") && strcmp(v, "protected") &&
+          strcmp(v, "internal"))
+        error("unrecognized visibility value '%s'", v);
+      opt_fvisibility = v;
       continue;
     }
 

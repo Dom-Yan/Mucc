@@ -715,5 +715,6 @@ extern StringArray opt_warnings;
 extern bool opt_fpic;
 extern bool opt_asm_cpp;
 extern bool opt_fcommon;
+extern char *opt_fvisibility;
 extern int opt_std;
 extern char *base_file;

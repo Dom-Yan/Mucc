@@ -935,6 +935,16 @@ int main(void) { double complex z = 1 + 2 * I; return creal(z) + cimag(conj(z)) 
   $mucc -o $tmp/opt/cp -xc - && $tmp/opt/cp
 check 'creal, cimag and conj without -lm'
 
+# -fvisibility=hidden: definitions are hidden unless the attribute says
+# otherwise; declarations of others' symbols aren't touched.
+printf 'int f(void) { return 1; }\nint x = 2;\n__attribute__((visibility("default"))) int g(void) { return 3; }\nint h(void);\nint k(void) { return h(); }\n' > $tmp/vis.c
+$mucc -fvisibility=hidden -S -o $tmp/vis.s $tmp/vis.c &&
+  grep -q '\.hidden f$' $tmp/vis.s && grep -q '\.hidden x$' $tmp/vis.s &&
+  ! grep -q '\.hidden g$' $tmp/vis.s && ! grep -q '\.hidden h$' $tmp/vis.s &&
+  $mucc -S -o $tmp/vis2.s $tmp/vis.c && ! grep -q '\.hidden' $tmp/vis2.s &&
+  ! $mucc -fvisibility=secret -S -o $tmp/vis3.s $tmp/vis.c 2> /dev/null
+check '-fvisibility'
+
 # __builtin_trap() traps (SIGILL), unlike __builtin_unreachable()
 echo 'int main(void) { __builtin_trap(); return 0; }' > $tmp/trap.c
 $mucc -o $tmp/trap $tmp/trap.c && { $tmp/trap; [ $? -eq 132 ]; } 2> /dev/null

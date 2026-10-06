@@ -3828,7 +3828,8 @@ static bool is_weak(Obj *prog, Obj *var) {
   return false;
 }
 
-// `.local`, `.globl` or `.weak`, and `.hidden` and so on
+// `.local`, `.globl` or `.weak`, and `.hidden` and so on: as the
+// visibility attribute says, or else -fvisibility.
 static void emit_binding(Obj *prog, Obj *var) {
   if (var->is_static)
     println("  .local %s", var->name);
@@ -3837,8 +3838,9 @@ static void emit_binding(Obj *prog, Obj *var) {
   else
     println("  .globl %s", var->name);
 
-  if (!var->is_static && var->visibility && strcmp(var->visibility, "default"))
-    println("  .%s %s", var->visibility, var->name);
+  char *vis = var->visibility ? var->visibility : opt_fvisibility;
+  if (!var->is_static && vis && strcmp(vis, "default"))
+    println("  .%s %s", vis, var->name);
 }
 
 // Weak declarations that are used: a missing definition is then 0, not a
