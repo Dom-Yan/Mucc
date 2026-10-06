@@ -3408,6 +3408,8 @@ static void emit_data(Obj *prog) {
       println("  .align %d", align);
       println("%s:", var->name);
 
+      // Runs of zeros as .zero, other bytes 16 to a line: a big array
+      // with a few values set is a few lines.
       Relocation *rel = var->rel;
       int pos = 0;
       while (pos < size) {
@@ -3415,9 +3417,25 @@ static void emit_data(Obj *prog) {
           println("  .quad %s%+ld", *rel->label, rel->addend);
           rel = rel->next;
           pos += 8;
-        } else {
-          println("  .byte %d", var->init_data[pos++]);
+          continue;
         }
+
+        int end = rel ? rel->offset : size;
+        int n = 0;
+        while (pos + n < end && !var->init_data[pos + n])
+          n++;
+        if (n >= 8) {
+          println("  .zero %d", n);
+          pos += n;
+          continue;
+        }
+
+        char buf[16 * 5 + 1], *p = buf;
+        n = MIN(16, end - pos);
+        for (int i = 0; i < n; i++)
+          p += sprintf(p, i ? ",%d" : "%d", var->init_data[pos + i]);
+        println("  .byte %s", buf);
+        pos += n;
       }
       continue;
     }

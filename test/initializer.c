@@ -71,6 +71,16 @@ static struct FlexInit flex_init = {3, "flex"};
 struct FlexInit flex_init2 = {1, "abcdefgh"};
 int after_flex_init = 77;
 
+// A designator after a string sets one of its chars; a string after a
+// designator sets them all. Elements nothing sets are zero, and cost
+// nothing: a big array with a few values compiles at once.
+struct StrDesg { char s[4]; int n; };
+struct StrDesg str_desg1 = {.s = "abc", .s[1] = 'X'};
+struct StrDesg str_desg2 = {.s[1] = 'X', .s = "ab"};
+static int big_sparse[1000000] = {[999999] = 5, [3] = 2};
+char str_nul[8] = "ab\0cd";
+int count_desg[] = {[5] = 1, 2, [1 ... 3] = (int)(7.5), sizeof(int[2][3])};
+
 int main() {
   ASSERT(1, neg1 == -4);
   ASSERT(1, neg2 == -4UL);
@@ -333,6 +343,28 @@ int main() {
   ASSERT(0, strcmp(flex_init2.s, "abcdefgh"));
   ASSERT(0, strcmp(flex_init.s, "flex"));
   ASSERT(77, after_flex_init);
+
+  ASSERT(0, strcmp(str_desg1.s, "aXc"));
+  ASSERT(0, strcmp(str_desg2.s, "ab"));
+  ASSERT(0, str_desg2.s[3]);
+  ASSERT(0, ({ struct StrDesg x = {.s = "abc", .s[1] = 'X'}; strcmp(x.s, "aXc"); }));
+  ASSERT(0, ({ struct StrDesg x = {.s[1] = 'X', .s = "ab"}; strcmp(x.s, "ab"); }));
+  ASSERT(0, ({ struct StrDesg x = {.s[1] = 'X', .s = "ab"}; x.s[3]; }));
+  ASSERT(5, big_sparse[999999]);
+  ASSERT(2, big_sparse[3]);
+  ASSERT(0, big_sparse[4]);
+  ASSERT(4000000, sizeof big_sparse);
+  ASSERT(99, str_nul[3]);
+  ASSERT(0, str_nul[7]);
+  ASSERT(99, ({ char s[8] = "ab\0cd"; s[3]; }));
+  ASSERT(0, ({ char s[8] = "ab\0cd"; s[2] + s[5] + s[7]; }));
+  ASSERT(7, sizeof count_desg / sizeof *count_desg);
+  ASSERT(7, count_desg[3]);
+  ASSERT(24, count_desg[4]);
+  ASSERT(2, count_desg[6]);
+  ASSERT(7, ({ int a[] = {[5] = 1, 2, [1 ... 3] = g5 + 2, sizeof(int[2][3])}; sizeof a / sizeof *a; }));
+  ASSERT(7, ({ int a[] = {[5] = 1, 2, [1 ... 3] = g5 + 2, sizeof(int[2][3])}; a[2]; }));
+  ASSERT(0, ({ char e[2][4] = {"ab", [1] = "cd"}; strcmp(e[1], "cd"); }));
 
   printf("OK\n");
   return 0;

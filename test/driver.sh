@@ -261,6 +261,11 @@ check 'attribute nocommon'
 echo 'int foo __attribute__((common));' | $mucc -fno-common -S -o- -xc - | grep -q '\.comm foo'
 check 'attribute common'
 
+# Data: runs of zeros as .zero, other bytes 16 to a line
+echo 'int a[1000] = {[999] = 1};' | $mucc -S -o- -xc - | grep -A2 '^a:' | tr -d '\n ' |
+  grep -q '^a:\.zero3996\.byte1,0,0,0$'
+check 'zeros in data as .zero'
+
 # -include
 echo foo > $tmp/out.h
 echo bar | $mucc -include $tmp/out.h -E -o- -xc - | grep -q -z 'foo.*bar'
