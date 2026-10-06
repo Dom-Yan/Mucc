@@ -2340,11 +2340,11 @@ static void string_initializer(Token **rest, Token *tok, Initializer *init) {
 // fit or an operator follows the last: they are a list then.
 static bool embed_init(Token **rest, Token *tok, Initializer *init, int64_t i) {
   if (tok->kind != TK_EMBED || !is_integer(init->ty->base) ||
-      i + tok->val > init->ty->array_len || !(equal(tok->next, ",") || equal(tok->next, "}")))
+      i + tok->embed->len > init->ty->array_len || !(equal(tok->next, ",") || equal(tok->next, "}")))
     return false;
 
   // It overrides elements set before it.
-  for (int j = 0; init->children && j < tok->val; j++)
+  for (int j = 0; init->children && j < tok->embed->len; j++)
     init->children[i + j] = NULL;
 
   EmbedRun *run = arena_alloc(sizeof(EmbedRun));
@@ -2361,7 +2361,7 @@ static bool embed_init(Token **rest, Token *tok, Initializer *init, int64_t i) {
 
 // Byte `j` of #embed run `run` as an element of type `ty`
 static uint8_t embed_elem(EmbedRun *run, int j, Type *ty) {
-  uint8_t b = run->tok->str[j];
+  uint8_t b = run->tok->embed->data[j];
   return ty->kind == TY_BOOL ? b != 0 : b;
 }
 
@@ -2549,7 +2549,7 @@ static int64_t count_array_init_elements(Token *tok, Type *ty) {
     if (scalar) {
       // #embed's bytes are as many elements (see embed_init()).
       if (tok->kind == TK_EMBED) {
-        i += tok->val - 1;
+        i += tok->embed->len - 1;
         tok = tok->next;
       }
       tok = skip_scalar_init(tok);
@@ -2591,7 +2591,7 @@ static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
 
     Token *embed = tok;
     if (embed_init(&tok, tok, init, i)) {
-      i += embed->val - 1;
+      i += embed->embed->len - 1;
       continue;
     }
 
@@ -2621,7 +2621,7 @@ static void array_initializer2(Token **rest, Token *tok, Initializer *init, int6
 
     Token *embed = tok;
     if (embed_init(&tok, tok, init, i)) {
-      i += embed->val - 1;
+      i += embed->embed->len - 1;
       continue;
     }
 
@@ -2924,7 +2924,7 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
       }
     }
     for (EmbedRun *run = init->embeds; run; run = run->next) {
-      for (int j = 0; j < run->tok->val; j++) {
+      for (int j = 0; j < run->tok->embed->len; j++) {
         InitDesg desg2 = {desg, run->idx + j};
         Node *lhs = init_desg_expr(&desg2, tok);
         Node *rhs = new_binary(ND_ASSIGN, lhs, new_num(embed_elem(run, j, ty->base), tok), tok);
@@ -3064,7 +3064,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int64_t
         write_buf(buf + offset + sz * i, str_elem(init, i), sz);
     }
     for (EmbedRun *run = init->embeds; run; run = run->next)
-      for (int j = 0; j < run->tok->val; j++)
+      for (int j = 0; j < run->tok->embed->len; j++)
         write_buf(buf + offset + sz * (run->idx + j), embed_elem(run, j, ty->base), sz);
     for (int64_t i = 0; init->children && i < ty->array_len; i++)
       cur = write_gvar_data(cur, init->children[i], ty->base, buf, offset + sz * i);
@@ -6831,7 +6831,7 @@ static Node *fp_builtin(Token *start, Node **args) {
     while (t->origin)
       t = t->origin;
     if (equal(start, "__builtin_LINE"))
-      return new_num(t->line_no + t->file->line_delta, tok);
+      return new_num(t->line_no, tok);
     char *file = t->file->display_name;
     return new_var_node(new_string_literal(file, array_of(ty_char, strlen(file) + 1)), tok);
   }
@@ -7730,10 +7730,8 @@ static char *fill_complex_text(char *text, int i) {
 // at the line of `use`, its first call, for the debug info.
 static void define_helper(Obj *fn, char *text, Token *use) {
   Token *tok = tokenize(new_file("<built-in>", use->file->file_no, text));
-  for (Token *t = tok; t; t = t->next) {
+  for (Token *t = tok; t; t = t->next)
     t->line_no = use->line_no;
-    t->line_delta = use->line_delta;
-  }
   convert_pp_tokens(tok);
 
   Scope *saved = scope;

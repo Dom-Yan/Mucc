@@ -3,7 +3,12 @@ make="make -j$(nproc)"
 # single binary).
 mucc=${MUCC:-`pwd`/mucc}
 
-dir=$(basename -s .git $repo)
+# A project is a git $repo, or a release tarball at $url with its $sha256.
+if [ -n "$url" ]; then
+    dir=$(basename $url | sed 's/\.tar\..*//')
+else
+    dir=$(basename -s .git $repo)
+fi
 
 set -e -x
 
@@ -11,5 +16,14 @@ set -e -x
 # thirdparty/ folder is for vendored code that is committed.
 mkdir -p test/thirdparty/work
 cd test/thirdparty/work
-[ -d $dir ] || git clone $repo
+if [ -n "$url" ]; then
+    if [ ! -d $dir ]; then
+        curl -fsSLo $dir.tar.download $url
+        echo "$sha256  $dir.tar.download" | sha256sum -c
+        tar xf $dir.tar.download
+        rm $dir.tar.download
+    fi
+else
+    [ -d $dir ] || git clone $repo
+fi
 cd $dir

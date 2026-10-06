@@ -98,6 +98,16 @@ static Token *new_eof(Token *tok) {
   return t;
 }
 
+// Gives `tok` what #line says for its file: the file name, and, once,
+// the difference to add to its line number.
+static void set_line(Token *tok) {
+  tok->filename = tok->file->display_name;
+  if (!tok->has_line) {
+    tok->line_no += tok->file->line_delta;
+    tok->has_line = true;
+  }
+}
+
 static Hideset *new_hideset(char *name) {
   Hideset *hs = arena_alloc(sizeof(Hideset));
   hs->name = name;
@@ -984,8 +994,7 @@ static bool expand_macro(Token **rest, Token *tok) {
 
   // The expansion's tokens point back to `tok` (their origin), which -E
   // uses to put them on the line `tok` came from.
-  tok->line_delta = tok->file->line_delta;
-  tok->filename = tok->file->display_name;
+  set_line(tok);
 
   // Built-in dynamic macro application such as __LINE__
   if (m->handler) {
@@ -1332,29 +1341,29 @@ static EmbedArgs read_embed_args(Token *tok, Token *hash) {
 }
 
 // Reads up to `limit` bytes (or all, if -1) of the file.
-static unsigned char *read_embed_file(EmbedArgs *args, size_t *len) {
+static EmbedBytes *read_embed_file(EmbedArgs *args) {
   FILE *fp = fopen(args->path, "rb");
   if (!fp)
     error_tok(args->name_tok, "%s: cannot open file: %s", args->path, strerror(errno));
 
   size_t cap = 4096;
   size_t n = 0;
-  unsigned char *buf = malloc(cap);
+  EmbedBytes *buf = malloc(sizeof(EmbedBytes) + cap);
 
   while (args->limit < 0 || n < args->limit) {
     if (n == cap)
-      buf = realloc(buf, cap *= 2);
+      buf = realloc(buf, sizeof(EmbedBytes) + (cap *= 2));
     size_t want = cap - n;
     if (args->limit >= 0 && want > args->limit - n)
       want = args->limit - n;
-    size_t got = fread(buf + n, 1, want, fp);
+    size_t got = fread(buf->data + n, 1, want, fp);
     if (got == 0)
       break;
     n += got;
   }
 
   fclose(fp);
-  *len = n;
+  buf->len = n;
   return buf;
 }
 
@@ -1387,8 +1396,7 @@ static Token *embed(Token *hash, Token *tok) {
     error_tok(args.name_tok, "%s: cannot open file: No such file or directory",
               args.name);
 
-  size_t len;
-  unsigned char *bytes = read_embed_file(&args, &len);
+  EmbedBytes *bytes = read_embed_file(&args);
 
   // List each embedded file once in -M output.
   static HashMap embedded;
@@ -1397,7 +1405,7 @@ static Token *embed(Token *hash, Token *tok) {
     add_input_file(args.path, "");
   }
 
-  if (len == 0)
+  if (bytes->len == 0)
     return splice(args.if_empty, rest);
 
   // The bytes are one token, as a list "1,2,3" would be millions: an
@@ -1409,8 +1417,7 @@ static Token *embed(Token *hash, Token *tok) {
   bytes_tok->kind = TK_EMBED;
   bytes_tok->at_bol = hash->at_bol;
   bytes_tok->has_space = hash->has_space;
-  bytes_tok->str = (char *)bytes;
-  bytes_tok->val = len;
+  bytes_tok->embed = bytes;
   bytes_tok->next = splice(args.suffix, rest);
   return splice(args.prefix, bytes_tok);
 }
@@ -1419,13 +1426,13 @@ static Token *embed(Token *hash, Token *tok) {
 // place: for its bytes as anything other than an initializer's elements.
 void expand_embed(Token *tok) {
   // Each byte takes at most 4 characters ("255,").
-  unsigned char *bytes = (unsigned char *)tok->str;
-  char *text = malloc(tok->val * 4 + 1);
+  EmbedBytes *bytes = tok->embed;
+  char *text = malloc(bytes->len * 4 + 1);
   char *p = text;
-  for (int64_t i = 0; i < tok->val; i++) {
+  for (int64_t i = 0; i < bytes->len; i++) {
     if (i > 0)
       *p++ = ',';
-    int b = bytes[i];
+    int b = bytes->data[i];
     if (b >= 100)
       *p++ = '0' + b / 100;
     if (b >= 10)
@@ -1441,7 +1448,7 @@ void expand_embed(Token *tok) {
   for (Token *t = nums; t->kind != TK_EOF; t = t->next) {
     t->filename = tok->filename;
     t->line_no = tok->line_no;
-    t->line_delta = tok->line_delta;
+    t->has_line = tok->has_line;
     t->at_bol = false;
     t->has_space = false;
     t->pack = tok->pack;
@@ -1466,8 +1473,9 @@ static int has_embed(Token **rest, Token *tok) {
 
   // An empty file or limit(0) embeds nothing.
   args.limit = args.limit < 0 ? 1 : MIN(args.limit, 1);
-  size_t len;
-  free(read_embed_file(&args, &len));
+  EmbedBytes *bytes = read_embed_file(&args);
+  int64_t len = bytes->len;
+  free(bytes);
   return len ? 1 : 2;
 }
 
@@ -1510,8 +1518,7 @@ static Token *preprocess2(Token *tok) {
 
     // Pass through if it is not a "#".
     if (!is_hash(tok)) {
-      tok->line_delta = tok->file->line_delta;
-      tok->filename = tok->file->display_name;
+      set_line(tok);
       tok->pack = pack;
       tok->diag = diag_state;
       cur = cur->next = tok;
@@ -1706,8 +1713,7 @@ static Token *preprocess2(Token *tok) {
       for (tok = start; tok == start || !tok->at_bol; tok = tok->next) {
         if (tok->kind == TK_EOF)
           break;
-        tok->line_delta = tok->file->line_delta;
-        tok->filename = tok->file->display_name;
+        set_line(tok);
         cur = cur->next = tok;
       }
       continue;
@@ -1795,7 +1801,8 @@ static Token *file_name_macro(Token *tmpl) {
 static Token *line_macro(Token *tmpl) {
   while (tmpl->origin)
     tmpl = tmpl->origin;
-  int i = tmpl->line_no + tmpl->file->line_delta;
+  set_line(tmpl);
+  int i = tmpl->line_no;
   return new_num_token(i, tmpl);
 }
 
@@ -2105,11 +2112,6 @@ Token *preprocess(Token *tok) {
   tok = preprocess2(tok);
   if (cond_incl)
     error_tok(cond_incl->tok, "unterminated conditional directive");
-
-  // Before anything else can report an error, so the line agrees with
-  // the file name #line gave.
-  for (Token *t = tok; t; t = t->next)
-    t->line_no += t->line_delta;
 
   // Assembly (.S) keeps its tokens as written: `1b` is a label, not a C
   // number.

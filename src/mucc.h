@@ -123,31 +123,38 @@ typedef struct {
   int line_delta;
 } File;
 
+// #embed's bytes, which a TK_EMBED token holds
+typedef struct {
+  int64_t len;
+  unsigned char data[];
+} EmbedBytes;
+
 // Token type. There is one for each token of every file and macro
-// expansion, which is millions for a big file, so it is kept small: 96
+// expansion, which is millions for a big file, so it is kept small: 80
 // bytes.
 typedef struct Token Token;
 struct Token {
   TokenKind kind;   // Token kind
   int len;          // Token length
   Token *next;      // Next token
-  int64_t val;      // If kind is TK_NUM, its value; TK_EMBED: the bytes' count
   char *loc;        // Token location
   Type *ty;         // Used if TK_NUM or TK_STR
   union {
-    char *str;         // TK_STR: its contents including terminating '\0';
-                       // TK_EMBED: the bytes
+    int64_t val;       // TK_NUM of an integer type: its value
     long double *fval; // TK_NUM of a floating type: its value
+    char *str;         // TK_STR: its contents including terminating '\0'
+    EmbedBytes *embed; // TK_EMBED
   };
 
   File *file;       // Source location
-  char *filename;   // Filename
-  int line_no;      // Line number
-  int line_delta;   // Line number
-  bool at_bol;      // True if this token is at beginning of line
-  bool has_space;   // True if this token follows a space character
-  uint8_t pack;     // The #pragma pack in effect here, or 0
+  char *filename;   // Filename, as #line says
+  int line_no;      // Line number, as #line says once has_line (see
+                    // set_line() in preprocess.c)
   uint16_t diag;    // The #pragma GCC diagnostic state here (see token.c)
+  uint8_t pack;     // The #pragma pack in effect here, or 0
+  bool at_bol : 1;  // True if this token is at beginning of line
+  bool has_space : 1; // True if this token follows a space character
+  bool has_line : 1;  // #line's difference is added to line_no
   Hideset *hideset; // For macro expansion
   Token *origin;    // If this is expanded from a macro, the original token
 };

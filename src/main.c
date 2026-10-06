@@ -1191,15 +1191,11 @@ static void print_tokens(Token *tok, char *path) {
       continue;
     }
 
-    // Tokens in the output have had line_delta (#line) added already,
-    // macro names they came from haven't.
+    // A token from a macro is put on the line of the macro's name.
     Token *src = tok;
-    int line = tok->line_no;
-    if (tok->origin) {
-      while (src->origin)
-        src = src->origin;
-      line = src->line_no + src->line_delta;
-    }
+    while (src->origin)
+      src = src->origin;
+    int line = src->line_no;
 
     if (opt_P || !src->filename) {
       if (!first) {

@@ -935,6 +935,12 @@ int main(void) { double complex z = 1 + 2 * I; return creal(z) + cimag(conj(z)) 
   $mucc -o $tmp/opt/cp -xc - && $tmp/opt/cp
 check 'creal, cimag and conj without -lm'
 
+# -g: code from a macro after #line is on #line's numbering, as with gcc
+printf '#define ONE() 1\nint f(void) {\n#line 500 "foo.c"\n  return ONE();\n}\n' > $tmp/lm.c
+$mucc -g -S -o $tmp/lm.s $tmp/lm.c && grep -q '\.loc [0-9]* 500$' $tmp/lm.s &&
+  ! grep -q '\.loc [0-9]* 4$' $tmp/lm.s
+check '-g line of macro code after #line'
+
 # Without -g, no line table and only the source's base name, as with gcc:
 # an object is the same bytes built in any directory.
 mkdir -p $tmp/d1 $tmp/d2
