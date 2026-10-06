@@ -129,6 +129,17 @@ int main() {
   ASSERT(1, 0);
 #endif
 
+  // Reaching __builtin_unreachable() carries on, as with gcc and clang
+  // without optimization (test/driver.sh checks that __builtin_trap()
+  // traps).
+  {
+    int reached = 0;
+    if (reached == 0)
+      __builtin_unreachable();
+    reached = 1;
+    ASSERT(1, reached);
+  }
+
   printf("OK\n");
   return 0;
 }

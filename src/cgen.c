@@ -2668,6 +2668,11 @@ static void gen_expr(Node *node) {
     println("  lea %s(%%rip), %%rax", node->unique_label);
     return;
   case ND_UNREACHABLE:
+    // Nothing, as gcc and clang have it without optimization: code that
+    // reaches it carries on. gnulib's regex reaches an assume() that is
+    // false in sed's own tests.
+    return;
+  case ND_TRAP:
     println("  ud2");
     return;
   case ND_CLZ:

@@ -337,6 +337,7 @@ typedef enum {
   ND_CAS,       // Atomic compare-and-swap
   ND_EXCH,      // Atomic exchange
   ND_UNREACHABLE, // __builtin_unreachable() (C23 unreachable())
+  ND_TRAP,        // __builtin_trap()
   ND_CLZ,       // [GNU] __builtin_clz: leading zero bits of lhs
   ND_CTZ,       // [GNU] __builtin_ctz: trailing zero bits of lhs
   ND_POPCOUNT,  // [GNU] __builtin_popcount: one bits in lhs

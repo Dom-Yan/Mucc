@@ -7115,7 +7115,7 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
   }
 
   if (equal(start, "__builtin_trap")) {
-    Node *node = new_node(ND_UNREACHABLE, start);
+    Node *node = new_node(ND_TRAP, start);
     node->ty = ty_void;
     return node;
   }
@@ -7374,7 +7374,7 @@ static Node *primary(Token **rest, Token *tok) {
     }
   }
 
-  // C23's unreachable() in <stddef.h>. Reaching it traps (ud2).
+  // C23's unreachable() in <stddef.h>
   if (equal(tok, "__builtin_unreachable")) {
     tok = skip(tok->next, "(");
     *rest = skip(tok, ")");
@@ -8021,6 +8021,7 @@ static bool has_side_effects(Node *node) {
   case ND_VA_ARG:
   case ND_FENCE:
   case ND_UNREACHABLE:
+  case ND_TRAP:
   case ND_OVERFLOW:
   case ND_VLA_FREE:
     return true;
@@ -8448,7 +8449,7 @@ static bool falls_through(Node *node) {
     return false;
   case ND_EXPR_STMT: {
     Node *e = node->lhs;
-    if (e->kind == ND_UNREACHABLE)
+    if (e->kind == ND_UNREACHABLE || e->kind == ND_TRAP)
       return false;
     return !(e->kind == ND_FUNCALL && e->lhs->kind == ND_VAR &&
              e->lhs->var->is_noreturn);
