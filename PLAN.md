@@ -137,16 +137,36 @@ Found on the way:
   tokens. gcc takes 1.2 GB; mucc took over 4 GB and, with no limit,
   ran WSL out of memory.
 
-## Next: the deep test's other findings
+## Done on 2026-10-06
+
+- Pushed main, and the `complex`, `linter` and `llvm-backend` branches.
+- SSE: gcc's vector types (`vector_size` of 4, 8 or 16 bytes, TY_VECTOR,
+  a value in %xmm0; operators as one SSE2 instruction or an element at a
+  time; passed as the psABI says, checked against gcc in test/common) and
+  the intrinsics headers, mmintrin.h to smmintrin.h, wmmintrin.h,
+  immintrin.h, x86intrin.h, cpuid.h: plain C on vectors, or one asm
+  instruction. The assembler has every SSE to SSE4.2, AES and PCLMUL
+  instruction (checked against GNU as in test/asm-forms.s).
+  test/intrin.sh: 18,254 results of every intrinsic match gcc's. stb
+  (image, resize2, truetype) and miniz with their SSE paths match gcc's
+  output. `__SSE__`, `__SSE2__`, `__MMX__` are defined; `-msse3` to
+  `-msse4.2`, `-maes`, `-mpclmul`, `-mpopcnt` define theirs; `-mavx*` and
+  later are ignored. Fixed on the way: `mode()` on a local variable.
+- test/driver.sh's `<tgmath.h>` test failed for stage2 (it has no
+  include/ next to it) since it was added; it passes `-Iinclude` now.
+
+Not done: AVX (vectors of 32 bytes and `__attribute__((target))`),
+`__builtin_shufflevector` and `__builtin_convertvector`.
+
+## Next
 
 In order:
 
-1. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
-   `vector_size`): stb and many other libraries use them on x86-64
-   without a fallback. The biggest gap left for real code bases.
-2. **Bigger and rare**: arrays of 2 GiB or more (sizes are `int` all
-   through: types, offsets, codegen); `__int128` bit-fields (layout,
-   loads and stores in 128 bits, static initializers).
+1. **Arrays of 2 GiB or more**: sizes are `int` all through: types,
+   member offsets, codegen, and in asm.c and link.c section sizes and
+   symbol positions.
+2. **`__int128` bit-fields**: layout, loads and stores in 128 bits,
+   static initializers.
 
 ## Later
 
