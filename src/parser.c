@@ -104,6 +104,13 @@ typedef struct {
 // This struct represents a variable initializer. Since initializers
 // can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this struct
 // is a tree data structure.
+typedef struct EmbedRun EmbedRun;
+struct EmbedRun {
+  EmbedRun *next;
+  int idx;    // the first element it sets
+  Token *tok; // the TK_EMBED token
+};
+
 typedef struct Initializer Initializer;
 struct Initializer {
   Initializer *next;
@@ -123,6 +130,10 @@ struct Initializer {
   // A string literal that sets a char or wide char array's elements, as
   // its bytes: children set after it override some of them.
   Token *str;
+
+  // Runs of an integer array's elements that #embed's bytes set, in
+  // order, after `str` and before children (see embed_init()).
+  EmbedRun *embeds;
 
   // Only one member can be initialized for a union.
   // `mem` is used to clarify which member is initialized.
@@ -2173,8 +2184,40 @@ static void string_initializer(Token **rest, Token *tok, Initializer *init) {
 
   // It sets every element: those past the string to zero.
   init->str = tok;
+  init->embeds = NULL;
   init->children = NULL;
   *rest = tok->next;
+}
+
+// #embed's bytes (TK_EMBED `tok`) as elements i, i+1, ... of integer
+// array `init`, with no node for each: a byte's value converted to the
+// element type is the same bytes but for a _Bool. False if they don't
+// fit or an operator follows the last: they are a list then.
+static bool embed_init(Token **rest, Token *tok, Initializer *init, int i) {
+  if (tok->kind != TK_EMBED || !is_integer(init->ty->base) ||
+      i + tok->val > init->ty->array_len || !(equal(tok->next, ",") || equal(tok->next, "}")))
+    return false;
+
+  // It overrides elements set before it.
+  for (int j = 0; init->children && j < tok->val; j++)
+    init->children[i + j] = NULL;
+
+  EmbedRun *run = arena_alloc(sizeof(EmbedRun));
+  run->idx = i;
+  run->tok = tok;
+  EmbedRun **p = &init->embeds;
+  while (*p)
+    p = &(*p)->next;
+  *p = run;
+
+  *rest = tok->next;
+  return true;
+}
+
+// Byte `j` of #embed run `run` as an element of type `ty`
+static uint8_t embed_elem(EmbedRun *run, int j, Type *ty) {
+  uint8_t b = run->tok->str[j];
+  return ty->kind == TY_BOOL ? b != 0 : b;
 }
 
 // Element `i` of string initializer `init->str` (0 past its end).
@@ -2349,14 +2392,21 @@ static int count_array_init_elements(Token *tok, Type *ty) {
       if (equal(tok, "..."))
         i = const_expr(&tok, tok->next);
       tok = skip(tok, "]");
-      if (scalar)
-        tok = skip_scalar_init(equal(tok, "=") ? tok->next : tok);
-      else
+      if (scalar && equal(tok, "="))
+        tok = tok->next;
+      else if (!scalar)
         designation(&tok, tok, dummy);
-    } else if (scalar) {
-      tok = skip_scalar_init(tok);
-    } else {
+    } else if (!scalar) {
       initializer2(&tok, tok, dummy);
+    }
+
+    if (scalar) {
+      // #embed's bytes are as many elements (see embed_init()).
+      if (tok->kind == TK_EMBED) {
+        i += tok->val - 1;
+        tok = tok->next;
+      }
+      tok = skip_scalar_init(tok);
     }
 
     i++;
@@ -2393,6 +2443,12 @@ static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
       continue;
     }
 
+    Token *embed = tok;
+    if (embed_init(&tok, tok, init, i)) {
+      i += embed->val - 1;
+      continue;
+    }
+
     if (i < init->ty->array_len)
       initializer2(&tok, tok, elem_init(init, i));
     else
@@ -2415,6 +2471,12 @@ static void array_initializer2(Token **rest, Token *tok, Initializer *init, int 
     if (equal(tok, "[") || equal(tok, ".")) {
       *rest = start;
       return;
+    }
+
+    Token *embed = tok;
+    if (embed_init(&tok, tok, init, i)) {
+      i += embed->val - 1;
+      continue;
     }
 
     initializer2(&tok, tok, elem_init(init, i));
@@ -2686,6 +2748,14 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
         node = new_binary(ND_COMMA, node, rhs, tok);
       }
     }
+    for (EmbedRun *run = init->embeds; run; run = run->next) {
+      for (int j = 0; j < run->tok->val; j++) {
+        InitDesg desg2 = {desg, run->idx + j};
+        Node *lhs = init_desg_expr(&desg2, tok);
+        Node *rhs = new_binary(ND_ASSIGN, lhs, new_num(embed_elem(run, j, ty->base), tok), tok);
+        node = new_binary(ND_COMMA, node, rhs, tok);
+      }
+    }
     for (int i = 0; init->children && i < ty->array_len; i++) {
       if (!init->children[i])
         continue;
@@ -2791,6 +2861,9 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
       for (int i = 0; i < len; i++)
         write_buf(buf + offset + sz * i, str_elem(init, i), sz);
     }
+    for (EmbedRun *run = init->embeds; run; run = run->next)
+      for (int j = 0; j < run->tok->val; j++)
+        write_buf(buf + offset + sz * (run->idx + j), embed_elem(run, j, ty->base), sz);
     for (int i = 0; init->children && i < ty->array_len; i++)
       cur = write_gvar_data(cur, init->children[i], ty->base, buf, offset + sz * i);
     return cur;
@@ -6455,6 +6528,11 @@ bool is_known_builtin(char *name) {
 //         | str
 //         | num
 static Node *primary(Token **rest, Token *tok) {
+  // #embed's bytes, other than as an initializer's elements, are a list
+  // of numbers (see embed_init()).
+  if (tok->kind == TK_EMBED)
+    expand_embed(tok);
+
   Token *start = tok;
 
   if (equal(tok, "(") && equal(tok->next, "{")) {

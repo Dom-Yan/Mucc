@@ -106,6 +106,39 @@ static const int empty_embed[] = {
 static const unsigned char via_macro[] = {
 #embed EMBED_FILE prefix(0,) __limit__(1 + 2)
 };
+// The bytes as elements of other types, filling part of an array, after
+// a designator, with elements overriding them or overridden, twice, and
+// as a list where they aren't all an array's elements.
+static int embed_int[8] = {
+#embed "embed.txt"
+};
+static _Bool embed_bool[] = {
+#embed "embed.txt" prefix(0,)
+};
+static float embed_float[] = {
+#embed "embed.txt" limit(2)
+};
+static struct { char a[2]; char b[3]; } embed_elided = {
+#embed "embed.txt"
+};
+static char embed_desg[8] = { [2] =
+#embed "embed.txt" limit(3)
+};
+static char embed_over[6] = {
+#embed "embed.txt"
+, [1] = 'a' };
+static char embed_under[6] = { [1] = 'a',
+#embed "embed.txt" limit(3)
+};
+static int embed_twice[] = {
+#embed "embed.txt" limit(2)
+, 42,
+#embed "embed.txt" limit(2)
+};
+static int embed_op[] = {
+#embed "embed.txt" limit(2)
++ 1000 };
+static int embed_sum(int a, int b, int c) { return a + b + c; }
 
 #if __has_embed("embed.txt") == __STDC_EMBED_FOUND__ && \
     __has_embed("embed-empty.bin") == __STDC_EMBED_EMPTY__ && \
@@ -286,6 +319,44 @@ int main() {
   ASSERT(4, sizeof(via_macro));
   ASSERT(0, via_macro[0]);
   ASSERT('l', via_macro[3]);
+  ASSERT('o', embed_int[4]);
+  ASSERT(0, embed_int[5] + embed_int[7]);
+  ASSERT(6, sizeof(embed_bool));
+  ASSERT(0, embed_bool[0]);
+  ASSERT(1, embed_bool[1]);
+  ASSERT(1, embed_bool[5]);
+  ASSERT(2, sizeof(embed_float) / sizeof(float));
+  ASSERT(101, (int)embed_float[1]);
+  ASSERT('e', embed_elided.a[1]);
+  ASSERT('l', embed_elided.b[0]);
+  ASSERT('o', embed_elided.b[2]);
+  ASSERT(0, embed_desg[1]);
+  ASSERT('H', embed_desg[2]);
+  ASSERT('l', embed_desg[4]);
+  ASSERT(0, embed_desg[5]);
+  ASSERT('H', embed_over[0]);
+  ASSERT('a', embed_over[1]);
+  ASSERT('l', embed_over[2]);
+  ASSERT(0, embed_under[0]);
+  ASSERT('a', embed_under[1]);
+  ASSERT('H', embed_under[2]);
+  ASSERT('l', embed_under[4]);
+  ASSERT(5, sizeof(embed_twice) / sizeof(int));
+  ASSERT(42, embed_twice[2]);
+  ASSERT('e', embed_twice[4]);
+  ASSERT(1101, embed_op[1]);
+  ASSERT('H' + 'e' + 'l', embed_sum(
+#embed "embed.txt" limit(3)
+  ));
+  ASSERT('o', ({ unsigned char a[] = {
+#embed "embed.txt"
+    }; a[4]; }));
+  ASSERT(5, ({ unsigned char a[] = {
+#embed "embed.txt"
+    }; sizeof(a); }));
+  ASSERT('l', ({ int a[8] = { [1] =
+#embed "embed.txt" limit(3)
+    , 9 }; a[3]; }));
   ASSERT(1, has_embed_works);
   ASSERT(1, has_c_attribute_works);
 

@@ -1014,6 +1014,9 @@ static void print_tokens(Token *tok, char *path) {
     line_marker(base_file, base_file, 1);
 
   for (bool first = true; tok->kind != TK_EOF; tok = tok->next, first = false) {
+    if (tok->kind == TK_EMBED)
+      expand_embed(tok);
+
     if (!tok->at_bol && !first) {
       if (tok->has_space)
         fprintf(pp_out, " ");

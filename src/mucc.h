@@ -107,6 +107,7 @@ typedef enum {
   TK_STR,     // String literals
   TK_NUM,     // Numeric literals
   TK_PP_NUM,  // Preprocessing numbers
+  TK_EMBED,   // #embed's bytes, as one token (see "#embed" in preprocess.c)
   TK_EOF,     // End-of-file markers
 } TokenKind;
 
@@ -128,11 +129,12 @@ struct Token {
   TokenKind kind;   // Token kind
   int len;          // Token length
   Token *next;      // Next token
-  int64_t val;      // If kind is TK_NUM, its value
+  int64_t val;      // If kind is TK_NUM, its value; TK_EMBED: the bytes' count
   char *loc;        // Token location
   Type *ty;         // Used if TK_NUM or TK_STR
   union {
-    char *str;         // TK_STR: its contents including terminating '\0'
+    char *str;         // TK_STR: its contents including terminating '\0';
+                       // TK_EMBED: the bytes
     long double *fval; // TK_NUM of a floating type: its value
   };
 
@@ -184,6 +186,7 @@ void init_macros(void);
 void define_macro(char *name, char *buf);
 void undef_macro(char *name);
 Token *preprocess(Token *tok);
+void expand_embed(Token *tok);
 
 //---------- parser.c: AST and parser (stage 3) ------------------------------
 

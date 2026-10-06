@@ -818,6 +818,19 @@ print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' \
   cmp $tmp/big.bin $tmp/blob.bin
 check ".incbin of 10 MB ($kb KB of memory)"
 
+# #embed likewise: the bytes are one token, and go into the data without a
+# node each. As a list of numbers, 2 MB took 1.7 GB.
+printf 'const unsigned char blob[] = {\n#embed "%s"\n};\n' $tmp/big.bin > $tmp/embed.c
+kb=$(python3 -c '
+import resource, subprocess, sys
+subprocess.run(sys.argv[1:], check=True)
+print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' \
+  $mucc -std=c23 -c -o $tmp/embed.o $tmp/embed.c 2> $tmp/err) &&
+  [ "$kb" -lt 204800 ] && [ ! -s $tmp/err ] &&
+  objcopy -O binary --only-section=.rodata $tmp/embed.o $tmp/blob.bin &&
+  cmp $tmp/big.bin $tmp/blob.bin
+check "#embed of 10 MB ($kb KB of memory)"
+
 echo 'extern char blob[], blob_end[];
 int main() { return blob_end - blob == 10000000 && blob[0] == blob[0] ? 0 : 1; }' > $tmp/blob.c
 $mucc -o $tmp/blob $tmp/blob.c $tmp/blob.o && $tmp/blob

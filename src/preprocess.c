@@ -1172,6 +1172,10 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok) {
 //   #embed "icon.png"
 //   };
 //
+// The list is one TK_EMBED token that holds the bytes, until the parser
+// meets it anywhere but in such an initializer: a few bytes of memory a
+// byte, not hundreds.
+//
 // After the name it takes these parameters (each may also be spelled
 // __name__):
 //   limit(N)          use at most N bytes
@@ -1358,11 +1362,29 @@ static Token *embed(Token *hash, Token *tok) {
   if (len == 0)
     return splice(args.if_empty, rest);
 
-  // Write the bytes as "1,2,3" and tokenize that. Each byte takes at
-  // most 4 characters ("255,").
-  char *text = malloc(len * 4 + 1);
+  // The bytes are one token, as a list "1,2,3" would be millions: an
+  // initializer copies them into its data (see "Initializers" in
+  // parser.c), and elsewhere they become that list (expand_embed()). Its
+  // place is the "embed" after the "#", so the token isn't taken for a
+  // directive or a macro name.
+  Token *bytes_tok = copy_token(hash->next);
+  bytes_tok->kind = TK_EMBED;
+  bytes_tok->at_bol = hash->at_bol;
+  bytes_tok->has_space = hash->has_space;
+  bytes_tok->str = (char *)bytes;
+  bytes_tok->val = len;
+  bytes_tok->next = splice(args.suffix, rest);
+  return splice(args.prefix, bytes_tok);
+}
+
+// Turns #embed's token `tok` into the list of its bytes, "1,2,3", in
+// place: for its bytes as anything other than an initializer's elements.
+void expand_embed(Token *tok) {
+  // Each byte takes at most 4 characters ("255,").
+  unsigned char *bytes = (unsigned char *)tok->str;
+  char *text = malloc(tok->val * 4 + 1);
   char *p = text;
-  for (size_t i = 0; i < len; i++) {
+  for (int64_t i = 0; i < tok->val; i++) {
     if (i > 0)
       *p++ = ',';
     int b = bytes[i];
@@ -1373,10 +1395,25 @@ static Token *embed(Token *hash, Token *tok) {
     *p++ = '0' + b % 10;
   }
   *p = '\0';
-  free(bytes);
 
-  Token *nums = tokenize(new_file(hash->file->name, hash->file->file_no, text));
-  return splice(args.prefix, splice(nums, splice(args.suffix, rest)));
+  Token *nums = tokenize(new_file(tok->file->name, tok->file->file_no, text));
+  convert_pp_tokens(nums);
+
+  Token *last = nums;
+  for (Token *t = nums; t->kind != TK_EOF; t = t->next) {
+    t->filename = tok->filename;
+    t->line_no = tok->line_no;
+    t->line_delta = tok->line_delta;
+    t->at_bol = false;
+    t->has_space = false;
+    t->pack = tok->pack;
+    t->diag = tok->diag;
+    last = t;
+  }
+  nums->at_bol = tok->at_bol;
+  nums->has_space = tok->has_space;
+  last->next = tok->next;
+  *tok = *nums;
 }
 
 // __has_embed(...) in #if: 0 if the file isn't found (or a parameter
