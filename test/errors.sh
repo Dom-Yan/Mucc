@@ -1539,6 +1539,22 @@ expect_error '1:32: error: vector size must be a power of 2 and a multiple of th
 typedef float v __attribute__((vector_size(12)));
 EOF
 
+expect_error '2:58: error: shuffle index 8 out of range' <<'EOF'
+typedef int v4si __attribute__((vector_size(16)));
+v4si f(v4si a) { return __builtin_shufflevector(a, a, 0, 8); }
+EOF
+
+expect_error '2:25: error: vectors of 12 bytes are not supported (only 4, 8 or 16)' <<'EOF'
+typedef int v4si __attribute__((vector_size(16)));
+v4si f(v4si a) { return __builtin_shufflevector(a, a, 0, 1, 2); }
+EOF
+
+expect_error '3:25: error: __builtin_convertvector needs a vector type with as many elements' <<'EOF'
+typedef int v4si __attribute__((vector_size(16)));
+typedef double v2df __attribute__((vector_size(16)));
+v2df f(v4si a) { return __builtin_convertvector(a, v2df); }
+EOF
+
 expect_error "3:35: error: invalid operands to vectors '__vector(4) float' and '__vector(4) int'" <<'EOF'
 typedef float v4sf __attribute__((vector_size(16)));
 typedef int v4si __attribute__((vector_size(16)));

@@ -387,6 +387,49 @@ int main() {
     ASSERT(2, _Generic(declared, v4su: 1, default: 2));
   }
 
+  // __builtin_shufflevector and __builtin_convertvector
+  {
+    v4si a = {1, 2, 3, 4}, b = {5, 6, 7, 8};
+    v4si r = __builtin_shufflevector(a, b, 7, 0, 5, 2);
+    v4si e1 = {8, 1, 6, 3};
+    ASSERT(1, SAME(r, e1, 4));
+    v2si lo = __builtin_shufflevector(a, a, 1, 0);
+    ASSERT(2, lo[0]);
+    ASSERT(1, lo[1]);
+    ASSERT(8, sizeof(__builtin_shufflevector(a, a, 3, 2)));
+    v8hi wide = {1, 2, 3, 4, 5, 6, 7, 8};
+    v8hi rev = __builtin_shufflevector(wide, wide, 7, 6, 5, 4, 3, 2, 1, 0);
+    ASSERT(8, rev[0]);
+    ASSERT(1, rev[7]);
+    v4si any = __builtin_shufflevector(a, b, -1, 4, -1, 3);
+    ASSERT(5, any[1]);
+    ASSERT(4, any[3]);
+    v2df d = {1.5, -2.5};
+    v2df ds = __builtin_shufflevector(d, d, 1, 1);
+    ASSERT(1, ds[0] == -2.5 && ds[1] == -2.5);
+    v4si calls = __builtin_shufflevector(r + 1, (v4si){0}, 0, 4, 1, 4);
+    v4si e2 = {9, 0, 2, 0};
+    ASSERT(1, SAME(calls, e2, 4));
+
+    v4sf f = __builtin_convertvector(a, v4sf);
+    ASSERT(1, f[0] == 1.0f && f[3] == 4.0f);
+    v4sf g = {1.9f, -2.9f, 3.5f, 1e9f};
+    v4si gi = __builtin_convertvector(g, v4si);
+    v4si e3 = {1, -2, 3, 1000000000};
+    ASSERT(1, SAME(gi, e3, 4));
+    v2df dd = __builtin_convertvector(lo, v2df);
+    ASSERT(1, dd[0] == 2.0 && dd[1] == 1.0);
+    v4qi q = __builtin_convertvector((v4si){300, -1, 65, 2}, v4qi);
+    ASSERT(44, q[0]);
+    ASSERT(-1, q[1]);
+    ASSERT(65, q[2]);
+    v4su u = __builtin_convertvector(a, v4su);
+    ASSERT(1, _Generic(u, v4su: 1, default: 0));
+  }
+#if !__has_builtin(__builtin_shufflevector) || !__has_builtin(__builtin_convertvector)
+  ASSERT(0, 1);
+#endif
+
   printf("OK\n");
   return 0;
 }

@@ -6105,7 +6105,94 @@ static char *builtin_names[] = {
   "__builtin_compare_and_swap", "__builtin_atomic_exchange",
   "__builtin_va_start", "__builtin_va_end", "__builtin_va_copy",
   "__builtin_va_arg", "__builtin_offsetof", "__builtin_complex",
+  "__builtin_shufflevector", "__builtin_convertvector",
 };
+
+// A vector of `elem` with `n` elements, if mucc has one that size.
+static Type *vector_n(Type *elem, int64_t n, Token *tok) {
+  int64_t size = n * elem->size;
+  if (size != 4 && size != 8 && size != 16)
+    error_tok(tok, "vectors of %ld bytes are not supported (only 4, 8 or 16)", size);
+  return vector_of(elem, size);
+}
+
+// [GNU] __builtin_shufflevector(a, b, i, ...), from clang, in gcc 12 too:
+// a vector of elements of a and b, numbered across both, and -1 for one
+// that may be anything. __builtin_convertvector(v, T): each element of v
+// converted to T's. Both are an element at a time, through temporaries:
+// `(a2 = a, b2 = b, r[0] = a2[i], ..., r)`.
+// Element `i` of vector variable `var`
+static Node *var_elem(Obj *var, int64_t i, Token *tok) {
+  Node *node = new_var_node(var, tok);
+  add_type(node);
+  return vector_elem(node, new_num(i, tok), tok);
+}
+
+static Node *vector_builtin(Token **rest, Token *tok) {
+  Token *start = tok;
+  bool shuffle = equal(tok, "__builtin_shufflevector");
+  tok = skip(tok->next, "(");
+  Node *a = assign(&tok, tok);
+  add_type(a);
+  if (!is_vector(a->ty))
+    error_tok(a->tok, "%s needs a vector", get_ident(start));
+
+  Obj *va = new_lvar("", unqual(a->ty));
+  Node *node = new_binary(ND_ASSIGN, new_var_node(va, start), a, start);
+  Obj *vb = NULL;
+  Obj *r;
+  int64_t na = a->ty->array_len;
+  int64_t idx[16];
+  int n = 0;
+
+  if (shuffle) {
+    tok = skip(tok, ",");
+    Node *b = assign(&tok, tok);
+    add_type(b);
+    if (!is_vector(b->ty) || !is_compatible(a->ty->elem, b->ty->elem))
+      error_tok(b->tok, "__builtin_shufflevector needs two vectors of the same element type");
+    vb = new_lvar("", unqual(b->ty));
+    node = new_binary(ND_COMMA, node,
+                      new_binary(ND_ASSIGN, new_var_node(vb, start), b, start), start);
+    while (consume(&tok, tok, ",")) {
+      Node *i = assign(&tok, tok);
+      add_type(i);
+      if (!is_integer(i->ty) || !is_const_expr(i))
+        error_tok(i->tok, "a shuffle index must be an integer constant");
+      int64_t val = eval(i);
+      if (val < -1 || val >= na + b->ty->array_len)
+        error_tok(i->tok, "shuffle index %ld out of range", val);
+      if (n == 16)
+        error_tok(i->tok, "too many shuffle indexes");
+      idx[n++] = val;
+    }
+    r = new_lvar("", vector_n(a->ty->elem, n, start));
+  } else {
+    tok = skip(tok, ",");
+    Type *ty = typename(&tok, tok);
+    if (!is_vector(ty) || ty->array_len != na)
+      error_tok(start, "__builtin_convertvector needs a vector type with as many elements");
+    r = new_lvar("", unqual(ty));
+    n = na;
+    for (int i = 0; i < n; i++)
+      idx[i] = i;
+  }
+  *rest = skip(tok, ")");
+
+  for (int i = 0; i < n; i++) {
+    Node *dst = var_elem(r, i, start);
+    Node *src;
+    if (idx[i] < 0)
+      src = new_num(0, start);
+    else if (idx[i] < na)
+      src = var_elem(va, idx[i], start);
+    else
+      src = var_elem(vb, idx[i] - na, start);
+    node = new_binary(ND_COMMA, node,
+                      new_binary(ND_ASSIGN, dst, new_cast(src, r->ty->elem), start), start);
+  }
+  return new_binary(ND_COMMA, node, new_var_node(r, start), start);
+}
 
 // <stdarg.h>'s va_start, va_end, va_copy and va_arg, as gcc's builtins:
 // va_start copies the va_list the prologue made for a variadic function
@@ -7188,6 +7275,9 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "__builtin_va_start") || equal(tok, "__builtin_va_end") ||
       equal(tok, "__builtin_va_copy") || equal(tok, "__builtin_va_arg"))
     return va_builtin(rest, tok);
+
+  if (equal(tok, "__builtin_shufflevector") || equal(tok, "__builtin_convertvector"))
+    return vector_builtin(rest, tok);
 
   // [GNU] __builtin_complex(re, im), which <complex.h>'s CMPLX() is: a
   // complex number of two floating-point numbers of the same type
