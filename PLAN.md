@@ -249,7 +249,7 @@ passes its own tests, with these exceptions noted in its script:
 | sed | pass, gnulib's 192 tests too; newline-dfa-bug skipped on musl (valgrind and a static malloc) |
 | gawk | pass but commas and clos1way6 on musl (printf `'` grouping, stdio order; both pass with glibc) |
 | libpng, Git (21,334 tests), TinyCC | pass, with `--libc=system` |
-| CPython | see below |
+| CPython | with `--libc=system`: 389 pass, 32 skipped (libraries WSL lacks); test_email fails and test_socket hangs, with gcc too |
 
 GNU make, sed and gawk tarballs come from mirrors.kernel.org (ftp.gnu.org
 was unreachable). WSL lacks tclsh (tcl.sh builds it), OpenSSL headers
@@ -259,11 +259,10 @@ was unreachable). WSL lacks tclsh (tcl.sh builds it), OpenSSL headers
 
 1. **First release from mucc**: tag it with "bootstrap: gcc" in the
    message (the maintainer's call: it publishes).
-2. **CPython** to a clean run.
-3. **Finish line 3 and 5 checks**: difftest and the fuzzers on the
-   current code; compile time against gcc -O0 (2x or better) and the
-   binary's size; push main.
-4. **Finish line 6**: a pass over comments and sections.
+2. **Finish line 3**: difftest and the fuzzers on the current code.
+   (Finish line 5 holds: mucc's source in 0.44 s, gcc -O0 1.19 s, 2.7x;
+   the binary 8.5 MB.) Push main.
+3. **Finish line 6**: a pass over comments and sections.
 
 ## Later
 

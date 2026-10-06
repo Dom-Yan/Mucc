@@ -62,8 +62,8 @@ binutils, no system headers.</p>
 
 <h3>Why use it</h3>
 <ul>
-  <li><b>Fast builds.</b> It compiles about 2.4 times faster than
-    <code>gcc -O0</code> and 10 times faster than <code>gcc -O2</code>.</li>
+  <li><b>Fast builds.</b> It compiles about 2.7 times faster than
+    <code>gcc -O0</code> and 12 times faster than <code>gcc -O2</code>.</li>
   <li><b>Nothing to install.</b> One file of about 8.5 MB is the whole
     toolchain. It works in an empty container, on old distributions and on
     machines with no compiler.</li>
@@ -201,7 +201,7 @@ the <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
 <table>
   <tr><th>Source</th><td>23,772 lines of C in 13 files</td></tr>
   <tr><th>Released binary</th><td>about 8.5 MB, with musl and Linux's headers inside</td></tr>
-  <tr><th>Compiling its own source</th><td>0.45 s (gcc <code>-O0</code>: 1.07 s, gcc <code>-O2</code>: 4.33 s)</td></tr>
+  <tr><th>Compiling its own source</th><td>0.44 s (gcc <code>-O0</code>: 1.18 s, gcc <code>-O2</code>: 5.13 s)</td></tr>
   <tr><th>Tests</th><td>53 programs with 2,302 assertions, 8 Linux programs with 166 checks, plus 432 command-line, error, assembler, linker and debugger checks</td></tr>
   <tr><th>Real programs</th><td>CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), SQLite (249,453 tests, 0 errors), Lua, zlib, libpng, TinyCC, QuickJS (its 9 test files pass), the kilo text editor</td></tr>
   <tr><th>Self-hosting</th><td>a mucc built by mucc builds a byte-identical mucc</td></tr>
