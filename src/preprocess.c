@@ -104,16 +104,6 @@ static Hideset *new_hideset(char *name) {
   return hs;
 }
 
-static Hideset *hideset_union(Hideset *hs1, Hideset *hs2) {
-  Hideset head = {};
-  Hideset *cur = &head;
-
-  for (; hs1; hs1 = hs1->next)
-    cur = cur->next = new_hideset(hs1->name);
-  cur->next = hs2;
-  return head.next;
-}
-
 static bool hideset_contains(Hideset *hs, char *s, int len) {
   for (; hs; hs = hs->next)
     if (strlen(hs->name) == len && !strncmp(hs->name, s, len))
@@ -121,7 +111,23 @@ static bool hideset_contains(Hideset *hs, char *s, int len) {
   return false;
 }
 
+// A hideset never changes once made, so the result shares hs2, and a
+// name in both isn't copied: hidesets stay short.
+static Hideset *hideset_union(Hideset *hs1, Hideset *hs2) {
+  Hideset head = {};
+  Hideset *cur = &head;
+
+  for (; hs1; hs1 = hs1->next)
+    if (!hideset_contains(hs2, hs1->name, strlen(hs1->name)))
+      cur = cur->next = new_hideset(hs1->name);
+  cur->next = hs2;
+  return head.next;
+}
+
 static Hideset *hideset_intersection(Hideset *hs1, Hideset *hs2) {
+  if (hs1 == hs2)
+    return hs1;
+
   Hideset head = {};
   Hideset *cur = &head;
 
@@ -944,9 +950,17 @@ static Token *expansion(Token *body, Hideset *hs, Token *origin, Token *rest,
                         bool fresh) {
   Token head = {};
   Token *cur = &head;
+  // Hidesets never change, so tokens with the same one, as an argument's
+  // are, share its union with hs.
+  Hideset *last = NULL;
+  Hideset *last_union = hs;
   for (Token *t = body; t->kind != TK_EOF; t = t->next) {
     Token *u = fresh ? t : copy_token(t);
-    u->hideset = hideset_union(u->hideset, hs);
+    if (u->hideset != last) {
+      last = u->hideset;
+      last_union = hideset_union(last, hs);
+    }
+    u->hideset = last_union;
     u->origin = origin;
     cur = cur->next = u;
   }

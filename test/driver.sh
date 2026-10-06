@@ -502,6 +502,13 @@ printf '#include <wrap.h>\n#include <other.h>\n#include <wrap.h>\n' > $tmp/wrap.
   -E $tmp/wrap.c) | grep -c wrapped)" = 2 ]
 check '#include_next of a header found before'
 
+# <tgmath.h>'s macros nested three deep expand to 1.4 MB, from tokens
+# whose hidesets name many macros. Hidesets are shared, not copied for
+# each token: this took over 600 MB, and takes 210.
+printf '#include <tgmath.h>\nfloat f;\ndouble g(void) { return cos(sin(tan(f))); }\n' > $tmp/tgmath.c
+(ulimit -v 500000; $mucc -c -o $tmp/tgmath.o $tmp/tgmath.c)
+check 'nested <tgmath.h> macros in bounded memory'
+
 # A default include directory also given with -I is searched once, so
 # mucc's own <sys/cdefs.h> wrapper, which does #include_next of itself, is
 # read once. (Read twice, it put a path that depends on where the mucc
