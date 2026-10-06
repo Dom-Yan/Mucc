@@ -104,6 +104,11 @@ Then, the same day:
 - `a488a24` `include/tgmath.h` is musl's, for glibc too. Every C and
   POSIX header now compiles alone without a warning under both libcs
   (10,800 of 10,800).
+- `e4ee992` `__auto_type`, `int a[k = 3]`, `"xyz"[1]` as a constant, and
+  `int x = {1, 2}`.
+- `8bb43a7` `__int128`: switch, overflow builtins (a helper from C text),
+  and constants of any value (`eval128()`).
+- `76eaa46` Cleanup variables at the end of a statement expression.
 
 Found on the way:
 - stb includes `<emmintrin.h>` on every x86-64 build, `__GNUC__` or
@@ -118,33 +123,30 @@ Found on the way:
 
 In order:
 
-1. **Still rejected, accepted by gcc**: `__auto_type`; `int a[k = 3]`;
-   `char c = "xyz"[1];` at file scope; `int x = {1, 2};` (gcc warns);
-   arrays of 2 GiB or more; `__int128` constants beyond 64 bits in
-   static initializers, `__int128` bit-fields and switches; a cleanup
-   variable at the end of a statement expression; overflow builtins on
-   `__int128`.
-2. **Driver**: `@file` response files; `-MM`, `-MG`, `-dM`, `-imacros`,
+1. **Driver**: `@file` response files; `-MM`, `-MG`, `-dM`, `-imacros`,
    `-iquote`, `-nostdinc`, `-fsyntax-only`, `-Xassembler`, `-specs=`,
    `--param`, `-mcmodel=`, `-print-search-dirs`, `-x c-header`; `mucc
    a.c -l` says `cannot find -l--library=c`; `creal`, `cimag` and
    `conj` as builtins (gcc needs no -lm for them).
-3. **Accepted, rejected by gcc**: duplicate labels, sizeof an
+2. **Accepted, rejected by gcc**: duplicate labels, sizeof an
    incomplete struct or a bit-field, bad bit-field widths, `int x; int
    x;` in a block, `&` of a register variable, `static extern`, a
    flexible array member not last, a block-scope `extern int x;` and a
    later file-scope `long x;`, `int f(void x)`, arrays of
    functions, duplicate macro parameters, `#define f(` with parameters
    on the next line.
-4. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
+3. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
    loop variable shows after its scope.
-5. **Memory, more**: implicit casts are full nodes and copy their type
+4. **Memory, more**: implicit casts are full nodes and copy their type
    (49 MB and 27 MB of sqlite3.c's); a function's tokens and AST could
    be freed once it is emitted. Macro expansion: musl's `<tgmath.h>`
    nested three deep takes over 4 GB (gcc: 1.2 GB).
-6. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
+5. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
    `vector_size`): stb and many other libraries use them on x86-64
    without a fallback. The biggest gap left for real code bases.
+6. **Bigger and rare**: arrays of 2 GiB or more (sizes are `int` all
+   through: types, offsets, codegen); `__int128` bit-fields (layout,
+   loads and stores in 128 bits, static initializers).
 
 ## Later
 
