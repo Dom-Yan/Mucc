@@ -68,6 +68,11 @@ diff -r musl-1.2.6 thirdparty/musl
 
 prints nothing.
 
+### Copied out of the tree
+
+`include/tgmath.h` is musl's `include/tgmath.h` after a comment, so that
+`<tgmath.h>` works with glibc too. Upgrading musl, copy it again.
+
 ## Linux headers
 
 Linux's user-space API headers (`<linux/*.h>`, `<asm/*.h>`, `<sound/*.h>`,

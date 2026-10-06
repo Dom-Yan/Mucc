@@ -15,6 +15,10 @@
 #include <pthread.h>
 #include <sys/epoll.h>
 
+// include/tgmath.h, also with glibc: each macro picks the function for
+// its arguments' type, an integer's being double's.
+#include <tgmath.h>
+
 int main() {
   ASSERT(12, sizeof(struct epoll_event));
   ASSERT(4, offsetof(struct epoll_event, data));
@@ -25,6 +29,15 @@ int main() {
                int r = regexec(&re, "abbc", 1, m, 0); regfree(&re); r; }));
   ASSERT(1, ({ regex_t re; regmatch_t m[1]; regcomp(&re, "b+", REG_EXTENDED);
                regexec(&re, "abbc", 1, m, 0); regfree(&re); m[0].rm_so; }));
+
+  ASSERT(1, ({ float f = 2; _Generic(sqrt(f), float: 1, default: 0); }));
+  ASSERT(1, ({ double d = 2; _Generic(sqrt(d), double: 1, default: 0); }));
+  ASSERT(1, ({ int i = 2; _Generic(sqrt(i), double: 1, default: 0); }));
+  ASSERT(1, ({ long double l = 2; _Generic(sqrt(l), long double: 1, default: 0); }));
+  ASSERT(1, ({ float f = 2; double d = 2; _Generic(pow(f, d), double: 1, default: 0); }));
+  ASSERT(1, ({ float f = 2; _Generic(fma(f, f, f), float: 1, default: 0); }));
+  ASSERT(1, ({ double complex z = 1; _Generic(exp(z), double complex: 1, default: 0); }));
+  ASSERT(1, ({ float complex z = 1; _Generic(fabs(z), float: 1, default: 0); }));
 
   printf("OK\n");
   return 0;
