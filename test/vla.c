@@ -127,6 +127,12 @@ int main() {
 
   ASSERT(6, vla_label(3));
 
+  // The length is an assignment expression, evaluated once.
+  ASSERT(12, ({ int k; int a[k = 3]; sizeof(a); }));
+  ASSERT(3, ({ int k; int a[k = 3]; k; }));
+  ASSERT(4, ({ int n = 0; int a[n += 4][2]; n; }));
+  ASSERT(32, ({ int n = 0; int a[n += 4][2]; sizeof(a); }));
+
   printf("OK\n");
   return 0;
 }

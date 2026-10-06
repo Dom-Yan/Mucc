@@ -46,6 +46,12 @@ int main() {
   ASSERT(6, ({ int decl_f2(int), y = 3; decl_f2(y); }));
   ASSERT(9, ({ int decl_f1(void), decl_f2(int), y = 4; decl_f2(y) + decl_f1(); }));
 
+  // [GNU] __auto_type, as C23's auto
+  ASSERT(8, ({ __auto_type x = 5L; sizeof(x); }));
+  ASSERT(5, ({ __auto_type x = 5L; __auto_type p = &x; *p; }));
+  ASSERT(4, ({ const __auto_type f = 1.5f; sizeof(f); }));
+  ASSERT(8, ({ int a[3]; __auto_type p = a; sizeof(p); }));
+
   printf("OK\n");
   return 0;
 }

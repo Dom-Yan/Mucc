@@ -81,6 +81,14 @@ static int big_sparse[1000000] = {[999999] = 5, [3] = 2};
 char str_nul[8] = "ab\0cd";
 int count_desg[] = {[5] = 1, 2, [1 ... 3] = (int)(7.5), sizeof(int[2][3])};
 
+// [GNU] An element of a string literal is a constant, and a scalar's
+// excess values are skipped, as an array's are.
+char str_elem1 = "xyz"[1];
+signed char str_elem2 = "\xff"[0];
+int str_elem3 = "ab"[0] + 1["ab"];
+int scalar_excess = {1, 2};
+int scalar_comma = {3,};
+
 int main() {
   ASSERT(1, neg1 == -4);
   ASSERT(1, neg2 == -4UL);
@@ -365,6 +373,12 @@ int main() {
   ASSERT(7, ({ int a[] = {[5] = 1, 2, [1 ... 3] = g5 + 2, sizeof(int[2][3])}; sizeof a / sizeof *a; }));
   ASSERT(7, ({ int a[] = {[5] = 1, 2, [1 ... 3] = g5 + 2, sizeof(int[2][3])}; a[2]; }));
   ASSERT(0, ({ char e[2][4] = {"ab", [1] = "cd"}; strcmp(e[1], "cd"); }));
+  ASSERT('y', str_elem1);
+  ASSERT(-1, str_elem2);
+  ASSERT('a' + 'b', str_elem3);
+  ASSERT(1, scalar_excess);
+  ASSERT(3, scalar_comma);
+  ASSERT(9, ({ int y = {9, 10}; y; }));
 
   printf("OK\n");
   return 0;

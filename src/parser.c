@@ -1069,8 +1069,9 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       continue;
 
     // With a type, `auto` is the old storage class and means nothing.
-    // Alone, it's C23 type inference (see auto_type).
-    if (equal(tok, "auto")) {
+    // Alone, it's C23 type inference (see auto_type), as gcc's
+    // __auto_type is.
+    if (equal(tok, "auto") || equal(tok, "__auto_type")) {
       is_auto = true;
       tok = tok->next;
       continue;
@@ -1370,8 +1371,9 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
     return array_of(ty, -1);
   }
 
+  // An assignment expression: `int a[k = 3]` is a VLA that also sets k.
   Token *start = tok;
-  Node *expr = conditional(&tok, tok);
+  Node *expr = assign(&tok, tok);
   tok = skip(tok, "]");
   ty = type_suffix(rest, tok, ty);
 
@@ -2669,8 +2671,12 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
 
   if (equal(tok, "{")) {
     // An initializer for a scalar variable can be surrounded by
-    // braces. E.g. `int x = {3};`. Handle that case.
+    // braces. E.g. `int x = {3};`. Handle that case. More values after
+    // the first are skipped, as an array's excess elements are.
     initializer2(&tok, tok->next, init);
+    while (equal(tok, ",") && !equal(tok->next, "}"))
+      tok = skip_excess_element(tok->next);
+    consume(&tok, tok, ",");
     *rest = skip(tok, "}");
     return;
   }
@@ -3012,7 +3018,7 @@ static bool is_typename(Token *tok) {
     static char *kw[] = {
       "void", "_Bool", "char", "short", "int", "long", "__int128", "struct",
       "union", "typedef", "enum", "static", "extern", "_Alignas", "signed",
-      "unsigned", "const", "volatile", "auto", "register", "restrict",
+      "unsigned", "const", "volatile", "auto", "__auto_type", "register", "restrict",
       "__restrict", "__restrict__", "_Noreturn", "float", "double", "typeof",
       "_Complex", "__complex__", "__complex",
       "__typeof_unqual__", "inline",
@@ -3999,6 +4005,25 @@ static int64_t eval2(Node *node, char ***label) {
   return val;
 }
 
+// The string literal that pointer `node` points into, as `"xyz" + 1`
+// does, with the byte offset in `*off`, or NULL. (The offset is converted
+// to the pointer's type, by add_type().)
+static Obj *string_at(Node *node, int64_t *off) {
+  *off = 0;
+  for (;;) {
+    if (node->kind == ND_CAST && node->ty->base) {
+      node = node->lhs;
+    } else if ((node->kind == ND_ADD || node->kind == ND_SUB) && node->lhs->ty->base &&
+               is_const_expr(node->rhs)) {
+      *off += node->kind == ND_ADD ? eval(node->rhs) : -eval(node->rhs);
+      node = node->lhs;
+    } else {
+      break;
+    }
+  }
+  return node->kind == ND_VAR && node->var->is_string ? node->var : NULL;
+}
+
 static int64_t eval_wide(Node *node, char ***label) {
   add_type(node);
 
@@ -4121,12 +4146,19 @@ static int64_t eval_wide(Node *node, char ***label) {
   }
   case ND_ADDR:
     return eval_rval(node->lhs, label);
-  case ND_DEREF:
+  case ND_DEREF: {
     // An element that is itself an array, as `a[3]` of `int a[4][8]`, is
     // its address.
     if (node->ty->kind == TY_ARRAY)
       return eval2(node->lhs, label);
+
+    // [GNU] An element of a string literal, as in `"xyz"[1]`
+    int64_t off;
+    Obj *str = string_at(node->lhs, &off);
+    if (str && is_integer(node->ty) && off >= 0 && off + node->ty->size <= str->ty->size)
+      return read_buf(str->init_data + off, node->ty->size);
     break;
+  }
   case ND_LABEL_VAL:
     *label = &node->unique_label;
     return 0;
