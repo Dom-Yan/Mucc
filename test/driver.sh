@@ -254,6 +254,13 @@ check '-fcommon'
 echo 'int foo;' | $mucc -fno-common -S -o- -xc - | grep -q '^foo:'
 check '-fno-common'
 
+# attributes common and nocommon override -fcommon and -fno-common
+echo 'int foo __attribute__((nocommon));' | $mucc -fcommon -S -o- -xc - | grep -q '^foo:'
+check 'attribute nocommon'
+
+echo 'int foo __attribute__((common));' | $mucc -fno-common -S -o- -xc - | grep -q '\.comm foo'
+check 'attribute common'
+
 # -include
 echo foo > $tmp/out.h
 echo bar | $mucc -include $tmp/out.h -E -o- -xc - | grep -q -z 'foo.*bar'

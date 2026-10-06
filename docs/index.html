@@ -155,8 +155,9 @@ also has a <code>.sha256</code> file to check the download with
 <p>Mucc takes the usual gcc flags, such as <code>-c</code>, <code>-S</code>,
 <code>-E</code>, <code>-o</code>, <code>-I</code>, <code>-D</code>,
 <code>-l</code>, <code>-L</code>, <code>-static</code> and
-<code>-std=</code>. Programs are linked statically against the musl inside
-mucc. To use the system's glibc and shared libraries instead, add
+<code>-std=</code>. Like clang, it says it is gcc 4.2, so headers and build
+scripts that look for gcc take their gcc paths. Programs are linked
+statically against the musl inside mucc. To use the system's glibc and shared libraries instead, add
 <code>--libc=system</code>. Instructions for building from source are in
 the <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
 
@@ -177,7 +178,7 @@ the <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
     thread-local variables, structs by value, varargs</li>
   <li>GNU extensions: <code>__int128</code>, statement expressions,
     computed <code>goto</code>, case ranges, <code>__attribute__</code>,
-    extended <code>asm</code> and <code>asm goto</code></li>
+    asm labels, extended <code>asm</code> and <code>asm goto</code></li>
   <li>New in 1.1.0: Linux's own
     headers (<code>&lt;linux/*.h&gt;</code>), <code>.S</code> files,
     <code>&lt;stdckdint.h&gt;</code>, gcc's bit-counting, overflow and

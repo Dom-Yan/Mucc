@@ -121,6 +121,21 @@ bool is_ret_in_memory(Type *ty) {
 // Are t1 and t2 compatible, leaving aside their own qualifiers (not those
 // of what they point to)? Copies (see copy_type) lead back to the type
 // they were made from.
+static bool is_compatible_unqual(Type *t1, Type *t2);
+
+// Is `ty` the type of a member of transparent union `u`? As gcc has it, a
+// function with such a parameter is compatible with one that has the
+// member's type there: glibc's `accept` is an
+// `int (*)(int, struct sockaddr *, socklen_t *)`.
+static bool transparent_member(Type *u, Type *ty) {
+  if (!u->is_transparent)
+    return false;
+  for (Member *mem = u->members; mem; mem = mem->next)
+    if (is_compatible_unqual(mem->ty, ty))
+      return true;
+  return false;
+}
+
 static bool is_compatible_unqual(Type *t1, Type *t2) {
   if (t1 == t2)
     return true;
@@ -159,7 +174,8 @@ static bool is_compatible_unqual(Type *t1, Type *t2) {
     Type *p1 = t1->params;
     Type *p2 = t2->params;
     for (; p1 && p2; p1 = p1->next, p2 = p2->next)
-      if (!is_compatible_unqual(p1, p2))
+      if (!is_compatible_unqual(p1, p2) && !transparent_member(p1, p2) &&
+          !transparent_member(p2, p1))
         return false;
     return p1 == NULL && p2 == NULL;
   }
@@ -718,6 +734,23 @@ static bool pointee_ok(Type *to, Type *from) {
       (to->kind == TY_VLA || from->kind == TY_VLA))
     return pointee_ok(to->base, from->base);
   return false;
+}
+
+// Can `from` be assigned to type `to` with no cast and no warning? (For a
+// transparent union's members: see funcall() in parser.c.)
+bool is_assignable(Type *to, Node *from) {
+  add_type(from);
+  Type *ty = from->ty;
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+    ty = pointer_to(ty->base);
+  else if (ty->kind == TY_FUNC)
+    ty = pointer_to(ty);
+  if (to->kind == TY_PTR)
+    return (ty->kind == TY_PTR && pointee_ok(to->base, ty->base)) ||
+           (is_integer(ty) && is_null_const(from));
+  if (is_numeric(to) && is_numeric(ty))
+    return true;
+  return is_compatible_unqual(to, ty);
 }
 
 // Reports an error if `from` can't be converted to type `to` without a

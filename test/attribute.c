@@ -68,6 +68,30 @@ static int has_builtin_ok = 1;
 static int has_attribute_macro_ok = 1;
 #endif
 
+// mode(): an integer or floating type of a size, as glibc's
+// <sys/types.h> defines int8_t
+typedef int mode_qi __attribute__((__mode__(__QI__)));
+typedef unsigned mode_uhi __attribute__((mode(HI)));
+typedef int mode_di __attribute__((mode(DI)));
+typedef unsigned mode_word __attribute__((__mode__(__word__)));
+typedef int mode_ti __attribute__((mode(TI)));
+typedef float mode_df __attribute__((mode(DF)));
+
+// transparent_union: a parameter takes any member's type, passed as the
+// first member is, as glibc's socket functions take struct sockaddr
+struct tu_a { int x; };
+struct tu_b { int y; int z; };
+typedef union { struct tu_a *a; struct tu_b *b; } tu_arg __attribute__((transparent_union));
+static int tu_first(tu_arg p) { return p.a->x; }
+
+// asm labels: the symbol of a function or variable, as glibc's
+// __REDIRECT makes glob glob64
+int renamed_impl(int x) { return x * 3; }
+int renamed(int x) __asm__("renamed_impl");
+int renamed_var_impl = 42;
+extern int renamed_var __asm__("renamed_var_impl");
+extern int renamed_var;
+
 int main() {
   ASSERT(1, has_attribute_ok);
   ASSERT(1, has_builtin_ok);
@@ -116,6 +140,23 @@ int main() {
   ASSERT(1, offsetof(struct __attribute__((aligned(8))) { char a; int b; } __attribute__((packed)), b));
 
   ASSERT(16, ({ struct __attribute__((aligned(8+8))) { char a; int b; } x; _Alignof(x); }));
+
+  ASSERT(1, sizeof(mode_qi));
+  ASSERT(-1, ({ mode_qi c = 255; c; }));
+  ASSERT(2, sizeof(mode_uhi));
+  ASSERT(65535, ({ mode_uhi h = -1; h; }));
+  ASSERT(8, sizeof(mode_di));
+  ASSERT(8, sizeof(mode_word));
+  ASSERT(1, ({ mode_word w = -1; w > 0; }));
+  ASSERT(16, sizeof(mode_ti));
+  ASSERT(8, sizeof(mode_df));
+  ASSERT(1, __builtin_types_compatible_p(mode_qi, signed char));
+
+  ASSERT(7, ({ struct tu_a a = {7}; tu_first(&a); }));
+  ASSERT(9, ({ struct tu_b b = {9, 1}; tu_first(&b); }));
+
+  ASSERT(21, renamed(7));
+  ASSERT(42, renamed_var);
 
   printf("OK\n");
   return 0;

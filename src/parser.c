@@ -80,6 +80,10 @@ typedef struct {
   Token *gnu_inline_tok;
   Token *asm_label_tok; // `asm("name")` after a declarator, or NULL
   char *asm_label;
+  Token *mode_tok;      // the name in mode(name), or NULL
+  Token *transparent_tok; // transparent_union, or NULL
+  int8_t common;          // common (1) or nocommon (-1), or 0
+  Token *common_tok;
 } Attrs;
 
 // Variable attributes such as typedef or extern.
@@ -237,6 +241,7 @@ static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
 static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr);
+static Type *mode_type(Type *ty, Token *tok);
 static bool is_function(Token *tok, Type *basety);
 static bool falls_through(Node *node);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
@@ -584,8 +589,8 @@ static char *ignored_attributes[] = {
 // Attributes gcc has that would change what a program does, which mucc
 // doesn't implement (yet): they are errors, never silently ignored.
 static char *unsupported_attributes[] = {
-  "retain", "weakref", "vector_size", "mode", "ifunc", "naked", "target",
-  "target_clones", "transparent_union", "common", "nocommon", "copy",
+  "retain", "weakref", "vector_size", "ifunc", "naked", "target",
+  "target_clones", "copy",
   "symver", "scalar_storage_order", "noinit", "persistent", "hardbool",
 };
 
@@ -617,6 +622,7 @@ static char *attribute_name(Token *tok) {
 static char *implemented_attributes[] = {
   "noreturn", "used", "weak", "packed", "aligned", "constructor",
   "destructor", "cleanup", "alias", "section", "visibility", "gnu_inline",
+  "mode", "transparent_union", "common", "nocommon",
 };
 
 // __has_attribute(name) in the preprocessor: does mucc accept attribute
@@ -696,6 +702,31 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
     return;
   }
 
+  // mode(QI) and the like: an integer or floating type of a given size,
+  // as glibc's <sys/types.h> makes int8_t. See mode_type().
+  if (!strcmp(name, "mode")) {
+    if (!args || args->kind != TK_IDENT)
+      error_tok(tok, "attribute 'mode' needs a mode name");
+    skip(args->next, ")");
+    a->mode_tok = args;
+    return;
+  }
+
+  // On a global: as -fcommon or -fno-common, for it alone
+  if (!strcmp(name, "common") || !strcmp(name, "nocommon")) {
+    if (!allow_decl)
+      error_tok(tok, "attribute '%s' is not supported here", name);
+    a->common = name[0] == 'c' ? 1 : -1;
+    a->common_tok = tok;
+    return;
+  }
+
+  // On a union typedef: see parse_typedef() and funcall().
+  if (!strcmp(name, "transparent_union")) {
+    a->transparent_tok = tok;
+    return;
+  }
+
   // With gcc's meaning of `extern inline`: see function().
   if (!strcmp(name, "gnu_inline")) {
     a->gnu_inline_tok = tok;
@@ -756,6 +787,12 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
 }
 
 static void merge_attrs(Attrs *dst, Attrs *src) {
+  if (src->mode_tok)
+    dst->mode_tok = src->mode_tok;
+  if (src->common) {
+    dst->common = src->common;
+    dst->common_tok = src->common_tok;
+  }
   dst->is_noreturn |= src->is_noreturn;
   dst->is_unused |= src->is_unused;
   dst->is_packed |= src->is_packed;
@@ -816,12 +853,12 @@ static void no_fn_attrs(Attrs *a, char *what) {
 // For declarations that aren't a function or a global variable: those
 // that name a symbol can't be.
 static void no_global_attrs(Attrs *a, char *what) {
-  Token *toks[] = {a->weak_tok, a->alias_tok, a->section_tok, a->vis_tok};
-  not_on(toks, 4, what);
+  Token *toks[] = {a->weak_tok, a->alias_tok, a->section_tok, a->vis_tok, a->common_tok};
+  not_on(toks, 5, what);
 }
 
-// An asm label names a register variable's register. On a function or
-// global, it would name its symbol, which mucc doesn't support.
+// An asm label names a function's or a global's symbol, or a register
+// variable's register. Elsewhere, it's an error.
 static void no_asm_label(Attrs *a, char *what) {
   if (a->asm_label_tok)
     error_tok(a->asm_label_tok, "an asm label is not supported on %s", what);
@@ -1441,6 +1478,8 @@ static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs) {
     ty = type_suffix(&tok, tok, ty);
     tok = asm_label(tok, attrs);
     *rest = attributes(tok, attrs, true);
+    if (attrs->mode_tok)
+      ty = copy_type(mode_type(ty, attrs->mode_tok));
     ty->name = name;
     ty->name_pos = name_pos;
   }
@@ -1448,6 +1487,36 @@ static Type *declarator(Token **rest, Token *tok, Type *ty, Attrs *attrs) {
   if (attrs == &scratch)
     no_decl_attrs(&scratch);
   return ty;
+}
+
+// The type `ty` becomes with attribute mode(name): the integer type of
+// that size with ty's sign, as `int __attribute__((mode(QI)))` is signed
+// char, or the floating type.
+static Type *mode_type(Type *ty, Token *tok) {
+  char *m = attribute_name(tok);
+  if (is_integer(ty) && ty->kind != TY_BOOL) {
+    int size = !strcmp(m, "QI") || !strcmp(m, "byte") ? 1 : !strcmp(m, "HI") ? 2 :
+               !strcmp(m, "SI") ? 4 :
+               !strcmp(m, "DI") || !strcmp(m, "word") || !strcmp(m, "pointer") ? 8 :
+               !strcmp(m, "TI") ? 16 : 0;
+    bool u = ty->is_unsigned;
+    switch (size) {
+    case 1: return u ? ty_uchar : ty_schar;
+    case 2: return u ? ty_ushort : ty_short;
+    case 4: return u ? ty_uint : ty_int;
+    case 8: return u ? ty_ulong : ty_long;
+    case 16: return u ? ty_uint128 : ty_int128;
+    }
+  }
+  if (is_flonum(ty)) {
+    if (!strcmp(m, "SF"))
+      return ty_float;
+    if (!strcmp(m, "DF"))
+      return ty_double;
+    if (!strcmp(m, "XF"))
+      return ty_ldouble;
+  }
+  error_tok(tok, "mode '%s' is not supported for type '%s'", m, type_name(ty));
 }
 
 // abstract-declarator = attributes pointers attributes
@@ -5264,6 +5333,19 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
       error_tok(arg->tok, "too many arguments to '%s' (expected %d)",
                 name, nparams);
 
+    // A transparent union's argument is any member's, as its first member
+    if (param_ty && param_ty->is_transparent && arg->ty->kind != TY_UNION) {
+      Member *mem = param_ty->members;
+      while (mem && !is_assignable(mem->ty, arg))
+        mem = mem->next;
+      if (!mem)
+        error_tok(arg->tok, "argument %d of '%s' fits no member of '%s'", nargs, name,
+                  type_name(param_ty));
+      cur = cur->next = new_cast(arg, param_ty->members->ty);
+      param_ty = param_ty->next;
+      continue;
+    }
+
     if (param_ty) {
       check_assign(param_ty, arg, format("argument %d of '%s'", nargs, name));
       if ((param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION) ||
@@ -7539,6 +7621,16 @@ static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr) {
       ty = copy_type(ty);
       ty->align = all.align;
     }
+
+    // [GNU] A transparent union, as a parameter, takes an argument of any
+    // of its members' types, passed as its first member is. glibc's
+    // socket functions take any struct sockaddr pointer this way.
+    if (all.transparent_tok) {
+      if (ty->kind != TY_UNION || !ty->members)
+        error_tok(all.transparent_tok, "attribute 'transparent_union' needs a union");
+      ty = copy_type(ty);
+      ty->is_transparent = true;
+    }
     push_scope(get_ident(ty->name))->type_def = ty;
   }
   return tok;
@@ -7632,7 +7724,9 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   if (da.weak_tok && attr->is_static)
     error_tok(da.weak_tok, "a weak function must not be static");
   no_cleanup(&da, "a function");
-  no_asm_label(&da, "a function");
+  if (da.common_tok)
+    error_tok(da.common_tok, "attribute '%s' is not supported on a function",
+              da.common > 0 ? "common" : "nocommon");
 
   Obj *fn = find_func(name_str);
   if (fn) {
@@ -7659,6 +7753,11 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn->is_noreturn = is_noreturn ||
                       (is_libc_noreturn(name_str) && in_system_header(ty->name));
   }
+
+  // `int f(void) asm("g");`: f's symbol is g, as glibc's __REDIRECT has
+  // it (`glob` is `glob64` with _FILE_OFFSET_BITS=64).
+  if (da.asm_label_tok)
+    fn->asm_name = da.asm_label;
 
   // Where it's defined (or first declared), for warnings
   if (!fn->tok || equal(tok, "{"))
@@ -7799,7 +7898,6 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(all.layout_tok, "attribute 'packed' is not supported on a variable");
     no_fn_attrs(&all, "a variable");
     no_cleanup(&all, "a global variable");
-    no_asm_label(&all, "a global variable");
 
     Token *name = ty->name;
     if (basety == &auto_type) {
@@ -7827,6 +7925,14 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     var->is_weak = all.weak_tok != NULL;
     var->section = all.section;
     var->visibility = all.visibility;
+    var->common = all.common;
+
+    // `extern int x asm("y");`: x's symbol is y, also in later
+    // declarations of x without it
+    if (all.asm_label_tok)
+      var->asm_name = all.asm_label;
+    else if (prev && prev->var && !prev->var->is_function && !prev->var->is_local)
+      var->asm_name = prev->var->asm_name;
 
     // An alias defines no storage of its own.
     if (all.alias_tok) {
@@ -8114,5 +8220,10 @@ Obj *parse(Token *tok) {
 
   // Remove redundant tentative definitions.
   scan_globals();
+
+  // From here on, names are symbols: an asm label replaces the C name.
+  for (Obj *var = globals; var; var = var->next)
+    if (var->asm_name)
+      var->name = var->asm_name;
   return globals;
 }

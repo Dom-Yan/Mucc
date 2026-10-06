@@ -52,7 +52,9 @@ mucc -o hello hello.c
 It takes the usual gcc flags (`-c`, `-S`, `-E`, `-o`, `-I`, `-D`, `-l`,
 `-L`, `-static`, `-std=`, ...). `-g` lets gdb show variables and types,
 and `-Wall`, `-Werror` and `-Wno-<name>` work as with gcc. `-O` flags are
-accepted and ignored. `mucc -ar` makes static libraries.
+accepted and ignored. `mucc -ar` makes static libraries. Like clang, mucc
+says it is gcc 4.2 (`__GNUC__` is 4), so headers and build scripts that
+look for gcc take their gcc paths.
 
 Programs are linked statically against the musl inside mucc, so they run on
 any x86-64 Linux. To use the system's glibc and shared libraries (OpenSSL,
@@ -136,7 +138,8 @@ at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
   structs by value, varargs, complex numbers (`_Complex` and
   `<complex.h>`, with infinities and NaNs as gcc has them)
 - GNU extensions: `__int128`, statement expressions, computed `goto`, case
-  ranges, `__attribute__`, extended `asm` and `asm goto`, and gcc's
+  ranges, `__attribute__` (with `mode` and `transparent_union`, as glibc's
+  headers use them), asm labels, extended `asm` and `asm goto`, and gcc's
   builtins for bit counting (`__builtin_clz`, `__builtin_popcount`, ...),
   byte swaps, branch hints, overflow checks (`__builtin_add_overflow`,
   ...), atomics (`__sync_*`, `__atomic_*`), floating point

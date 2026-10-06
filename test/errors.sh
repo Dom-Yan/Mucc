@@ -783,9 +783,8 @@ EOF
 
 # Every attribute gcc has that would change what a program does, but mucc
 # doesn't implement, is an error (unsupported_attributes in src/parser.c).
-for a in retain weakref vector_size mode ifunc naked target target_clones \
-         transparent_union common nocommon copy symver scalar_storage_order \
-         noinit persistent hardbool; do
+for a in retain weakref vector_size ifunc naked target target_clones \
+         copy symver scalar_storage_order noinit persistent hardbool; do
   expect_error "1:22: error: attribute '$a' is not supported" <<EOF
 int x __attribute__((__${a}__(1)));
 EOF
@@ -1114,17 +1113,29 @@ expect_ok 'an input and an output in the same register, and other clobbers' <<'E
 void f(int x) { asm("" : "=a"(x) : "a"(x)); asm volatile("" ::: "memory", "cc", "xmm0", "%r11"); }
 EOF
 
-# asm labels: only a register variable's register
-expect_error "1:13: error: an asm label is not supported on a function" <<'EOF'
-int f(void) __asm__("g");
-EOF
-
-expect_error "1:7: error: an asm label is not supported on a global variable" <<'EOF'
-int x __asm__("g");
-EOF
-
+# asm labels: a local one only names a register variable's register
 expect_error "1:22: error: an asm label is only supported on a register variable" <<'EOF'
 void f(void) { int x asm("rax"); }
+EOF
+
+expect_error "1:29: error: attribute 'common' is not supported on a function" <<'EOF'
+void f(void) __attribute__((common));
+EOF
+
+# mode and transparent_union
+expect_error "1:51: error: mode 'QI' is not supported for type 'struct S'" <<'EOF'
+typedef struct S { int a; } T __attribute__((mode(QI)));
+EOF
+
+expect_error "1:30: error: attribute 'transparent_union' needs a union" <<'EOF'
+typedef int T __attribute__((transparent_union));
+EOF
+
+expect_error "4:24: error: argument 1 of 'f' fits no member of 'union (anonymous)'" <<'EOF'
+typedef union { int *i; long *l; } U __attribute__((transparent_union));
+int f(U u);
+double d;
+int g(void) { return f(&d) + f(&d); }
 EOF
 
 expect_error "1:31: error: invalid register name 'foo'" <<'EOF'

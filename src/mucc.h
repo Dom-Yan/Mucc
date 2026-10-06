@@ -212,11 +212,14 @@ struct Obj {
   bool is_static;
   bool is_weak;       // __attribute__((weak))
   char *alias_target; // alias("target"): another name for target
+  char *asm_name;     // asm("name") on its declaration: its symbol, which
+                      // it is renamed to once parsed (see parse())
   char *section;      // section("name"), or NULL
   char *visibility;   // visibility("hidden") and so on, or NULL
 
   // Global variable
   bool is_tentative;
+  int8_t common;      // attribute common (1) or nocommon (-1), or 0
   bool is_tls;
   bool is_string; // a string literal, which goes in .rodata
   char *init_data;
@@ -465,6 +468,7 @@ struct Type {
   bool is_atomic;     // true if _Atomic
   bool is_const;
   bool is_volatile;
+  bool is_transparent; // a union with attribute transparent_union
   bool is_distinct;   // signed char or long long: char or long, but not
                       // compatible with them
   bool is_complex;    // _Complex: a TY_STRUCT of the real and imaginary
@@ -568,6 +572,7 @@ bool is_numeric(Type *ty);
 bool has_ldouble(Type *ty);
 bool is_ret_in_memory(Type *ty);
 bool has_unaligned_member(Type *ty);
+bool is_assignable(Type *to, Node *from);
 bool is_compatible(Type *t1, Type *t2);
 Type *copy_type(Type *ty);
 Type *qualified(Type *ty, bool is_const, bool is_volatile);

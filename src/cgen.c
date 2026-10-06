@@ -3386,7 +3386,8 @@ static void emit_data(Obj *prog) {
 
     // Common symbol (never for a weak or thread-local one or one with a
     // section, as with gcc)
-    if (opt_fcommon && var->is_tentative && !var->is_tls && !is_weak(prog, var) &&
+    bool common = var->common ? var->common > 0 : opt_fcommon;
+    if (common && var->is_tentative && !var->is_tls && !is_weak(prog, var) &&
         !var->section) {
       println("  .comm %s, %d, %d", var->name, var->ty->size, align);
       continue;

@@ -1770,6 +1770,14 @@ void init_macros(void) {
   define_macro("__x86_64__", "1");
   define_macro("__VERSION__", "\"mucc " MUCC_VERSION "\"");
 
+  // As clang does, mucc says it is gcc 4.2, so headers take their GNU
+  // paths (glibc's __REDIRECT and attributes, libtool's checks) but none
+  // that need a newer gcc.
+  define_macro("__GNUC__", "4");
+  define_macro("__GNUC_MINOR__", "2");
+  define_macro("__GNUC_PATCHLEVEL__", "1");
+  define_macro("__GNUC_STDC_INLINE__", "1");
+
   // What gcc says of the target, which code tests in #if: the byte order,
   // the limits and sizes of the types, the floating-point formats, and
   // which atomics never take a lock.
