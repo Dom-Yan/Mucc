@@ -516,6 +516,7 @@ struct Type {
   Type *return_ty;
   Type *params;
   bool is_variadic;
+  bool is_oldstyle; // `int f()` before C23: any arguments, but not `int f(...)`
   Type *next;
 };
 

@@ -1342,12 +1342,12 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
   // Before C23, `int f()` says nothing about f's parameters, so any
   // arguments are accepted. In C23 it means `int f(void)`.
-  if (cur == &head && opt_std < 2023)
-    is_variadic = true;
+  bool is_oldstyle = cur == &head && !is_variadic && opt_std < 2023;
 
   ty = func_type(ty);
   ty->params = head.next;
-  ty->is_variadic = is_variadic;
+  ty->is_variadic = is_variadic || is_oldstyle;
+  ty->is_oldstyle = is_oldstyle;
   *rest = tok->next;
   return ty;
 }
@@ -1668,9 +1668,12 @@ static Type *enum_specifier(Token **rest, Token *tok) {
   tok = skip(tok, "{");
 
   // An `enum E` declared earlier in this scope is the same type, completed
-  // here.
+  // here. Before C23, which allows the same list again, a second list is
+  // an error.
   if (tag) {
     Type *prev = hashmap_get2(&scope->tags, tag->loc, tag->len);
+    if (prev && opt_std < 2023 && (prev->kind != TY_ENUM || prev->enum_consts))
+      error_tok(tag, "redefinition of '%.*s'", tag->len, tag->loc);
     if (prev && prev->kind == TY_ENUM && prev->size < 0) {
       *prev = *ty;
       ty = prev;
@@ -5175,10 +5178,13 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
   // struct, even in a function pointer's parameters, as in
   // `struct S { int (*f)(struct S *); };`. It is incomplete until the `}`.
   // A struct already declared in this scope (`struct S;`) is the same type,
-  // completed here.
+  // completed here. Before C23, which allows the same members again,
+  // defining it twice is an error.
   Type *prev = NULL;
   if (tag) {
     prev = hashmap_get2(&scope->tags, tag->loc, tag->len);
+    if (prev && opt_std < 2023 && (prev->size >= 0 || prev->kind == TY_ENUM))
+      error_tok(tag, "redefinition of '%.*s'", tag->len, tag->loc);
     if (!prev)
       push_tag_scope(tag, ty);
   }
@@ -7828,7 +7834,15 @@ static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr) {
       ty = copy_type(ty);
       ty->is_transparent = true;
     }
-    push_scope(get_ident(ty->name))->type_def = ty;
+
+    // A typedef may be repeated in its scope, but only for the same type.
+    char *name = get_ident(ty->name);
+    VarScope *prev = hashmap_get(&scope->vars, name);
+    if (prev && !prev->type_def)
+      error_tok(ty->name, "'%s' redeclared as a different kind of symbol", name);
+    if (prev && !is_compatible(prev->type_def, ty))
+      error_tok(ty->name, "conflicting types for '%s'", name);
+    push_scope(name)->type_def = ty;
   }
   return tok;
 }
@@ -7930,8 +7944,14 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     // Redeclaration
     if (!fn->is_function)
       error_tok(tok, "redeclared as a different kind of symbol");
+    if (!is_compatible(fn->ty, ty))
+      error_tok(ty->name, "conflicting types for '%s'", name_str);
     if (fn->is_definition && equal(tok, "{"))
       error_tok(tok, "redefinition of %s", name_str);
+
+    // A prototype after `int f()` is f's type from then on.
+    if (fn->ty->is_oldstyle && !ty->is_oldstyle)
+      fn->ty = ty;
     if (!fn->is_static && attr->is_static)
       error_tok(tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || equal(tok, "{");
@@ -8108,6 +8128,15 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     if (equal(tok, "=") && prev && prev->var && !prev->var->is_function &&
         prev->var->is_definition && !prev->var->is_tentative)
       error_tok(name, "redefinition of %s", prev->var->name);
+
+    // Its declarations must agree: `extern int v; extern long v;` is an
+    // error (autoconf's tests rely on it), `extern int a[]; int a[3];` not.
+    if (prev && prev->var && !prev->var->is_local) {
+      if (prev->var->is_function)
+        error_tok(name, "'%s' redeclared as a different kind of symbol", prev->var->name);
+      if (!is_compatible(prev->var->ty, ty))
+        error_tok(name, "conflicting types for '%s'", prev->var->name);
+    }
 
     Obj *var = new_gvar(get_ident(name), ty);
     var->tok = name;

@@ -1329,6 +1329,66 @@ int x = 1;
 int x = 1;
 EOF
 
+# Declarations of a name must agree, as autoconf's and gnulib's tests
+# expect (gnulib's ioctl test declares `int ioctl(int, int, ...)`).
+expect_error "2:5: error: conflicting types for 'f'" <<'EOF'
+int f(int);
+int f(long);
+EOF
+
+expect_error "2:5: error: conflicting types for 'g'" <<'EOF'
+int g(int, unsigned long, ...);
+int g(int, int, ...);
+EOF
+
+expect_error "2:5: error: conflicting types for 'h'" <<'EOF'
+int h();
+int h(float x) { return 0; }
+EOF
+
+expect_error "2:13: error: conflicting types for 'v'" <<'EOF'
+extern int v;
+extern long v;
+EOF
+
+expect_error "2:5: error: conflicting types for 'c'" <<'EOF'
+const int c;
+int c;
+EOF
+
+expect_error "2:5: error: 'f' redeclared as a different kind of symbol" <<'EOF'
+int f(void);
+int f;
+EOF
+
+expect_error "2:14: error: conflicting types for 'T'" <<'EOF'
+typedef int T;
+typedef long T;
+EOF
+
+expect_error "2:8: error: redefinition of 'S'" <<'EOF'
+struct S { int a; };
+struct S { long a; };
+EOF
+
+expect_error "2:6: error: redefinition of 'E'" <<'EOF'
+enum E { A };
+enum E { B };
+EOF
+
+expect_ok 'declarations that agree' <<'EOF'
+int f(); int f(int x) { return x; }
+int g(const int); int g(int x) { return x; }
+int h(int a[]); int h(int *a) { return 0; }
+extern int a[]; int a[3];
+int v; int v; int v = 3;
+typedef int T; typedef int T;
+struct S; struct S { int a; }; struct S;
+static int s(void); int s(void) { return 0; }
+void k(int n, int (*a)[n]); void k(int n, int (*a)[3]);
+long l(long); long l(long int x) { return x; }
+EOF
+
 # These used to crash.
 expect_error "1:20: error: member name omitted" <<'EOF'
 struct T { int *a, ; } t;

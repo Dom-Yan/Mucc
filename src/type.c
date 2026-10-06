@@ -122,6 +122,7 @@ bool is_ret_in_memory(Type *ty) {
 // of what they point to)? Copies (see copy_type) lead back to the type
 // they were made from.
 static bool is_compatible_unqual(Type *t1, Type *t2);
+static Type *enum_int_type(Type *ty);
 
 // Is `ty` the type of a member of transparent union `u`? As gcc has it, a
 // function with such a parameter is compatible with one that has the
@@ -136,6 +137,22 @@ static bool transparent_member(Type *u, Type *ty) {
   return false;
 }
 
+// `int f()` before C23: nothing is said of its parameters.
+static bool is_unprototyped(Type *fn) {
+  return fn->is_oldstyle;
+}
+
+// Can `fn`'s parameters take arguments as `int f()` passes them, after
+// the default argument promotions (C11 6.7.6.3p15)?
+static bool takes_promoted_args(Type *fn) {
+  if (fn->is_variadic)
+    return false;
+  for (Type *p = fn->params; p; p = p->next)
+    if (p->kind == TY_FLOAT || p->kind == TY_BOOL || (is_integer(p) && p->size < 4))
+      return false;
+  return true;
+}
+
 static bool is_compatible_unqual(Type *t1, Type *t2) {
   if (t1 == t2)
     return true;
@@ -146,10 +163,25 @@ static bool is_compatible_unqual(Type *t1, Type *t2) {
   if (t2->origin)
     return is_compatible_unqual(t1, t2->origin);
 
+  // An enum is compatible with the integer type it is stored as.
+  if (t1->kind == TY_ENUM && t1->size >= 4 && t2->kind != TY_ENUM && is_integer(t2))
+    return is_compatible_unqual(enum_int_type(t1), t2);
+  if (t2->kind == TY_ENUM && t2->size >= 4 && t1->kind != TY_ENUM && is_integer(t1))
+    return is_compatible_unqual(t1, enum_int_type(t2));
+
+  // A variable-length array is compatible with any array of a compatible
+  // element type.
+  if ((t1->kind == TY_VLA || t1->kind == TY_ARRAY) && (t2->kind == TY_VLA || t2->kind == TY_ARRAY) &&
+      (t1->kind == TY_VLA || t2->kind == TY_VLA))
+    return is_compatible(t1->base, t2->base);
+
   if (t1->kind != t2->kind)
     return false;
 
   switch (t1->kind) {
+  case TY_VOID:
+  case TY_BOOL:
+    return true;
   case TY_CHAR:
   case TY_SHORT:
   case TY_INT:
@@ -168,6 +200,9 @@ static bool is_compatible_unqual(Type *t1, Type *t2) {
     // return type's, don't count.
     if (!is_compatible_unqual(t1->return_ty, t2->return_ty))
       return false;
+    if (is_unprototyped(t1) || is_unprototyped(t2))
+      return (is_unprototyped(t1) || takes_promoted_args(t1)) &&
+             (is_unprototyped(t2) || takes_promoted_args(t2));
     if (t1->is_variadic != t2->is_variadic)
       return false;
 

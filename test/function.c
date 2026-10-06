@@ -94,8 +94,10 @@ typedef struct {
 typedef __va_elem va_list[1];
 
 int add_all(int n, ...);
-int sprintf(char *buf, char *fmt, ...);
-int vsprintf(char *buf, char *fmt, va_list ap);
+
+// After `double f()`, a prototype is f's type: calls convert to it.
+double proto_after_oldstyle();
+double proto_after_oldstyle(double x) { return x; }
 
 char *fmt(char *buf, char *fmt, ...) {
   va_list ap;
@@ -362,6 +364,7 @@ int main() {
   { char buf[100]; fmt(buf, "%d %d %s", 1, 2, "foo"); printf("%s\n", buf); }
 
   ASSERT(0, ({ char buf[100]; sprintf(buf, "%d %d %s", 1, 2, "foo"); strcmp("1 2 foo", buf); }));
+  ASSERT(3, (int)proto_after_oldstyle(3));
 
   ASSERT(0, ({ char buf[100]; fmt(buf, "%d %d %s", 1, 2, "foo"); strcmp("1 2 foo", buf); }));
 
