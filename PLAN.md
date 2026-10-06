@@ -120,6 +120,13 @@ Then, the same day:
   block-scope extern conflicts, duplicate macro parameters.
 - `e47c156` -g: a VLA is an array of its length, va_list has gcc's
   fields, and a block's variables show only in its code.
+- `a009745` Casts share their type, and `int` to `int` makes none (a
+  quarter of all nodes). sqlite3.c peak 453 MB -> 413 MB.
+- `07a987b` Nodes only as big as their kind needs (288 bytes -> 48 for
+  `a + b`, 208 for statements). 413 MB -> 298 MB, as gcc -O0 (297 MB,
+  6 times slower). Same assembly as before, for sqlite3.c and mucc.
+- `803fe9b` Hidesets shared, not copied per token: `cos(sin(tan(f)))`
+  with `include/tgmath.h` 616 MB -> 210 MB (gcc: 87 MB).
 
 Found on the way:
 - stb includes `<emmintrin.h>` on every x86-64 build, `__GNUC__` or
@@ -134,18 +141,22 @@ Found on the way:
 
 In order:
 
-1. **Memory, more**: implicit casts are full nodes and copy their type
-   (49 MB and 27 MB of sqlite3.c's); a function's tokens and AST could
-   be freed once it is emitted. Macro expansion: musl's `<tgmath.h>`
-   nested three deep takes over 4 GB (gcc: 1.2 GB).
-2. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
+1. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
    `vector_size`): stb and many other libraries use them on x86-64
    without a fallback. The biggest gap left for real code bases.
-3. **Bigger and rare**: arrays of 2 GiB or more (sizes are `int` all
+2. **Bigger and rare**: arrays of 2 GiB or more (sizes are `int` all
    through: types, offsets, codegen); `__int128` bit-fields (layout,
    loads and stores in 128 bits, static initializers).
 
 ## Later
+
+- Memory, if it matters again: tokens are now most of it (sqlite3.c:
+  1.7M of 96 bytes, 163 MB of 298), and only 40% are left after
+  preprocessing; the rest are skipped `#if` groups, directives and
+  macro calls. A Token could be 80 bytes (`filename` and `line_delta`
+  as one pointer to the #line state, `val`/`fval`/`str` in a union, the
+  #embed count in `ty`), or the tokenizer could skip false groups.
+  `<tgmath.h>`'s case is now 1.8M token copies (174 MB).
 
 - Optionally bootstrap releases from the previous release (`make
   CC=mucc` in `release.yml`), so gcc isn't in the release path at all.
@@ -159,5 +170,8 @@ In order:
 Build and test in WSL, not on `/mnt/c`. Mirror the Windows tree into a
 Linux clone (`~/mucc-dev`, with `git config core.fileMode false`), copy
 `src include test Makefile` over, then run `make -j12 test-all` there.
+Copy `src/*.c src/*.h`, not `src/`: the Windows tree has old ignored
+`src/*.o` (and `src/checks/`) from the linter branch, which, copied with
+new times, make takes as up to date.
 `~/mucc-verify`, `~/mucc-old`, `~/mucc-hunt`, `~/probes` and `~/rw` in
 WSL are leftover scratch copies and can be deleted.
