@@ -90,6 +90,14 @@ Then, the same day:
   `<tgmath.h>` computed `sqrt(double)` in float. C's rules now, and
   `*p` on a `void *` is a void expression, as in gcc.
 
+- `cb8668e` Initializers make a node only for what is set, keep strings
+  as bytes, and data is emitted as `.zero` and 16-byte `.byte` lines:
+  `int a[10000000] = {[9999999] = 1}` 8.3 s and 1.6 GB -> 0.28 s and
+  83 MB, a 2 MB string 766 MB -> 35 MB, sqlite3.c 0.75 s -> 0.57 s.
+- `f6dbcae` `#embed`'s bytes are one token, copied into the data: 2 MB
+  1.7 GB -> 33 MB.
+- `7c41ca3` `-E` printed adjacent string literals as only the first.
+
 Found on the way:
 - stb includes `<emmintrin.h>` on every x86-64 build, `__GNUC__` or
   not: it needs SSE intrinsics (`-DSTBI_NO_SIMD -DSTBIR_NO_SIMD` until
@@ -103,43 +111,37 @@ Found on the way:
 
 In order:
 
-1. **Initializer memory** (`parser.c` "Initializers"): about 400 bytes
-   per element, also for each byte of a string or `#embed` and for
-   implicit zeros. `#embed` of 2 MB takes 2 GB (gcc: 15 MB), and
-   `int a[10000000] = {[9999999] = 1}` 1.6 GB. Bytes of strings and
-   `#embed` should go straight into the data, and children be made only
-   for elements that are given.
-2. **Conflicting redeclarations compile silently**: `int f(int); int
+1. **Conflicting redeclarations compile silently**: `int f(int); int
    f(long);`, `extern int v; extern long v;`, a typedef or struct
    redefined differently. autoconf and gnulib probes rely on these
    errors (gnulib decided sed needs no ioctl wrapper).
-3. **Still rejected, accepted by gcc**: `__auto_type`; `int a[k = 3]`;
+2. **Still rejected, accepted by gcc**: `__auto_type`; `int a[k = 3]`;
    `char c = "xyz"[1];` at file scope; `int x = {1, 2};` (gcc warns);
    arrays of 2 GiB or more; `__int128` constants beyond 64 bits in
    static initializers, `__int128` bit-fields and switches; a cleanup
    variable at the end of a statement expression; overflow builtins on
    `__int128`.
-4. **Driver**: `@file` response files; `-MM`, `-MG`, `-dM`, `-imacros`,
+3. **Driver**: `@file` response files; `-MM`, `-MG`, `-dM`, `-imacros`,
    `-iquote`, `-nostdinc`, `-fsyntax-only`, `-Xassembler`, `-specs=`,
    `--param`, `-mcmodel=`, `-print-search-dirs`, `-x c-header`; `mucc
    a.c -l` says `cannot find -l--library=c`; `creal`, `cimag` and
    `conj` as builtins (gcc needs no -lm for them).
-5. **Accepted, rejected by gcc**: duplicate labels, sizeof an
+4. **Accepted, rejected by gcc**: duplicate labels, sizeof an
    incomplete struct or a bit-field, bad bit-field widths, `int x; int
    x;` in a block, `&` of a register variable, `static extern`, a
    flexible array member not last, `int f(void x)`, arrays of
    functions, duplicate macro parameters, `#define f(` with parameters
    on the next line.
-6. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
+5. **-g, minor**: a VLA shows as a pointer, `va_list` has no fields, a
    loop variable shows after its scope.
-7. **Memory, more**: implicit casts are full nodes and copy their type
+6. **Memory, more**: implicit casts are full nodes and copy their type
    (49 MB and 27 MB of sqlite3.c's); a function's tokens and AST could
    be freed once it is emitted. Macro expansion: musl's `<tgmath.h>`
    nested three deep takes over 4 GB (gcc: 1.2 GB).
-8. **glibc's `<tgmath.h>`** wants gcc 8's `__builtin_tgmath`, or
+7. **glibc's `<tgmath.h>`** wants gcc 8's `__builtin_tgmath`, or
    `_Float128` (gcc 4.3+, clang). musl's works with glibc too (its
    results match gcc's): ship it as `include/tgmath.h`.
-9. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
+8. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
    `vector_size`): stb and many other libraries use them on x86-64
    without a fallback. The biggest gap left for real code bases.
 
