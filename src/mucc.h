@@ -187,6 +187,7 @@ void define_macro(char *name, char *buf);
 void undef_macro(char *name);
 Token *preprocess(Token *tok);
 void expand_embed(Token *tok);
+void join_adjacent_string_literals(Token *tok);
 
 //---------- parser.c: AST and parser (stage 3) ------------------------------
 

@@ -130,6 +130,12 @@ echo '#include <errno.h>' | $mucc -E -P -xc - | grep -q '^#'
 [ $? = 1 ]
 check '-E -P'
 
+# -E keeps adjacent string literals as they are, on their line: they are
+# joined after preprocessing.
+printf '#define S(a) f(#a "b\\n", L"c" "d")\nS(x);\n' | $mucc -E -P -xc - |
+  grep -qx 'f("x" "b\\n", L"c" "d");'
+check '-E keeps adjacent strings'
+
 # -E output compiled again reports errors where they were written, and
 # no warnings from system headers.
 printf 'int x;\nint y = ;\n' > $tmp/lm/bad.h

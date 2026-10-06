@@ -1247,6 +1247,7 @@ static void cc1(void) {
     return;
   }
 
+  join_adjacent_string_literals(tok);
   Obj *prog = parse(tok);
   if (error_count || werror_count)
     exit(1);

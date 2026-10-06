@@ -771,8 +771,12 @@ static Token *stringize(Token *hash, Token *arg) {
   fputc('"', out);
   fclose(out);
 
-  // The new token's file is the `#`'s, for error messages.
-  return tokenize(new_file(hash->file->name, hash->file->file_no, buf));
+  // The new token's file is the `#`'s, for error messages. It is where
+  // the `#` was, not at the start of a line: -E prints it there.
+  Token *tok = tokenize(new_file(hash->file->name, hash->file->file_no, buf));
+  tok->at_bol = false;
+  tok->has_space = hash->has_space;
+  return tok;
 }
 
 // Concatenate two tokens to create a new token.
@@ -1950,8 +1954,9 @@ static StringKind getStringKind(Token *tok) {
 }
 
 // Concatenate adjacent string literals into a single string literal
-// as per the C spec.
-static void join_adjacent_string_literals(Token *tok) {
+// as per the C spec. This is after preprocessing, which -E prints: the
+// driver calls it before parsing.
+void join_adjacent_string_literals(Token *tok) {
   // First pass: If regular string literals are adjacent to wide
   // string literals, regular string literals are converted to a wide
   // type before concatenation. In this pass, we do the conversion.
@@ -2033,6 +2038,5 @@ Token *preprocess(Token *tok) {
     return tok;
 
   convert_pp_tokens(tok);
-  join_adjacent_string_literals(tok);
   return tok;
 }
