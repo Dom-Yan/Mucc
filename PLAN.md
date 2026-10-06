@@ -204,26 +204,71 @@ Later the same day:
   their declared type in arithmetic, as in clang; gcc computes in the
   field's width (`unsigned long x : 40` all ones, `x + 1` is 0).
 
-Found on the way: duplicate member names in a struct are accepted
-(test/bitfield.c even has one); gcc rejects them.
+Then:
+
+- `56b0d2b` Duplicate member names are an error (test/bitfield.c had
+  one).
+- `0bc6070` Line tables only with -g, `.file` with the base name: an
+  object is the same built in any directory, and the single binary is
+  8.5 MB, from 11.3.
+- `554402e` **Releases by mucc only** (finish line 2): release.yml
+  builds with the previous release through test/bootstrap.sh, with gcc,
+  as, ld, ar and strip made to fail, and strips with mucc's -s. `make
+  test-bootstrap` (in CI) checks build/mucc rebuilds itself to the same
+  bytes. v1.1.0 can't compile today's source (no `__int128`), so the
+  next release's tag message needs a line "bootstrap: gcc" once.
+- `5ef69be` `__builtin_shufflevector`, `__builtin_convertvector`.
+- Tokens: `4910e32` includes linked in place, not copied, and skipped
+  `#if` groups' tokens reused; `d98f29a` 80-byte tokens. sqlite3.c
+  peaks at 250 MB (was 295), `<tgmath.h>`'s `cos(sin(tan(f)))` 180 MB
+  (was 212). Same code made.
+- The corpus (finish line 4), as test/thirdparty/*.sh. New: make.sh,
+  sed.sh, gawk.sh, jq.sh, redis.sh, stb.sh (with stb-check.c), miniz.sh
+  (with miniz-check.c), tcl.sh. Bugs it found, fixed with tests:
+  - `ee739b2` K&R function definitions (jq's oniguruma).
+  - `925682a` `#undef __inline` (and the other gcc keyword spellings)
+    leaves them, as gcc's keywords (gnulib, then musl's headers).
+  - `633b9f6` A directive after an empty macro expansion wasn't one.
+  - `2b5f678` `#line` inside an `#if` was "unterminated" (Bison).
+  - `8623838` `__builtin_unreachable()` is nothing, as gcc -O0 (it
+    trapped; gnulib's regex reaches a false assume() in sed's tests).
+  - `e68c395` Hash maps kept a key twice after a deletion: an #undef
+    could bring back an old definition, and mucc crashed (gnulib).
+  - `9af3672`, `a3e444c` `-fvisibility=` was ignored, and a variable's
+    visibility didn't carry from its declaration (CPython).
+
+## The corpus, 2026-10-06
+
+With the single binary (`MUCC=build/mucc`, musl) unless noted. Each
+passes its own tests, with these exceptions noted in its script:
+
+| | |
+|---|---|
+| zlib, Lua, SQLite, stb, miniz, redis, jq | pass |
+| GNU make | pass; misc/close_stdout skipped on musl (it calls exit() in an atexit handler, which musl traps) |
+| sed | pass, gnulib's 192 tests too; newline-dfa-bug skipped on musl (valgrind and a static malloc) |
+| gawk | pass but commas and clos1way6 on musl (printf `'` grouping, stdio order; both pass with glibc) |
+| libpng, Git (21,334 tests), TinyCC | pass, with `--libc=system` |
+| CPython | see below |
+
+GNU make, sed and gawk tarballs come from mirrors.kernel.org (ftp.gnu.org
+was unreachable). WSL lacks tclsh (tcl.sh builds it), OpenSSL headers
+(git.sh builds without), locales and autoreconf.
 
 ## Next
 
-In order (the maintainer's, 2026-10-06):
-
-1. **Releases by mucc only** (finish line 2).
-2. **The rest of the finish line**: the two builtins, then the corpus.
-3. **Tokens** (memory, below).
+1. **First release from mucc**: tag it with "bootstrap: gcc" in the
+   message (the maintainer's call: it publishes).
+2. **CPython** to a clean run.
+3. **Finish line 3 and 5 checks**: difftest and the fuzzers on the
+   current code; compile time against gcc -O0 (2x or better) and the
+   binary's size; push main.
+4. **Finish line 6**: a pass over comments and sections.
 
 ## Later
 
-- Tokens: they are now most of the memory (sqlite3.c:
-  1.7M of 96 bytes, 163 MB of 298), and only 40% are left after
-  preprocessing; the rest are skipped `#if` groups, directives and
-  macro calls. A Token could be 80 bytes (`filename` and `line_delta`
-  as one pointer to the #line state, `val`/`fval`/`str` in a union, the
-  #embed count in `ty`), or the tokenizer could skip false groups.
-  `<tgmath.h>`'s case is now 1.8M token copies (174 MB).
+- Tokens: macro expansion still copies (`<tgmath.h>`: 1.8M copies),
+  and the tokens of directive lines and macro calls stay after use.
 
 - Push main (it is many commits ahead of origin).
 - With glibc's headers, `CMPLX` is undefined under mucc: glibc defines
@@ -233,8 +278,11 @@ In order (the maintainer's, 2026-10-06):
 ## Working setup
 
 Build and test in WSL, not on `/mnt/c`. Mirror the Windows tree into a
-Linux clone (`~/mucc-dev`, with `git config core.fileMode false`), copy
+Linux clone (`~/mucc-w`, with `git config core.fileMode false`), copy
 `src include test Makefile` over, then run `make -j12 test-all` there.
+The corpus runs from there too (`MUCC=$PWD/build/mucc
+test/thirdparty/NAME.sh`), so use a second clone (`~/mucc-t`) for
+work meanwhile. WSL's `/tmp` is cleared now and then: use `~/scratch`.
 Copy `src/*.c src/*.h`, not `src/`: the Windows tree has old ignored
 `src/*.o` (and `src/checks/`) from the linter branch, which, copied with
 new times, make takes as up to date.

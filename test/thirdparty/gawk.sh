@@ -10,4 +10,15 @@ echo 'int x;' | $mucc -shared -fPIC -o /dev/null -xc - 2>/dev/null || ext=--disa
 CC=$mucc ./configure --disable-nls $ext
 $make clean
 $make
-$make check
+
+# With musl, two tests differ, as they do with gcc on musl: commas needs
+# printf's ' grouping, which musl doesn't do, and clos1way6's output
+# order depends on stdio's buffering. (With glibc both pass.) A failed
+# test leaves test/_NAME.
+if printf '#include <stdio.h>\n#ifndef __GLIBC__\nmusl\n#endif\n' |
+       $mucc -E -xc - | grep -q '^musl$'; then
+    $make check || true
+    [ "$(cd test && ls _* | tr '\n' ' ')" = "_clos1way6 _commas " ]
+else
+    $make check
+fi
