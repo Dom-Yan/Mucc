@@ -22,6 +22,39 @@ mucc is a daily-driver C compiler for x86-64 Linux, and only that:
 The linter idea from 2026-10-04 is dropped. The `linter` and
 `llvm-backend` branches are parked; keep them for their history.
 
+## The finish line (1.0)
+
+Set by the maintainer on 2026-10-06. mucc is "parked", like TCC, when
+all of these hold. After that the work is fixing bugs, making it faster
+and smaller, and polishing.
+
+1. **Self-sufficient.** The released binary, alone, builds and runs C on
+   a fresh x86-64 Linux: `test/programs.sh` (an empty root holding only
+   mucc) and `test/distros.sh` pass. It runs from any directory, a USB
+   stick included, with nothing installed.
+2. **Releases by mucc only.** `release.yml` builds stage 1 with the
+   previous release (`make CC=mucc`), not gcc, and strips with mucc
+   (or doesn't strip). No gcc or binutils anywhere in the release path.
+   The first release bootstraps from gcc once.
+3. **Any C you write yourself compiles.** Standard C99 to C23 with the
+   GNU extensions people use by hand: no known gaps in the language.
+   That means 2 GiB arrays, `__int128` bit-fields,
+   `__builtin_shufflevector` and `__builtin_convertvector` done, and
+   difftest and the fuzzers clean.
+4. **Most existing C compiles.** Each of these builds with mucc and
+   passes its own tests: mucc itself (stage 3 = stage 2), musl, SQLite,
+   Lua, CPython, Git, zlib, libpng, TinyCC, redis, GNU make, sed, gawk,
+   jq, stb and miniz. Code that needs a gcc optimizer, a gcc plugin, or
+   AVX and later (see below) is out of scope.
+5. **Fast and lean.** It stays at least 2x faster than gcc -O0 and no
+   heavier in memory on sqlite3.c, and the binary stays about its size.
+6. **Clear code.** Every file is in sections with a short comment each;
+   comments say why, not what the next line does. The guide at the top
+   of `src/mucc.h` is current.
+
+Out of scope for 1.0: AVX (32-byte vectors, `__attribute__((target))`),
+other targets than x86-64 Linux, an optimizer.
+
 ## Done on 2026-10-05 (on main, not pushed)
 
 - `08af0a3` README and website: line and test counts were stale.
@@ -158,19 +191,33 @@ Found on the way:
 Not done: AVX (vectors of 32 bytes and `__attribute__((target))`),
 `__builtin_shufflevector` and `__builtin_convertvector`.
 
+Later the same day:
+
+- `1a51995` Objects of 2 GiB and more (test/bigobject.c, in mmap()ed
+  memory). Static data must stay below 2 GiB, as in gcc's default code
+  model; the linker now says so instead of the assembler cutting .bss
+  short. Locals over 1 GiB are an error.
+- `1c6253c` `__int128` bit-fields, and packed `long` ones spanning 9
+  bytes. A fuzzer (random structs, stores and compound assignments,
+  against gcc) found no differences in 1,500 programs. Not done: a
+  packed one spanning 17 bytes (an error). Bit-fields over 32 bits keep
+  their declared type in arithmetic, as in clang; gcc computes in the
+  field's width (`unsigned long x : 40` all ones, `x + 1` is 0).
+
+Found on the way: duplicate member names in a struct are accepted
+(test/bitfield.c even has one); gcc rejects them.
+
 ## Next
 
-In order:
+In order (the maintainer's, 2026-10-06):
 
-1. **Arrays of 2 GiB or more**: sizes are `int` all through: types,
-   member offsets, codegen, and in asm.c and link.c section sizes and
-   symbol positions.
-2. **`__int128` bit-fields**: layout, loads and stores in 128 bits,
-   static initializers.
+1. **Releases by mucc only** (finish line 2).
+2. **The rest of the finish line**: the two builtins, then the corpus.
+3. **Tokens** (memory, below).
 
 ## Later
 
-- Memory, if it matters again: tokens are now most of it (sqlite3.c:
+- Tokens: they are now most of the memory (sqlite3.c:
   1.7M of 96 bytes, 163 MB of 298), and only 40% are left after
   preprocessing; the rest are skipped `#if` groups, directives and
   macro calls. A Token could be 80 bytes (`filename` and `line_delta`
@@ -178,8 +225,6 @@ In order:
   #embed count in `ty`), or the tokenizer could skip false groups.
   `<tgmath.h>`'s case is now 1.8M token copies (174 MB).
 
-- Optionally bootstrap releases from the previous release (`make
-  CC=mucc` in `release.yml`), so gcc isn't in the release path at all.
 - Push main (it is many commits ahead of origin).
 - With glibc's headers, `CMPLX` is undefined under mucc: glibc defines
   it only for gcc 4.7+ and clang. `__builtin_complex` works. musl's
