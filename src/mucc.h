@@ -188,6 +188,7 @@ void undef_macro(char *name);
 Token *preprocess(Token *tok);
 void expand_embed(Token *tok);
 void join_adjacent_string_literals(Token *tok);
+void print_macros(FILE *out);
 
 //---------- parser.c: AST and parser (stage 3) ------------------------------
 
@@ -657,6 +658,8 @@ FILE *open_input_file(char *path);
 bool in_system_header(Token *tok);
 
 extern StringArray include_paths;
+extern StringArray iquote_paths;
+extern bool opt_MG;
 extern bool opt_w;
 extern bool opt_g;
 extern StringArray opt_warnings;

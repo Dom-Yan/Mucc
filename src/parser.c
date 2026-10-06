@@ -5754,6 +5754,30 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
   if (fn->kind == ND_VAR && fn->var->is_function)
     warn_format(fn->var, head.next);
 
+  // The C library's creal, cimag and conj (and their f and l forms) are
+  // builtins, as with gcc, so they need no -lm: a part of the argument,
+  // kept in a variable, or the argument with its imaginary part negated.
+  static char *part_fns[] = {"creal", "crealf", "creall", "cimag", "cimagf",
+                             "cimagl", "conj", "conjf", "conjl"};
+  for (int i = 0; i < 9 && fn->kind == ND_VAR && fn->var->is_function &&
+                  !fn->var->is_definition && nargs == 1 && is_complex(head.next->ty);
+       i++) {
+    if (strcmp(name, part_fns[i]))
+      continue;
+    Token *t = fn->tok;
+    Obj *z = new_lvar("", head.next->ty);
+    Node *set = new_binary(ND_ASSIGN, new_var_node(z, t), head.next, t);
+    Node *part = new_unary(ND_MEMBER, new_var_node(z, t), t);
+    part->member = i < 3 ? z->ty->members : z->ty->members->next;
+    if (i < 6)
+      return new_cast(new_binary(ND_COMMA, set, part, t), ty->return_ty);
+    Node *part2 = new_unary(ND_MEMBER, new_var_node(z, t), t);
+    part2->member = part->member;
+    Node *neg = new_binary(ND_ASSIGN, part, new_unary(ND_NEG, part2, t), t);
+    Node *val = new_binary(ND_COMMA, set, neg, t);
+    return new_cast(new_binary(ND_COMMA, val, new_var_node(z, t), t), ty->return_ty);
+  }
+
   // Errors about the call's value point at the function name.
   Node *node = new_unary(ND_FUNCALL, fn, fn->tok);
   node->func_ty = ty;

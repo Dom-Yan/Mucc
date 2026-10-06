@@ -856,4 +856,65 @@ done
 (ulimit -v 51200; $mucc -c -o $tmp/oom.o $tmp/empty.c) 2>&1 | grep -q 'error: out of memory'
 check 'out of memory'
 
+# gcc's options that build tools use
+mkdir -p $tmp/opt/q
+echo '#define H 42' > $tmp/opt/h.h
+echo '#define H 7' > $tmp/opt/q/h.h
+echo '#define IM 5' > $tmp/opt/im.h
+printf '#include "h.h"\n#include <errno.h>\nint main(void) { return H; }\n' > $tmp/opt/a.c
+
+# @file: the arguments in a file, quoted as in a shell, which may name more
+printf -- "-DRF='3 + 1' @$tmp/opt/resp2\n" > $tmp/opt/resp
+printf -- '-o "%s"\n' $tmp/opt/resp.out > $tmp/opt/resp2
+echo 'int main(void) { return RF; }' > $tmp/opt/r.c
+$mucc @$tmp/opt/resp $tmp/opt/r.c && { $tmp/opt/resp.out; [ $? = 4 ]; }
+check '@file'
+
+$mucc -MM $tmp/opt/a.c | tr -d '\\\n' | grep -q '^a.o: *[^ ]*a.c *[^ ]*h.h *$'
+check '-MM'
+
+echo '#include "gen.h"' | $mucc -M -MG -xc - | grep -q 'gen.h'
+check '-MG'
+
+echo '#define MINE(a, ...) a + __VA_ARGS__' | $mucc -dM -E -xc - > $tmp/opt/dm
+grep -qx '#define MINE(a, \.\.\.) a + __VA_ARGS__' $tmp/opt/dm &&
+  grep -q '^#define __x86_64__ 1$' $tmp/opt/dm && ! grep -q '__LINE__' $tmp/opt/dm
+check '-dM'
+
+echo IM | $mucc -imacros $tmp/opt/im.h -E -P -xc - | grep -qx 5
+check '-imacros'
+
+[ "$($mucc -E -P -iquote $tmp/opt/q $tmp/opt/a.c | grep return)" = 'int main(void) { return 42; }' ]
+check '-iquote after the file'"'"'s own directory'
+printf '#include "h.h"\nH\n' | $mucc -E -P -iquote $tmp/opt/q -I$tmp/opt -xc - | grep -qx 7
+check '-iquote before -I'
+
+echo '#include <stdio.h>' | $mucc -nostdinc -E -xc - > /dev/null 2>&1
+[ $? = 1 ]
+check '-nostdinc'
+
+$mucc -fsyntax-only -o $tmp/opt/none $tmp/opt/a.c && [ ! -e $tmp/opt/none ]
+check '-fsyntax-only'
+echo 'int f(void) { return x; }' | $mucc -fsyntax-only -xc - 2>&1 | grep -q 'undeclared'
+check '-fsyntax-only reports errors'
+
+$mucc -x c-header -o $tmp/opt/h.h.gch $tmp/opt/h.h && [ -f $tmp/opt/h.h.gch ]
+check '-x c-header'
+
+$mucc -c -Xassembler --noexecstack -specs=x.specs --param max-inline-insns-single=9 \
+  --param=l1-cache-size=32 -mcmodel=small -o $tmp/opt/a.o $tmp/opt/a.c
+check 'options for as and tuning, ignored'
+
+$mucc -print-search-dirs | grep -q '^libraries: ='
+check '-print-search-dirs'
+
+$mucc $tmp/opt/a.c -l 2>&1 | grep -q "missing argument to '-l'"
+check '-l with no library'
+
+# creal, cimag and conj are builtins, as with gcc: no -lm
+echo '#include <complex.h>
+int main(void) { double complex z = 1 + 2 * I; return creal(z) + cimag(conj(z)) == -1 ? 0 : 1; }' |
+  $mucc -o $tmp/opt/cp -xc - && $tmp/opt/cp
+check 'creal, cimag and conj without -lm'
+
 echo OK

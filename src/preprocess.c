@@ -1157,6 +1157,12 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok) {
     return tok;
 
   Token *tok2 = tokenize_file(path);
+
+  // -MG: a header that isn't there yet is a dependency, to be generated.
+  if (!tok2 && opt_MG) {
+    add_input_file(path, "");
+    return tok;
+  }
   if (!tok2)
     error_tok(filename_tok, "%s: cannot open file: %s", path, strerror(errno));
 
@@ -1492,15 +1498,19 @@ static Token *preprocess2(Token *tok) {
       bool is_dquote;
       char *filename = read_include_filename(&tok, tok->next, &is_dquote);
 
+      // "file": the including file's directory first, then -iquote's
+      char *path = NULL;
       if (filename[0] != '/' && is_dquote) {
-        char *path = format("%s/%s", dirname(strdup(start->file->name)), filename);
+        path = format("%s/%s", dirname(strdup(start->file->name)), filename);
+        for (int i = 0; i < iquote_paths.len && !file_exists(path); i++)
+          path = format("%s/%s", iquote_paths.data[i], filename);
         if (file_exists(path)) {
           tok = include_file(tok, path, start->next->next);
           continue;
         }
       }
 
-      char *path = search_include_paths(filename);
+      path = search_include_paths(filename);
       tok = include_file(tok, path ? path : filename, start->next->next);
       continue;
     }
@@ -1691,6 +1701,32 @@ void define_macro(char *name, char *buf) {
 
 void undef_macro(char *name) {
   hashmap_delete(&macros, name);
+}
+
+// -dM: the macros defined at the end of the input, as #defines. (Builtins
+// like __LINE__ have no definition, as with gcc.)
+void print_macros(FILE *out) {
+  for (int i = 0; i < macros.capacity; i++) {
+    HashEntry *ent = &macros.buckets[i];
+    Macro *m = ent->key && ent->key != (void *)-1 ? ent->val : NULL;
+    if (!m || m->handler)
+      continue;
+
+    fprintf(out, "#define %s", m->name);
+    if (!m->is_objlike) {
+      fprintf(out, "(");
+      for (MacroParam *p = m->params; p; p = p->next)
+        fprintf(out, "%s%s", p->name, p->next || m->va_args_name ? ", " : "");
+      if (m->va_args_name)
+        fprintf(out, "%s", strcmp(m->va_args_name, "__VA_ARGS__") ? m->va_args_name : "");
+      if (m->va_args_name)
+        fprintf(out, "...");
+      fprintf(out, ")");
+    }
+    for (Token *t = m->body; t && t->kind != TK_EOF; t = t->next)
+      fprintf(out, "%s%.*s", t == m->body || t->has_space ? " " : "", t->len, t->loc);
+    fprintf(out, "\n");
+  }
 }
 
 static Macro *add_builtin(char *name, macro_handler_fn *fn) {

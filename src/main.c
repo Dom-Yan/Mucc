@@ -14,7 +14,7 @@
 //---------- Command-line options --------------------------------------------
 
 typedef enum {
-  FILE_NONE, FILE_C, FILE_ASM, FILE_ASM_CPP, FILE_OBJ, FILE_AR, FILE_DSO,
+  FILE_NONE, FILE_C, FILE_C_HEADER, FILE_ASM, FILE_ASM_CPP, FILE_OBJ, FILE_AR, FILE_DSO,
 } FileType;
 
 StringArray include_paths;
@@ -52,7 +52,15 @@ static bool opt_r;             // -r: link into an object file, as ld -r
 static char *opt_MF;
 static char *opt_MT;
 static char *opt_o;
+bool opt_MG;                  // -MG: a missing header is a dependency, not an error
+StringArray iquote_paths;     // -iquote: for #include "..." only, before -I's
+static bool opt_dM;           // -dM: with -E, the macros at the end instead
+static bool opt_nostdinc;     // -nostdinc: no system or mucc include directories
+static bool opt_syntax_only;  // -fsyntax-only: check, but write nothing
+static bool opt_print_search_dirs;
+static StringArray opt_imacros; // -imacros: read for its macros, before -include's
 
+static StringArray as_extra_args; // -Xassembler's, for `as`
 static StringArray ld_extra_args;
 static StringArray std_include_paths;
 
@@ -275,7 +283,7 @@ static void usage(int status) {
 static bool take_arg(char *arg) {
   char *x[] = {
     "-o", "-I", "-L", "-D", "-U", "-idirafter", "-isystem", "-include", "-x",
-    "-MF", "-MT", "-Xlinker",
+    "-MF", "-MT", "-Xlinker", "-imacros", "-iquote", "-Xassembler", "--param",
   };
 
   for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
@@ -306,6 +314,8 @@ static FileType parse_opt_x(char *s) {
     return FILE_ASM;
   if (!strcmp(s, "assembler-with-cpp"))
     return FILE_ASM_CPP;
+  if (!strcmp(s, "c-header"))
+    return FILE_C_HEADER;
   if (!strcmp(s, "none"))
     return FILE_NONE;
   error("<command line>: unknown argument for -x: %s", s);
@@ -337,6 +347,61 @@ static char *quote_makefile(char *s) {
     }
   }
   return buf;
+}
+
+// The arguments in response file text `p`, as gcc reads them: separated
+// by whitespace, with quotes ('' or "") and backslashes escaping.
+static void push_response_args(StringArray *out, char *p) {
+  for (;;) {
+    while (isspace((unsigned char)*p))
+      p++;
+    if (!*p)
+      return;
+    char *buf = calloc(1, strlen(p) + 1), *q = buf;
+    char quote = 0;
+    for (; *p && (quote || !isspace((unsigned char)*p)); p++) {
+      if (*p == '\\' && p[1])
+        *q++ = *++p;
+      else if (quote ? *p == quote : (*p == '\'' || *p == '"'))
+        quote = quote ? 0 : *p;
+      else
+        *q++ = *p;
+    }
+    strarray_push(out, buf);
+  }
+}
+
+// `@file` on the command line is the arguments in the file, which may
+// name more files, as build tools write long command lines. One that
+// can't be read stays as it is, as with gcc.
+static void expand_response_files(int *argc, char ***argv) {
+  for (int depth = 0; depth < 16; depth++) {
+    StringArray args = {};
+    bool found = false;
+    for (int i = 0; i < *argc; i++) {
+      char *arg = (*argv)[i];
+      FILE *fp = (i > 0 && arg[0] == '@' && arg[1]) ? fopen(arg + 1, "r") : NULL;
+      if (!fp) {
+        strarray_push(&args, arg);
+        continue;
+      }
+      char *text;
+      size_t len;
+      FILE *out = open_memstream(&text, &len);
+      for (int c; (c = fgetc(fp)) != EOF;)
+        fputc(c, out);
+      fclose(fp);
+      fclose(out);
+      push_response_args(&args, text);
+      found = true;
+    }
+    if (!found)
+      return;
+    *argc = args.len;
+    strarray_push(&args, NULL);
+    *argv = args.data;
+  }
+  error("response files nested too deep");
 }
 
 static bool is_std_option(char *arg) {
@@ -399,7 +464,11 @@ static char *ignored_options[] = {
   // mucc needs no libgcc, and makes no LTO objects or record of options
   "-static-libgcc", "-ffat-lto-objects", "-fno-fat-lto-objects",
   "-frecord-gcc-switches", "-grecord-gcc-switches",
-  "-save-temps*", "-fmax-errors=*",
+  "-save-temps*", "-fmax-errors=*", "--param=*",
+  // Spec files tune gcc's own driver (distributions' hardening flags).
+  "-specs=*",
+  // The small code model is the one mucc's code always has.
+  "-mcmodel=small",
 };
 
 static bool is_ignored_option(char *arg) {
@@ -589,8 +658,21 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    // -lfoo, or -l foo
+    if (!strcmp(argv[i], "-l")) {
+      if (!argv[i + 1])
+        error("missing argument to '-l'");
+      add_input(format("-l%s", argv[++i]));
+      continue;
+    }
+
     if (!strncmp(argv[i], "-l", 2) || !strncmp(argv[i], "-Wl,", 4)) {
       add_input(argv[i]);
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-Xassembler")) {
+      strarray_push(&as_extra_args, argv[++i]);
       continue;
     }
 
@@ -642,6 +724,53 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-MMD")) {
       opt_MD = opt_MMD = opt_MD_driver = true;
+      continue;
+    }
+
+    // -MM is -M without system headers, as -MMD is -MD without them.
+    if (!strcmp(argv[i], "-MM")) {
+      opt_M = opt_MMD = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-MG")) {
+      opt_MG = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-dM")) {
+      opt_dM = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-imacros")) {
+      strarray_push(&opt_imacros, argv[++i]);
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-iquote")) {
+      strarray_push(&iquote_paths, argv[++i]);
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-nostdinc")) {
+      opt_nostdinc = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-fsyntax-only")) {
+      opt_syntax_only = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-print-search-dirs")) {
+      opt_print_search_dirs = true;
+      continue;
+    }
+
+    // --param name=value tunes optimizations.
+    if (!strcmp(argv[i], "--param")) {
+      i++;
       continue;
     }
 
@@ -829,7 +958,7 @@ static void parse_args(int argc, char **argv) {
       exit(0);
   }
 
-  if (input_paths.len == 0)
+  if (input_paths.len == 0 && !opt_print_search_dirs)
     error("no input files");
 }
 
@@ -1132,8 +1261,15 @@ static void print_dependencies(void) {
 static void run_as(char *input, char *output) {
   if (!opt_as_fallback)
     error("-fno-as-fallback and -fno-integrated-as can't be used together");
-  char *cmd[] = {"as", "-c", input, "-o", output, NULL};
-  run_subprocess(cmd);
+  // (The built-in assembler takes no options: -Xassembler's are for `as`.)
+  StringArray cmd = {};
+  char *args[] = {"as", "-c", input, "-o", output};
+  for (int i = 0; i < 5; i++)
+    strarray_push(&cmd, args[i]);
+  for (int i = 0; i < as_extra_args.len; i++)
+    strarray_push(&cmd, as_extra_args.data[i]);
+  strarray_push(&cmd, NULL);
+  run_subprocess(cmd.data);
 }
 
 static void write_file(char *path, char *buf, size_t len) {
@@ -1204,22 +1340,27 @@ static Token *append_tokens(Token *tok1, Token *tok2) {
   return tok1;
 }
 
+// The path of a -include or -imacros file: as given, or on the include
+// paths
+static char *find_included(char *name, char *opt) {
+  if (file_exists(name))
+    return name;
+  char *path = search_include_paths(name);
+  if (!path)
+    error("%s: %s: %s", opt, name, strerror(errno));
+  return path;
+}
+
 static void cc1(void) {
   Token *tok = NULL;
 
+  // -imacros files: only their macros are kept
+  for (int i = 0; i < opt_imacros.len; i++)
+    preprocess(must_tokenize_file(find_included(opt_imacros.data[i], "-imacros")));
+
   // Process -include option
   for (int i = 0; i < opt_include.len; i++) {
-    char *incl = opt_include.data[i];
-
-    char *path;
-    if (file_exists(incl)) {
-      path = incl;
-    } else {
-      path = search_include_paths(incl);
-      if (!path)
-        error("-include: %s: %s", incl, strerror(errno));
-    }
-
+    char *path = find_included(opt_include.data[i], "-include");
     Token *tok2 = must_tokenize_file(path);
     tok = append_tokens(tok, tok2);
   }
@@ -1241,9 +1382,14 @@ static void cc1(void) {
       return;
   }
 
-  // If -E is given, print out preprocessed C code as a result.
+  // If -E is given, print out preprocessed C code as a result: or with
+  // -dM, the macros defined at the end.
   if (opt_E || opt_asm_cpp) {
-    print_tokens(tok, output_file ? output_file : opt_o ? opt_o : "-");
+    char *path = output_file ? output_file : opt_o ? opt_o : "-";
+    if (opt_dM)
+      print_macros(open_file(path));
+    else
+      print_tokens(tok, path);
     return;
   }
 
@@ -1251,6 +1397,8 @@ static void cc1(void) {
   Obj *prog = parse(tok);
   if (error_count || werror_count)
     exit(1);
+  if (opt_syntax_only || !output_file) // only checked (see main())
+    return;
 
   // Open a temporary output buffer.
   char *buf;
@@ -1660,6 +1808,7 @@ int main(int argc, char **argv) {
   }
 
   atexit(cleanup);
+  expand_response_files(&argc, &argv);
   set_std(argc, argv);
   init_macros();
   parse_args(argc, argv);
@@ -1679,8 +1828,18 @@ int main(int argc, char **argv) {
     opt_static = true;
   }
 
+  // As gcc prints them; libtool reads the libraries.
+  if (opt_print_search_dirs) {
+    printf("install: %s/\nprograms: =%s/\nlibraries: =", exe_dir(argv[0]), exe_dir(argv[0]));
+    for (char **dir = libc->lib_dirs; *dir; dir++)
+      printf("%s%s", dir == libc->lib_dirs ? "" : ":", *dir);
+    printf("\n");
+    return 0;
+  }
+
   if (opt_cc1) {
-    add_default_include_paths(argv[0]);
+    if (!opt_nostdinc)
+      add_default_include_paths(argv[0]);
     cc1();
     return 0;
   }
@@ -1717,6 +1876,23 @@ int main(int argc, char **argv) {
       output = replace_extn(input, ".o");
 
     FileType type = get_file_type(input, input_types[i]);
+
+    // -fsyntax-only: C is checked, nothing is written or linked.
+    if (opt_syntax_only) {
+      if (type == FILE_C || type == FILE_C_HEADER)
+        run_cc1(argc, argv, input, NULL, false, false);
+      continue;
+    }
+
+    // A header to precompile (-x c-header): mucc has no precompiled
+    // headers, and reads the header itself where it is included, so it is
+    // checked and its output (the .gch) is empty.
+    if (type == FILE_C_HEADER) {
+      run_cc1(argc, argv, input, NULL, false, false);
+      if (!opt_M)
+        fclose(open_file(opt_o ? opt_o : format("%s.gch", input)));
+      continue;
+    }
 
     // Handle .o, .a or .so
     if (type == FILE_DSO && !libc->shared_libs)
