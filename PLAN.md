@@ -76,31 +76,28 @@ Then, the same day:
 - difftest: 3,000 programs, 0 real failures. The generator no longer
   makes `0.0 - x`, which gcc folds into `-x`.
 
-## In progress: define `__GNUC__` (decided 2026-10-05)
+## Done later on 2026-10-05
 
-mucc defines no `__GNUC__`, so headers take their non-GNU paths. That
-is the biggest gcc drop-in gap:
-- glibc's `<glob.h>` with `-D_FILE_OFFSET_BITS=64` declares no `glob`
-  (redis 7.2.5 doesn't build), and its noreturn and other attributes
-  are hidden.
-- libtool decides mucc isn't GCC and passes `-soname` to it.
-- stb needs `-DSTBI_NO_SIMD`.
+- `58eebeb` `__GNUC__` is 4.2, as clang has it (the maintainer's
+  decision). Asm labels on functions and globals, attributes `mode`,
+  `transparent_union`, `common`/`nocommon`, and `include/limits.h`.
+  Every standard and POSIX header compiles alone without a warning
+  under glibc and musl, -std=c99 to c23, with the usual feature macros
+  (5,375 of 5,400; the rest is glibc's `<tgmath.h>`, see below). redis
+  7.2.5 builds and runs; Lua, make and sqlite (libtool) pass their
+  tests; sed and gawk as before (gawk's same 8 failures).
+- `54e1d4a` `?:` with pointer operands took the first one's type: musl's
+  `<tgmath.h>` computed `sqrt(double)` in float. C's rules now, and
+  `*p` on a `void *` is a void expression, as in gcc.
 
-The maintainer decided to define it, as clang does (`__GNUC__` 4,
-`__GNUC_MINOR__` 2, `__GNUC_PATCHLEVEL__` 1), so glibc takes its gcc
-paths but none newer than gcc 4.2. Steps:
-
-1. What glibc's headers then need: asm labels on function and variable
-   declarations (`__REDIRECT`, `extern int x __asm__("y")`), which mucc
-   rejects now, and any `__builtin_*` or attribute they use.
-2. Define the macros, plus `__GNUC_STDC_INLINE__`. Keep `__mucc__`.
-   Not `__SSE2__` and the like: mucc has no `<emmintrin.h>`.
-3. Check every standard and POSIX header compiles under glibc and musl
-   with `_GNU_SOURCE`, `_FILE_OFFSET_BITS=64` and `-std=c99/c11/c23`,
-   then `make test-all`, then the real projects (sqlite, Lua, make,
-   sed, gawk, redis, stb, bzip2, cJSON, lz4, miniz, libtool builds).
-4. Update the README and website: mucc says it is gcc 4.2, as clang
-   does.
+Found on the way:
+- stb includes `<emmintrin.h>` on every x86-64 build, `__GNUC__` or
+  not: it needs SSE intrinsics (`-DSTBI_NO_SIMD -DSTBIR_NO_SIMD` until
+  then; with them, stb and miniz match gcc's output). The old "stb
+  fails" result was the harness, which left out miniz's other files.
+- `cos(sin(tan(f)))` with musl's `<tgmath.h>` expands to 44 MB of
+  tokens. gcc takes 1.2 GB; mucc took over 4 GB and, with no limit,
+  ran WSL out of memory.
 
 ## Next: the deep test's other findings
 
@@ -137,7 +134,14 @@ In order:
    loop variable shows after its scope.
 7. **Memory, more**: implicit casts are full nodes and copy their type
    (49 MB and 27 MB of sqlite3.c's); a function's tokens and AST could
-   be freed once it is emitted.
+   be freed once it is emitted. Macro expansion: musl's `<tgmath.h>`
+   nested three deep takes over 4 GB (gcc: 1.2 GB).
+8. **glibc's `<tgmath.h>`** wants gcc 8's `__builtin_tgmath`, or
+   `_Float128` (gcc 4.3+, clang). musl's works with glibc too (its
+   results match gcc's): ship it as `include/tgmath.h`.
+9. **SSE intrinsics** (`<emmintrin.h>`, `<xmmintrin.h>`, attribute
+   `vector_size`): stb and many other libraries use them on x86-64
+   without a fallback. The biggest gap left for real code bases.
 
 ## Later
 
