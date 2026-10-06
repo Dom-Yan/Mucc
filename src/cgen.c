@@ -2246,8 +2246,11 @@ static int file_number(Token *tok) {
 // from, for debuggers. Most expressions share a line with the statement
 // around them, so only emit a .loc when the line actually changes. Code
 // from a macro is on the line the macro is used on, as with gcc, not in
-// the header that defines it.
+// the header that defines it. Only with -g, as in gcc: without it an
+// object holds no paths, so it is the same built in any directory.
 static void emit_loc(Token *tok) {
+  if (!opt_g)
+    return;
   while (tok->origin)
     tok = tok->origin;
   int file_no = file_number(tok);
@@ -4706,10 +4709,12 @@ static void emit_debug_info(Obj *prog) {
 void codegen(Obj *prog, FILE *out) {
   // Names the object's source file in its symbol table. Without it, ld
   // uses the temporary .o's random name, and no two builds are identical.
-  println("  .file \"%s\"", base_file);
+  // Only its base name, as gcc does, so the directory doesn't matter.
+  char *slash = strrchr(base_file, '/');
+  println("  .file \"%s\"", slash ? slash + 1 : base_file);
 
   File **files = get_input_files();
-  for (int i = 0; files[i]; i++)
+  for (int i = 0; opt_g && files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 
   for (Obj *fn = prog; fn; fn = fn->next)

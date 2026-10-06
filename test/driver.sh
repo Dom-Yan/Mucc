@@ -935,4 +935,13 @@ int main(void) { double complex z = 1 + 2 * I; return creal(z) + cimag(conj(z)) 
   $mucc -o $tmp/opt/cp -xc - && $tmp/opt/cp
 check 'creal, cimag and conj without -lm'
 
+# Without -g, no line table and only the source's base name, as with gcc:
+# an object is the same bytes built in any directory.
+mkdir -p $tmp/d1 $tmp/d2
+printf 'int puts(const char *);\nint main(void) { puts("x"); }\n' | tee $tmp/d1/same.c > $tmp/d2/same.c
+$mucc -S -o $tmp/same.s $tmp/d1/same.c && ! grep -q -e '\.loc ' -e '\.file 1' -e "$tmp" $tmp/same.s &&
+  $mucc -c -o $tmp/same1.o $tmp/d1/same.c && $mucc -c -o $tmp/same2.o $tmp/d2/same.c &&
+  cmp -s $tmp/same1.o $tmp/same2.o
+check 'objects without -g do not depend on the directory'
+
 echo OK
