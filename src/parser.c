@@ -475,7 +475,7 @@ Node *new_cast(Node *expr, Type *ty) {
   node->kind = ND_CAST;
   node->tok = expr->tok;
   node->lhs = expr;
-  node->ty = copy_type(ty);
+  node->ty = ty;
   return node;
 }
 

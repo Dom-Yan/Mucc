@@ -418,6 +418,21 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
   return unqual(ty2->is_unsigned ? ty2 : ty1);
 }
 
+// An implicit conversion of `node` to `ty`. A number already of type ty,
+// as `int` to `int`, needs none, and a quarter of a program's nodes were
+// such casts. One from a qualified type stays: `ci + 1` is an int, not a
+// const int.
+static Node *convert(Node *node, Type *ty) {
+  Type *from = node->ty;
+  if (from->kind == ty->kind && (is_integer(ty) || is_flonum(ty)) &&
+      ty->kind != TY_ENUM && from->size == ty->size &&
+      from->is_unsigned == ty->is_unsigned && from->is_distinct == ty->is_distinct &&
+      !from->is_const && !from->is_volatile && !from->is_atomic &&
+      !ty->is_const && !ty->is_volatile && !ty->is_atomic)
+    return node;
+  return new_cast(node, ty);
+}
+
 // For many binary operators, we implicitly promote operands so that
 // both operands have the same type. Any integral type smaller than
 // int is always promoted to int. If the type of one operand is larger
@@ -427,8 +442,8 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
 // This operation is called the "usual arithmetic conversion".
 static void usual_arith_conv(Node **lhs, Node **rhs) {
   Type *ty = get_common_type((*lhs)->ty, (*rhs)->ty);
-  *lhs = new_cast(*lhs, ty);
-  *rhs = new_cast(*rhs, ty);
+  *lhs = convert(*lhs, ty);
+  *rhs = convert(*rhs, ty);
 }
 
 // A condition, or an operand of an arithmetic, comparison or logical
@@ -488,7 +503,7 @@ void add_type(Node *node) {
   case ND_NEG: {
     check_scalar(node->lhs);
     Type *ty = get_common_type(ty_int, node->lhs->ty);
-    node->lhs = new_cast(node->lhs, ty);
+    node->lhs = convert(node->lhs, ty);
     node->ty = ty;
     return;
   }
@@ -496,7 +511,7 @@ void add_type(Node *node) {
     if (node->lhs->ty->kind == TY_ARRAY)
       error_tok(node->lhs->tok, "not an lvalue");
     if (node->lhs->ty->kind != TY_STRUCT || is_complex(node->lhs->ty))
-      node->rhs = new_cast(node->rhs, node->lhs->ty);
+      node->rhs = convert(node->rhs, node->lhs->ty);
     node->ty = unqual(node->lhs->ty);
     return;
   case ND_EQ:
