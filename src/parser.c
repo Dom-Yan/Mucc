@@ -5462,6 +5462,20 @@ static void set_member_align(Member *mem, VarAttr *attr, Attrs *gnu) {
   mem->attr_align = MAX(attr->align, gnu->align);
 }
 
+// Member names are unique, an anonymous member's members' too.
+static void check_member_names(HashMap *seen, Member *mem) {
+  for (; mem; mem = mem->next) {
+    if (!mem->name) {
+      if (!mem->is_bitfield && (mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION))
+        check_member_names(seen, mem->ty->members);
+      continue;
+    }
+    if (hashmap_get2(seen, mem->name->loc, mem->name->len))
+      error_tok(mem->name, "duplicate member '%s'", get_ident(mem->name));
+    hashmap_put2(seen, mem->name->loc, mem->name->len, mem);
+  }
+}
+
 // struct-members = (declspec declarator attributes (","  declarator)* ";")*
 static void struct_members(Token **rest, Token *tok, Type *ty) {
   Member head = {};
@@ -5554,6 +5568,10 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
 
   *rest = tok->next;
   ty->members = head.next;
+
+  HashMap seen = {};
+  check_member_names(&seen, ty->members);
+  free(seen.buckets);
 }
 
 // Attributes on a struct or union type: `packed` and `aligned(N)`.

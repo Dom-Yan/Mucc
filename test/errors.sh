@@ -967,6 +967,19 @@ expect_error "1:18: error: _Atomic __int128 is not supported" <<'EOF'
 _Atomic __int128 x;
 EOF
 
+expect_error "1:24: error: duplicate member 'a'" <<'EOF'
+struct S { int a; char a; };
+EOF
+
+expect_error "1:32: error: duplicate member 'x'" <<'EOF'
+struct T { int x; struct { int x; }; };
+EOF
+
+expect_ok 'members of the same name in different structs' <<'EOF'
+struct A { int x; struct { int y; } in; union { int z; }; };
+struct B { int x, y, z; };
+EOF
+
 expect_error "1:57: error: a packed bit-field spanning more than 16 bytes is not supported" <<'EOF'
 struct __attribute__((packed)) S { char c : 3; __int128 a : 128; };
 EOF
