@@ -16,6 +16,12 @@ int main() {
   ASSERT(200, __LINE__);
   ASSERT(0, strcmp(__FILE__, "xyz"));
 
+  // Inside an #if, as Bison writes it
+#ifndef NOT_DEFINED_IN_LINE_C
+#line 300 "inside.y"
+  ASSERT(300, __LINE__);
+#endif
+
   printf("OK\n");
   return 0;
 }

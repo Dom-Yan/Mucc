@@ -1491,10 +1491,12 @@ static int has_embed(Token **rest, Token *tok) {
 
 //---------- Directives: the main preprocessor loop --------------------------
 
-// Read #line arguments
+// Read #line arguments. Not preprocess(), which takes an #if still open
+// (one around the #line, as Bison writes) for one never closed.
 static void read_line_marker(Token **rest, Token *tok) {
   Token *start = tok;
-  tok = preprocess(copy_line(rest, tok));
+  tok = preprocess2(copy_line(rest, tok));
+  convert_pp_tokens(tok);
 
   if (tok->kind != TK_NUM || tok->ty->kind != TY_INT)
     error_tok(tok, "invalid line marker");
