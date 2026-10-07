@@ -1,10 +1,11 @@
 //============================================================================
 // link.c - STAGE 6 of 6: LINK (static executables)
 //
-// With -static, mucc links the object files and static libraries into an
-// executable itself instead of running `ld`: it reads the objects and the
-// archive members they need, gives every section an address, applies the
-// relocations and writes an ELF executable Linux can run directly.
+// A static executable, the default (against the bundled musl) or with
+// -static, mucc links itself instead of running `ld`: it reads the
+// objects and the archive members they need, gives every section an
+// address, applies the relocations and writes an ELF executable Linux
+// can run directly.
 // Dynamic linking (against .so libraries) still uses `ld`, and so does
 // anything this linker doesn't support: link_static() returns false and
 // the driver runs `ld` instead.

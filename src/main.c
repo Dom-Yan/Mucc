@@ -1028,7 +1028,7 @@ static bool endswith(char *p, char *q) {
   return (len1 >= len2) && !strcmp(p + len1 - len2, q);
 }
 
-// Replace file extension
+// The base name of `tmpl` with `extn` for its extension: a/b.c, .o is b.o.
 static char *replace_extn(char *tmpl, char *extn) {
   char *filename = basename(strdup(tmpl));
   char *dot = strrchr(filename, '.');

@@ -23,8 +23,12 @@
 //
 //   a keyword               token.c is_keyword(); also parser.c
 //                           is_typename() if it can start a type
+//   gcc's other spelling    preprocess.c keyword_spellings[], as
+//   of a keyword            __inline for inline
 //   a predefined macro      preprocess.c "Predefined and builtin macros",
 //                           init_macros()
+//   a header mucc provides  include/*.h, built into the single binary;
+//                           it's used before the C library's own
 //   a command-line option   main.c "Argument parsing", parse_args(); one
 //                           that changes nothing goes in ignored_options[]
 //   a __builtin_ function   parser.c "GNU builtins": gnu_builtin_names[]
@@ -38,7 +42,12 @@
 //   an x86 instruction      asm.c "Instructions", insns[]
 //   a test                  test/*.c (ASSERT) for the language,
 //                           test/errors.sh for diagnostics, test/driver.sh
-//                           for options
+//                           for options, test/thirdparty/NAME.sh for a
+//                           real program and its own tests
+//
+// Releases are built by the release before, with gcc and binutils made
+// to fail (test/bootstrap.sh, .github/workflows/release.yml), so src/ may
+// only use C the latest release compiles.
 //============================================================================
 
 //---------- System headers and small utilities ------------------------------

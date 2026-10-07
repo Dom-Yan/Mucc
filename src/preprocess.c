@@ -860,8 +860,8 @@ static Token *subst(Token *tok, MacroArg *args) {
       continue;
     }
 
-    // [GNU] If __VA_ARG__ is empty, `,##__VA_ARGS__` is expanded
-    // to the empty token list. Otherwise, its expaned to `,` and
+    // [GNU] If __VA_ARGS__ is empty, `,##__VA_ARGS__` is expanded
+    // to the empty token list. Otherwise, it is expanded to `,` and
     // __VA_ARGS__.
     if (equal(tok, ",") && equal(tok->next, "##")) {
       MacroArg *arg = find_arg(args, tok->next->next);
@@ -936,7 +936,7 @@ static Token *subst(Token *tok, MacroArg *args) {
       continue;
     }
 
-    // If __VA_ARG__ is empty, __VA_OPT__(x) is expanded to the
+    // If __VA_ARGS__ is empty, __VA_OPT__(x) is expanded to the
     // empty token list. Otherwise, __VA_OPT__(x) is expanded to x, with
     // the parameters in x replaced too.
     if (equal(tok, "__VA_OPT__") && equal(tok->next, "(")) {
@@ -1061,11 +1061,11 @@ static bool expand_macro(Token **rest, Token *tok) {
   MacroArg *args = read_macro_args(&tok, tok, m->params, m->va_args_name);
   Token *rparen = tok;
 
-  // Tokens that consist a func-like macro invocation may have different
+  // The tokens of a function-like macro invocation may have different
   // hidesets, and if that's the case, it's not clear what the hideset
-  // for the new tokens should be. We take the interesection of the
+  // for the new tokens should be. We take the intersection of the
   // macro token and the closing parenthesis and use it as a new hideset
-  // as explained in the Dave Prossor's algorithm.
+  // as in Dave Prosser's algorithm.
   Hideset *hs = hideset_intersection(macro_token->hideset, rparen->hideset);
   hs = hideset_union(hs, new_hideset(m->name));
 
@@ -1123,7 +1123,7 @@ static char *search_include_next(char *filename, char *cur) {
   return NULL;
 }
 
-// Read an #include argument.
+// The file name of an #include, and whether it was "quoted", not <in brackets>.
 static char *read_include_filename(Token **rest, Token *tok, bool *is_dquote) {
   // Pattern 1: #include "foo.h"
   if (tok->kind == TK_STR) {
@@ -2154,7 +2154,6 @@ void join_adjacent_string_literals(Token *tok) {
 
 //---------- Entry point -----------------------------------------------------
 
-// Entry point function of the preprocessor.
 Token *preprocess(Token *tok) {
   tok = preprocess2(tok);
   if (cond_incl)

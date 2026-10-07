@@ -2,8 +2,9 @@
 // cgen.c - STAGE 4 of 6: CODEGEN
 //
 // Walks the AST and prints x86-64 assembly (AT&T syntax). It is a
-// simple stack machine: each expression leaves its result in %rax.
-// Calls follow the System V AMD64 ABI, so mucc links with gcc/glibc.
+// simple stack machine: each expression leaves its result in a register
+// (see gen_expr()), and partial results wait on the stack. Calls follow
+// the System V AMD64 ABI, so mucc's objects link with gcc's.
 //============================================================================
 
 #include "mucc.h"
@@ -2261,7 +2262,9 @@ static void emit_loc(Token *tok) {
   println("  .loc %d %d", loc_file, loc_line);
 }
 
-// Generate code for a given node.
+// Generates code for expression `node`, which leaves its value in %rax
+// (an integer, a pointer, or a struct's address), %xmm0 (a float, double
+// or vector), %rdx:%rax (an __int128) or on the x87 stack (a long double).
 static void gen_expr(Node *node) {
   emit_loc(node->tok);
 
@@ -3712,7 +3715,8 @@ static bool is_param(Obj *fn, Obj *var) {
   return false;
 }
 
-// Assign offsets to local variables.
+// Gives each local variable its offset from %rbp, and each function the
+// size of its frame and where its callee-saved registers go.
 static void assign_lvar_offsets(Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function)
@@ -4136,7 +4140,6 @@ static void emit_text(Obj *prog) {
         println("  movdqu %%xmm%d, %d(%%rbp)", i, off + 72 + i * 16);
     }
 
-    // Emit code
     gen_stmt(fn->body);
     assert(depth == 0);
 

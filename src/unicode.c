@@ -8,7 +8,7 @@
 
 //---------- UTF-8 encoding and decoding -------------------------------------
 
-// Encode a given character in UTF-8.
+// Writes `c` in UTF-8 at `buf` and returns how many bytes that took.
 int encode_utf8(char *buf, uint32_t c) {
   if (c <= 0x7F) {
     buf[0] = c;

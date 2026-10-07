@@ -169,11 +169,11 @@ static Scope *scope = &(Scope){};
 // Points to the function object the parser is currently parsing.
 static Obj *current_fn;
 
-// Lists of all goto statements and labels in the curent function.
+// Lists of all goto statements and labels in the current function.
 static Node *gotos;
 static Node *labels;
 
-// Current "goto" and "continue" jump targets.
+// Where break and continue jump to, in the innermost loop or switch.
 static char *brk_label;
 static char *cont_label;
 
@@ -300,7 +300,7 @@ static void leave_scope(void) {
   scope = scope->next;
 }
 
-// Find a variable by name.
+// The innermost declaration of `tok`'s name, or NULL.
 static VarScope *find_var(Token *tok) {
   for (Scope *sc = scope; sc; sc = sc->next) {
     VarScope *sc2 = hashmap_get2(&sc->vars, tok->loc, tok->len);
@@ -5801,7 +5801,8 @@ static Type *union_decl(Token **rest, Token *tok) {
   return ty;
 }
 
-// Find a struct member by name.
+// Member `tok` of `ty`, or, if it's in an anonymous struct or union, that
+// member.
 static Member *get_struct_member(Type *ty, Token *tok) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
     // Anonymous struct or union member, or an unnamed bit-field

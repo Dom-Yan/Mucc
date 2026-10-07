@@ -9,7 +9,7 @@
 
 //---------- Tokenizer state -------------------------------------------------
 
-// Input file
+// The file being tokenized
 static File *current_file;
 
 // A list of all input files.
@@ -390,7 +390,6 @@ void free_tokens(Token *tok, Token *end) {
   }
 }
 
-// Create a new token.
 static Token *new_token(TokenKind kind, char *start, char *end) {
   Token *tok = alloc_token();
   tok->kind = kind;
