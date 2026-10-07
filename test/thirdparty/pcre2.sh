@@ -8,4 +8,11 @@ CC=$mucc AR="$mucc -ar" RANLIB="$mucc -ranlib" ./configure --disable-shared \
     --enable-pcre2-16 --enable-pcre2-32
 $make clean
 $make
+
+# With musl, grep test 150 takes the path it has for systems without
+# locales: musl accepts any locale name, so the bad one it sets works.
+if printf '#include <stdio.h>\n#ifndef __GLIBC__\nmusl\n#endif\n' |
+       $mucc -E -xc - | grep -q '^musl$'; then
+    sed -i 's|^which locale >/dev/null 2>&1$|false|' RunGrepTest
+fi
 $make check

@@ -1013,6 +1013,16 @@ expect_error "1:18: error: _Atomic __int128 is not supported" <<'EOF'
 _Atomic __int128 x;
 EOF
 
+# __attribute__((unused)) on a function silences -Wall's unused-function
+# (zstd's ERR_STATIC), and only that function's.
+printf 'static __attribute__((unused)) int f(void) { return 1; }\nstatic int g(void) { return 2; }\n' > $tmp/unused.c
+if $mucc -Wall -c -o $tmp/unused.o $tmp/unused.c 2> $tmp/err &&
+   ! grep -q "'f' defined" $tmp/err && grep -q "'g' defined but not used" $tmp/err; then
+    echo "testing unused attribute on a function ... passed"
+else
+    echo "testing unused attribute on a function ... failed"; cat $tmp/err; exit 1
+fi
+
 # gcc's keyword spellings like __inline are keywords there, so #undef
 # leaves them (gnulib's libc-config.h does it before musl's headers).
 expect_ok '#undef of __inline, __volatile__ and __asm__' <<'EOF'

@@ -1776,9 +1776,11 @@ void define_macro(char *name, char *buf) {
 // gcc, which #undef leaves alone: gnulib's libc-config.h undefines
 // __inline, then musl's headers use it.
 static char *keyword_spellings[][2] = {
-  {"__inline", "inline"}, {"__inline__", "inline"}, {"__const__", "const"},
-  {"__signed__", "signed"}, {"__volatile", "volatile"}, {"__volatile__", "volatile"},
-  {"__typeof", "typeof"}, {"__typeof__", "typeof"}, {"__alignof__", "_Alignof"},
+  {"__inline", "inline"}, {"__inline__", "inline"}, {"__const", "const"},
+  {"__const__", "const"}, {"__signed", "signed"}, {"__signed__", "signed"},
+  {"__volatile", "volatile"}, {"__volatile__", "volatile"},
+  {"__typeof", "typeof"}, {"__typeof__", "typeof"}, {"__alignof", "_Alignof"},
+  {"__alignof__", "_Alignof"},
   {"__typeof_unqual", "__typeof_unqual__"}, {"__asm", "asm"}, {"__asm__", "asm"},
 };
 

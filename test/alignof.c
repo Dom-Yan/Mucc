@@ -49,6 +49,11 @@ int main() {
   ASSERT(0, ({ _Alignas(128) static int b; (long)&b % 128; }));
   ASSERT(0, ({ static int _Alignas(128) c; (long)&c % 128; }));
 
+  // gcc's other spellings (zstd uses __alignof)
+  ASSERT(8, __alignof(long));
+  ASSERT(8, __alignof__(double));
+  ASSERT(1, ({ __const int x = 1; __signed char y = -1; x + y + 1; }));
+
   printf("OK\n");
   return 0;
 }

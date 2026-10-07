@@ -8784,6 +8784,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
     fn->tok = ty->name;
   fn->is_weak |= da.weak_tok != NULL;
   fn->is_kept |= da.is_used;
+  fn->is_used |= da.is_unused; // no unused-function warning
   if (da.ctor_tok) {
     fn->is_ctor = true;
     fn->ctor_prio = da.ctor_prio;

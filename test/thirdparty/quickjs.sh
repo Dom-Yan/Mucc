@@ -5,5 +5,7 @@ git reset --hard 535a7c250ff4a577ec36c3e103daab6dadeea650
 
 # Bellard's JavaScript engine: a big interpreter, its own tests in JS.
 $make clean
+# Its tests load a shared library (tests/bjson.so), so MUCC needs
+# --libc=system (a script running `mucc --libc=system`, as for tinycc.sh).
 $make CC="$mucc" HOST_CC="$mucc" AR="$mucc -ar" qjs run-test262
 $make CC="$mucc" HOST_CC="$mucc" AR="$mucc -ar" test
