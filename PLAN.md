@@ -248,28 +248,59 @@ passes its own tests, with these exceptions noted in its script:
 | GNU make | pass; misc/close_stdout skipped on musl (it calls exit() in an atexit handler, which musl traps) |
 | sed | pass, gnulib's 192 tests too; newline-dfa-bug skipped on musl (valgrind and a static malloc) |
 | gawk | pass but commas and clos1way6 on musl (printf `'` grouping, stdio order; both pass with glibc) |
-| libpng, Git (21,334 tests), TinyCC | pass, with `--libc=system` |
+| libpng, Git (21,334 tests), TinyCC, QuickJS | pass, with `--libc=system` |
 | CPython | with `--libc=system`: 389 pass, 32 skipped (libraries WSL lacks); test_email fails and test_socket hangs, with gcc too |
+| bzip2, xz, lz4, zstd (BMI2 .S and dispatch), PCRE2, kilo | pass (PCRE2's grep test 150 on musl: musl takes any locale name) |
+| BusyBox (defconfig but tc) | 907 of 914 pass; the 6 gcc's build fails too on WSL, and date-timezone on musl (musl's strptime) |
 
 GNU make, sed and gawk tarballs come from mirrors.kernel.org (ftp.gnu.org
 was unreachable). WSL lacks tclsh (tcl.sh builds it), OpenSSL headers
 (git.sh builds without), locales and autoreconf.
 
+## The deep test, 2026-10-07
+
+On main after 750c4eb. Bugs found are fixed, each with a test:
+
+- **Mutation fuzzing** (test files and src/ with random edits, compiled
+  to assembly; mucc must never crash): 142,000 inputs, 9 crashes, all
+  fixed (5f69d21, a125a1b, 61f4862); the last 50,000 clean.
+- **Preprocessor fuzzing** (random macros, `#`, `##`, `__VA_OPT__`, empty
+  arguments, `#undef`, against gcc): 6,500 programs. Found `#` of a
+  parameter also used expanded (59aa9bb, in every version) and sizeof
+  of a compound literal of an array of unknown length (b9f662c).
+  Known difference: gcc keeps the space before an argument or
+  `__VA_OPT__` that expands to nothing, in stringified text.
+- **difftest**: 5,000 programs, no mucc bug (one -0 where gcc folds
+  `0.0 - x` into `-x`).
+- **Fuzzers again**: bit-fields 2,000 seeds; `__int128` 200,000 and
+  `_Complex` 100,000 results, the same as gcc's.
+- **Headers**: every C and POSIX header alone, both libcs, five
+  standards, five feature macros, -Werror (3,700): `<stdbit.h>` was
+  missing with musl (de309dc).
+- **valgrind** on mucc compiling every test, src/ and sqlite3.c, with and
+  without -g: no errors.
+- **Projects**: the new ones found `__alignof`, unused functions with
+  the unused attribute (316b07f) and `#define inline __inline__`
+  (5e22fa1).
+- **test-all LIBC=mucc** passes; **test-bootstrap** passes, once
+  test/bootstrap.sh was executable (776adda: the release would have
+  failed).
+
 ## Next
 
-1. **First release from mucc**: tag it with "bootstrap: gcc" in the
-   message (the maintainer's call: it publishes).
-2. **Finish line 3**: difftest and the fuzzers on the current code.
-   (Finish line 5 holds: mucc's source in 0.44 s, gcc -O0 1.19 s, 2.7x;
-   the binary 8.5 MB.) Push main.
-3. **Finish line 6**: a pass over comments and sections.
+1. **Releases**: push main, then tag the first release from mucc with
+   "bootstrap: gcc" in the message; the one after it is built by it
+   alone. (The maintainer asked for this on 2026-10-07.)
+2. **Finish line 6**: a pass over comments and sections.
+3. Finish line 5 holds: mucc's source in 0.44 s, gcc -O0 1.18 s, 2.7x;
+   the binary 8.5 MB.
 
 ## Later
 
 - Tokens: macro expansion still copies (`<tgmath.h>`: 1.8M copies),
   and the tokens of directive lines and macro calls stay after use.
 
-- Push main (it is many commits ahead of origin).
+
 - With glibc's headers, `CMPLX` is undefined under mucc: glibc defines
   it only for gcc 4.7+ and clang. `__builtin_complex` works. musl's
   headers are fine.
