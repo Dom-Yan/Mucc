@@ -2330,6 +2330,9 @@ static Token *skip_excess_element(Token *tok) {
 
 // string-initializer = string-literal
 static void string_initializer(Token **rest, Token *tok, Initializer *init) {
+  Type *base = init->ty->base;
+  if (!is_integer(base) || base->size != tok->ty->base->size)
+    error_tok(tok, "array of inappropriate type initialized from string constant");
   if (init->is_flexible)
     *init = *new_initializer(array_of(init->ty->base, tok->ty->array_len), false);
 
@@ -2418,6 +2421,8 @@ static uint32_t str_elem(Initializer *init, int i) {
 static void array_designator(Token **rest, Token *tok, Type *ty, int64_t *begin,
                              int64_t *end) {
   *begin = const_expr(&tok, tok->next);
+  if (*begin < 0)
+    error_tok(tok, "array designator index is negative");
   if (*begin >= ty->array_len)
     error_tok(tok, "array designator index exceeds array bounds");
 

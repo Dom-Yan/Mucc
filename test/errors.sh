@@ -980,6 +980,18 @@ struct T { char s[1L << 62]; int n; };
 struct T t = {.s[1] = 1};
 EOF
 
+expect_error "1:17: error: array designator index is negative" <<'EOF'
+char x[] = {[-1 ... 2] = 'a'};
+EOF
+
+expect_error "1:13: error: array of inappropriate type initialized from string constant" <<'EOF'
+long g[3] = "foobar";
+EOF
+
+expect_error "1:14: error: array of inappropriate type initialized from string constant" <<'EOF'
+char *p[2] = "ab";
+EOF
+
 # The caret line under an error steps over bytes of invalid UTF-8.
 printf 'char *s = "\316 "; int y = z;\n' |
 expect_error "1:25: error: undeclared identifier 'z'"
