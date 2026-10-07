@@ -21,6 +21,8 @@ struct MacroArg {
   char *name;
   bool is_va_args;
   Token *tok;
+  bool is_raw_used; // with # or ## too, which take it as written
+  Token *expanded;  // macro-expanded, for the other uses (see subst())
 };
 
 typedef Token *macro_handler_fn(Token *);
@@ -833,6 +835,18 @@ static Token *subst(Token *tok, MacroArg *args) {
   Token head = {};
   Token *cur = &head;
 
+  // An argument is expanded in place, which changes its tokens' links,
+  // so one that # or ## also take as written is expanded from a copy.
+  for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
+    MacroArg *arg = NULL;
+    if (equal(t, "#") || equal(t, "##"))
+      arg = find_arg(args, t->next);
+    if (arg)
+      arg->is_raw_used = true;
+    if (equal(t->next, "##") && (arg = find_arg(args, t)))
+      arg->is_raw_used = true;
+  }
+
   while (tok->kind != TK_EOF) {
     // "#" followed by a parameter is replaced with stringized actuals.
     // (In assembly, another `#` is just copied, as with gcc.)
@@ -936,11 +950,24 @@ static Token *subst(Token *tok, MacroArg *args) {
     // Handle a macro token. Macro arguments are completely macro-expanded
     // before they are substituted into a macro body.
     if (arg) {
-      Token *t = preprocess2(arg->tok);
-      t->at_bol = tok->at_bol;
-      t->has_space = tok->has_space;
-      for (; t->kind != TK_EOF; t = t->next)
+      if (!arg->expanded) {
+        Token *src = arg->tok;
+        if (arg->is_raw_used) {
+          Token head2 = {};
+          Token *t2 = &head2;
+          for (Token *t = arg->tok; t; t = t->kind == TK_EOF ? NULL : t->next)
+            t2 = t2->next = copy_token(t);
+          src = head2.next;
+        }
+        arg->expanded = preprocess2(src);
+      }
+      Token *first = cur;
+      for (Token *t = arg->expanded; t->kind != TK_EOF; t = t->next)
         cur = cur->next = copy_token(t);
+      if (cur != first) {
+        first->next->at_bol = tok->at_bol;
+        first->next->has_space = tok->has_space;
+      }
       tok = tok->next;
       continue;
     }

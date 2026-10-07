@@ -569,6 +569,14 @@ int main() {
   ASSERT(1, case_f);
   ASSERT(2, case_o);
 
+  // A parameter used both as itself and with #: the string is the
+  // argument as written, though its other use expands it.
+#define EMPTY_FN()
+#define BOTH(b) ((void)(b), #b)
+#define BOTH2(a, b) ((void)(a ? b : 0), #b)
+  ASSERT(0, strcmp(BOTH((EMPTY_FN() 5)), "(EMPTY_FN() 5)"));
+  ASSERT(0, strcmp(BOTH2(1, (BOTH2(1, 2))), "(BOTH2(1, 2))"));
+
   printf("OK\n");
   return 0;
 }
