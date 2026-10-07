@@ -56,6 +56,13 @@ int add6(int a, int b, int c, int d, int e, int f) {
   return a + b + c + d + e + f;
 }
 
+// BusyBox's `#define inline __inline__`: __inline__ is a keyword in gcc, so
+// this is still inline.
+#define inline __inline__
+static inline int busybox_inline(void) { return 1; }
+static __inline__ int busybox_inline2(void) { return 2; } // as <linux/swab.h>
+#undef inline
+
 int main() {
   ASSERT(3, pm1);
   ASSERT(2, pm2);
@@ -568,6 +575,9 @@ int main() {
 #endif
   ASSERT(1, case_f);
   ASSERT(2, case_o);
+
+  ASSERT(1, busybox_inline());
+  ASSERT(2, busybox_inline2());
 
   // A parameter used both as itself and with #: the string is the
   // argument as written, though its other use expands it.

@@ -35,6 +35,7 @@ struct Macro {
   char *va_args_name;
   Token *body;
   macro_handler_fn *handler;
+  bool is_spelling; // a gcc keyword's other spelling (see keyword_spellings)
 };
 
 // `#if` can be nested, so we use a stack to manage nested `#if`s.
@@ -1024,11 +1025,8 @@ static void take_place(Token *first, Token *name, Token *after) {
 // If tok is a macro, expand it and return true.
 // Otherwise, do nothing and return false.
 static bool expand_macro(Token **rest, Token *tok) {
-  if (hideset_contains(tok->hideset, tok->loc, tok->len))
-    return false;
-
   Macro *m = find_macro(tok);
-  if (!m)
+  if (!m || (!m->is_spelling && hideset_contains(tok->hideset, tok->loc, tok->len)))
     return false;
 
   // The expansion's tokens point back to `tok` (their origin), which -E
@@ -1784,10 +1782,18 @@ static char *keyword_spellings[][2] = {
   {"__typeof_unqual", "__typeof_unqual__"}, {"__asm", "asm"}, {"__asm__", "asm"},
 };
 
+// Spelling i of keyword_spellings. It expands even where the usual rule
+// would leave it as it is: in gcc it's a keyword, so with BusyBox's
+// `#define inline __inline__`, inline is __inline__ and so inline.
+static void define_spelling(int i) {
+  Token *tok = tokenize(new_file("<built-in>", 1, keyword_spellings[i][1]));
+  add_macro(keyword_spellings[i][0], true, tok)->is_spelling = true;
+}
+
 void undef_macro(char *name) {
   for (int i = 0; i < sizeof(keyword_spellings) / sizeof(*keyword_spellings); i++) {
     if (!strcmp(name, keyword_spellings[i][0])) {
-      define_macro(name, keyword_spellings[i][1]);
+      define_spelling(i);
       return;
     }
   }
@@ -2030,7 +2036,7 @@ void init_macros(void) {
   }
 
   for (int i = 0; i < sizeof(keyword_spellings) / sizeof(*keyword_spellings); i++)
-    define_macro(keyword_spellings[i][0], keyword_spellings[i][1]);
+    define_spelling(i);
 
   // Lets `#if defined(__has_include)` etc. work. The operators themselves
   // are handled in read_const_expr().
