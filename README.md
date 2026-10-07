@@ -189,6 +189,10 @@ make difftest    # random programs compared against gcc
 The tests need gcc and glibc's headers (`build-essential`), since they also
 check `--libc=system`.
 
+
+## Disclaimer 
+AI was used in this project but for automating tests. And Comments explaining some logic. 
+
 ## Contributing
 
 - Run `make test-all` before every commit, and add a test for each fix.
