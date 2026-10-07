@@ -13,12 +13,13 @@
 <h1>Mucc C Compiler</h1>
 
 <h2>News</h2>
-<p>[October 1, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.1.0">Mucc
-1.1.0</a> released. On main since then, for the next release: <code>-g</code>
-debug info, <code>__int128</code>, <code>_Complex</code>, SSE vector types
-and intrinsics, K&amp;R function definitions, objects of 2 GiB and more,
-and releases built by mucc itself, with no gcc. See the
-<a href="changelog.html">changelog</a>.]</p>
+<p>[October 7, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.2.0">Mucc
+1.2.0</a> released: <code>-g</code> debug info, <code>__int128</code>,
+<code>_Complex</code>, SSE vector types and intrinsics,
+<code>&lt;stdbit.h&gt;</code>, K&amp;R function definitions, objects of
+2 GiB and more, an 8.5 MB binary, and 22 real programs passing their own
+tests. Its first stage was built by gcc, once; from the next release on,
+mucc is built by mucc alone. See the <a href="changelog.html">changelog</a>.]</p>
 
 <h2>Features</h2>
 <ul>
@@ -53,7 +54,7 @@ lines (1.7 MBytes) are compiled because the same headers are included in
 many files. Mucc is about <b>2.7 times</b> faster than GCC <code>-O0</code>.</p>
 <table class="speed">
   <tr><th>Compiler</th><th>Time(s)</th><th>lines/second</th><th>MBytes/second</th></tr>
-  <tr><td>Mucc (main)</td><td>0.44</td><td>112000</td><td>3.9</td></tr>
+  <tr><td>Mucc 1.2.0</td><td>0.44</td><td>112000</td><td>3.9</td></tr>
   <tr><td>GCC 15.2 -O0</td><td>1.18</td><td>41500</td><td>1.4</td></tr>
   <tr><td>GCC 15.2 -O2</td><td>5.13</td><td>9600</td><td>0.33</td></tr>
 </table>

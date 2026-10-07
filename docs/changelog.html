@@ -18,7 +18,7 @@
 Downloads for each release are on the
 <a href="https://github.com/Dom-Yan/Mucc/releases">releases page</a>.</p>
 
-<h2 id="main">On main, not released yet</h2>
+<h2 id="v1.2.0">Mucc 1.2.0 (October 7, 2026)</h2>
 <ul>
   <li><code>-g</code>: DWARF debug info, so gdb's <code>print</code>,
     <code>ptype</code>, <code>info locals</code> and <code>bt</code> show
@@ -82,6 +82,13 @@ Downloads for each release are on the
     an <code>#if</code>, a directive after an empty macro, <code>#undef
     __inline</code>, macros coming back after <code>#undef</code>, and
     variables' visibility.</li>
+  <li>A deep test before the release: mutation fuzzing (142,000 inputs, 9
+    crashes fixed), a new preprocessor fuzzer against gcc (6,500 programs),
+    5,000 random programs, every C and POSIX header under both libcs, and
+    mucc under valgrind. Also fixed: <code>#</code> of a parameter also
+    used expanded, <code>sizeof</code> of a compound literal of unknown
+    length, <code>#define inline __inline__</code>, and
+    <code>&lt;stdbit.h&gt;</code> added.</li>
 </ul>
 
 <h2 id="v1.1.0">Mucc 1.1.0 (October 1, 2026)</h2>
