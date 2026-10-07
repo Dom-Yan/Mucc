@@ -966,6 +966,24 @@ expect_error "1:23: error: asm operand number 2147483648 out of range" <<'EOF'
 void f(void) { int x; asm("%2147483648" : "+r"(x)); }
 EOF
 
+# Found by mutation fuzzing: each crashed mucc.
+expect_error "1:29: error: expected an attribute name" <<'EOF'
+int x __attribute__((unused,
+EOF
+
+expect_error "1:26: error: not a compile-time constant" <<'EOF'
+int a; long bad = (long)&a % 32;
+EOF
+
+expect_error "mucc: error: out of memory for the initializer of an array of 4611686018427387904 elements" <<'EOF'
+struct T { char s[1L << 62]; int n; };
+struct T t = {.s[1] = 1};
+EOF
+
+# The caret line under an error steps over bytes of invalid UTF-8.
+printf 'char *s = "\316 "; int y = z;\n' |
+expect_error "1:25: error: undeclared identifier 'z'"
+
 expect_error "1:22: error: attribute 'constructor' is not supported on a variable" <<'EOF'
 int x __attribute__((constructor));
 EOF

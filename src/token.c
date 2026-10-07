@@ -104,9 +104,14 @@ static void print_diag(char *kind, char *filename, char *input, int line_no,
       p++;
       continue;
     }
-    char *q;
-    decode_utf8(&q, p);
-    fprintf(stderr, "%*s", display_width(p, q - p), "");
+    // A character's bytes, or a byte of invalid UTF-8, one column wide:
+    // decode_utf8() would report that as another error.
+    char *q = p + 1;
+    while (q < loc && (*q & 0xC0) == 0x80)
+      q++;
+    unsigned char c = *p;
+    int n = c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 0;
+    fprintf(stderr, "%*s", n == q - p ? display_width(p, n) : 1, "");
     p = q;
   }
   fprintf(stderr, "^\n");

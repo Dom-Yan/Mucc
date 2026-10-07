@@ -533,6 +533,8 @@ static Initializer *child_init(Initializer *init, int64_t i, Type *ty, bool flex
         len++;
     }
     init->children = calloc(len, sizeof(Initializer *));
+    if (!init->children)
+      error("out of memory for the initializer of an array of %ld elements", len);
   }
 
   if (!init->children[i]) {
@@ -981,6 +983,8 @@ static Token *attributes(Token *tok, Attrs *a, bool allow_decl) {
       if (consume(&tok, tok, ","))
         continue;
 
+      if (tok->kind != TK_IDENT && tok->kind != TK_KEYWORD)
+        error_expected(tok, "an attribute name");
       Token *name = tok;
       Token *args = NULL;
       tok = tok->next;
@@ -4566,7 +4570,9 @@ static int64_t eval_wide(Node *node, char ***label) {
 static int64_t eval_rval(Node *node, char ***label) {
   switch (node->kind) {
   case ND_VAR:
-    if (node->var->is_local)
+    // An address is a constant only in an initializer (`label`), not in
+    // an integer constant expression.
+    if (!label || node->var->is_local)
       error_tok(node->tok, "not a compile-time constant");
     *label = &node->var->name;
     return 0;
