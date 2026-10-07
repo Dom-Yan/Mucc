@@ -288,10 +288,9 @@ On main after 750c4eb. Bugs found are fixed, each with a test:
 
 ## Next
 
-1. **Releases** (the maintainer's go, 2026-10-07): push main and wait
-   for CI; tag v1.2.0 with "bootstrap: gcc" in the message (gcc builds
-   its first stage, once); then v1.2.1, built by v1.2.0 alone. Then the
-   finish line holds.
+1. **Releases**: v1.2.0 (2026-10-07) had gcc build its first stage,
+   once; rebuilt by itself it is the same bytes. v1.2.1 is built by
+   v1.2.0 alone, and so is every release after it from the one before.
 2. Finish line 6 is done (a690bf5: the comment pass). Finish line 5
    holds: mucc's source in 0.44 s, gcc -O0 1.18 s, 2.7x; 8.5 MB.
 
