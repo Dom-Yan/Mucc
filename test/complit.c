@@ -42,6 +42,15 @@ int main() {
   ASSERT(1, ({ typedef const int CI; _Generic(&(CI){0}, const int *: 1, default: 0); }));
   ASSERT(0, _Generic(&(int){0}, const int *: 1, default: 0));
 
+  // An array of unknown length has the length its initializer gives,
+  // for sizeof too, with or without parentheses around the literal.
+  ASSERT(12, sizeof((int[]){1, 2, 3}));
+  ASSERT(12, (sizeof (int[]){1, 2, 3}));
+  ASSERT(4, sizeof((char[]){"abc"}));
+  ASSERT(2, sizeof((int[]){0, 1}) / sizeof(int));
+  ASSERT(3, ({ int *p = (int[]){1, 2, 3}; p[2]; }));
+  ASSERT(8, sizeof(struct { int a, b; }));
+
   printf("OK\n");
   return 0;
 }

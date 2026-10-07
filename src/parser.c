@@ -5916,9 +5916,10 @@ static Node *postfix(Token **rest, Token *tok) {
       Node *lhs = lvar_initializer(&tok, tok, var);
       node = new_binary(ND_COMMA, lhs, new_var_node(var, tok), start);
       // It's an lvalue of its own type, `const` included, which a comma's
-      // value otherwise wouldn't keep: &(const int){0} is const int *.
+      // value otherwise wouldn't keep: &(const int){0} is const int *. An
+      // array of unknown length has the length its initializer gave.
       add_type(node);
-      node->ty = ty;
+      node->ty = ty->size < 0 ? var->ty : ty;
     }
   } else {
     node = primary(&tok, tok);
@@ -7267,23 +7268,29 @@ static Node *primary(Token **rest, Token *tok) {
     return node;
   }
 
+  // sizeof (T), unless it's `sizeof (int[]){1, 2}`, a compound literal's
+  // size, which is taken below as an expression's (as cast() does)
   if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
     Type *ty = typename(&tok, tok->next->next);
-    *rest = skip(tok, ")");
+    tok = skip(tok, ")");
+    if (!equal(tok, "{")) {
+      *rest = tok;
 
-    if (ty->kind == TY_VLA) {
-      if (ty->vla_size)
-        return new_var_node(ty->vla_size, tok);
+      if (ty->kind == TY_VLA) {
+        if (ty->vla_size)
+          return new_var_node(ty->vla_size, tok);
 
-      Node *lhs = compute_vla_size(ty, tok);
-      Node *rhs = new_var_node(ty->vla_size, tok);
-      return new_binary(ND_COMMA, lhs, rhs, tok);
+        Node *lhs = compute_vla_size(ty, tok);
+        Node *rhs = new_var_node(ty->vla_size, tok);
+        return new_binary(ND_COMMA, lhs, rhs, tok);
+      }
+
+      if (ty->size < 0)
+        error_tok(start, "invalid application of 'sizeof' to incomplete type '%s'",
+                  type_name(ty));
+      return new_ulong(ty->size, start);
     }
-
-    if (ty->size < 0)
-      error_tok(start, "invalid application of 'sizeof' to incomplete type '%s'",
-                type_name(ty));
-    return new_ulong(ty->size, start);
+    tok = start;
   }
 
   if (equal(tok, "sizeof")) {
