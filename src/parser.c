@@ -843,12 +843,12 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
     }
 
     // Without an argument, the largest alignment any type needs.
-    int align = 16;
+    int64_t align = 16;
     if (args) {
       align = const_expr(&args, args);
       skip(args, ")");
     }
-    if (align <= 0 || (align & (align - 1)))
+    if (align <= 0 || (align & (align - 1)) || align > (1 << 28))
       error_tok(tok, "requested alignment is not a positive power of 2");
     a->align = MAX(a->align, align);
     return;
@@ -1164,10 +1164,16 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
         error_tok(tok, "_Alignas is not allowed in this context");
       tok = skip(tok->next, "(");
 
-      if (is_typename(tok))
+      if (is_typename(tok)) {
         attr->align = typename(&tok, tok)->align;
-      else
-        attr->align = const_expr(&tok, tok);
+      } else {
+        // 0 asks for nothing; otherwise a power of 2, as gcc allows.
+        Token *start = tok;
+        int64_t align = const_expr(&tok, tok);
+        if (align < 0 || (align & (align - 1)) || align > (1 << 28))
+          error_tok(start, "requested alignment is not a positive power of 2");
+        attr->align = align;
+      }
       tok = skip(tok, ")");
       continue;
     }

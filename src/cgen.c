@@ -3249,10 +3249,10 @@ static char *asm_template(Node *node, char **targets) {
 
     AsmOperand *op = NULL;
     if (isdigit(*p)) {
-      int i = strtol(p, &p, 10);
+      long i = strtol(p, &p, 10);
       p--;
-      if (i >= node->asm_nops)
-        error_tok(node->tok, "asm operand number %d out of range", i);
+      if (i < 0 || i >= node->asm_nops)
+        error_tok(node->tok, "asm operand number %ld out of range", i);
       op = &node->asm_ops[i];
     } else if (*p == '[') {
       char *end = strchr(p, ']');

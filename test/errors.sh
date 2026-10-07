@@ -950,6 +950,22 @@ expect_error "1:22: error: requested alignment is not a positive power of 2" <<'
 int x __attribute__((aligned(3)));
 EOF
 
+expect_error "1:22: error: requested alignment is not a positive power of 2" <<'EOF'
+int x __attribute__((aligned(1L << 40)));
+EOF
+
+expect_error "1:21: error: requested alignment is not a positive power of 2" <<'EOF'
+struct S { _Alignas(-1) long a; };
+EOF
+
+expect_ok '_Alignas(0) asks for nothing' <<'EOF'
+struct S { _Alignas(0) long a; } s;
+EOF
+
+expect_error "1:23: error: asm operand number 2147483648 out of range" <<'EOF'
+void f(void) { int x; asm("%2147483648" : "+r"(x)); }
+EOF
+
 expect_error "1:22: error: attribute 'constructor' is not supported on a variable" <<'EOF'
 int x __attribute__((constructor));
 EOF
