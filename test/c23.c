@@ -3,6 +3,7 @@
 #include "test.h"
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdbit.h>
 
 #if __STDC_VERSION__ != 202311L
 # error "expected C23"
@@ -359,6 +360,35 @@ int main() {
     , 9 }; a[3]; }));
   ASSERT(1, has_embed_works);
   ASSERT(1, has_c_attribute_works);
+
+  // <stdbit.h>, on each unsigned type
+  ASSERT(3, stdc_leading_zeros((unsigned char)0x1f));
+  ASSERT(16, stdc_leading_zeros((unsigned short)0));
+  ASSERT(28, stdc_leading_zeros(0xfu));
+  ASSERT(0, stdc_leading_zeros(~0ul));
+  ASSERT(4, stdc_leading_ones((unsigned char)0xf3));
+  ASSERT(64, stdc_leading_ones(~0ull));
+  ASSERT(3, stdc_trailing_zeros(8u));
+  ASSERT(8, stdc_trailing_zeros((unsigned char)0));
+  ASSERT(2, stdc_trailing_ones((unsigned short)0xfff3));
+  ASSERT(5, stdc_first_leading_zero((unsigned char)0xf3));
+  ASSERT(0, stdc_first_leading_zero((unsigned char)0xff));
+  ASSERT(4, stdc_first_leading_one((unsigned char)0x1f));
+  ASSERT(0, stdc_first_leading_one(0u));
+  ASSERT(3, stdc_first_trailing_zero(0x3u));
+  ASSERT(4, stdc_first_trailing_one(8ul));
+  ASSERT(4, stdc_count_ones((unsigned short)0xf0));
+  ASSERT(60, stdc_count_zeros(0xf0ull));
+  ASSERT(1, stdc_has_single_bit(64u) && !stdc_has_single_bit(0u) && !stdc_has_single_bit(6u));
+  ASSERT(7, stdc_bit_width((unsigned char)100));
+  ASSERT(0, stdc_bit_width(0ul));
+  ASSERT(64, stdc_bit_floor(100u));
+  ASSERT(1, stdc_bit_floor(1ull << 63) == 1ull << 63);
+  ASSERT(128, stdc_bit_ceil(100u));
+  ASSERT(1, stdc_bit_ceil(0u));
+  ASSERT(0, stdc_bit_ceil((unsigned char)200));
+  ASSERT(1, _Generic(stdc_bit_floor((unsigned short)5), unsigned short: 1, default: 0));
+  ASSERT(1, __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_LITTLE__);
 
   printf("OK\n");
   return 0;
