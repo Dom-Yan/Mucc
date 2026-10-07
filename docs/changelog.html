@@ -10,50 +10,9 @@
 </head>
 <body>
 
-<header>
-<h1><a href="./">Mucc</a></h1>
-<p>A small, fast, self-hosting C compiler for x86-64 Linux</p>
-</header>
+<p><a href="./">Mucc C Compiler</a></p>
 
-<div class="page">
-<nav aria-label="Site">
-  <h2>About Mucc</h2>
-  <ul>
-    <li><a href="./#intro">Introduction</a></li>
-    <li><a href="./#mission">Mission</a></li>
-    <li><a href="./#runs">Where it runs</a></li>
-    <li><a href="./#supports">What it supports</a></li>
-    <li><a href="./#stats">Statistics</a></li>
-  </ul>
-  <h2>Download</h2>
-  <ul>
-    <li><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Latest release</a></li>
-    <li><a href="https://github.com/Dom-Yan/Mucc/releases">All releases</a></li>
-    <li><a href="./#download">Install</a></li>
-  </ul>
-  <h2>News</h2>
-  <ul>
-    <li><a href="./#news">Recent news</a></li>
-    <li><a href="changelog.html">Changelog</a></li>
-  </ul>
-  <h2>Development</h2>
-  <ul>
-    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
-    <li><a href="./#bugs">Found a bug?</a></li>
-    <li><a href="./#contributing">Contributing</a></li>
-    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
-    <li><a href="https://github.com/Dom-Yan/Mucc/pulls">Pull requests</a></li>
-  </ul>
-  <h2>Legal</h2>
-  <ul>
-    <li><a href="./#license">License</a></li>
-    <li><a href="./#credits">Credits</a></li>
-  </ul>
-</nav>
-
-<main>
-
-<h2>Changelog</h2>
+<h1>Changelog</h1>
 <p>Releases and notable changes, newest first, taken from the
 <a href="https://github.com/Dom-Yan/Mucc/commits/main">commit history</a>.
 Downloads for each release are on the
@@ -102,6 +61,27 @@ Downloads for each release are on the
   <li><code>__builtin_offsetof</code> and
     <code>__PRETTY_FUNCTION__</code>.</li>
   <li><code>make -j test-all</code> works.</li>
+  <li>The rest of C and GNU C: <code>__int128</code> (also as bit-fields),
+    <code>_Complex</code>, <code>asm goto</code>, <code>__auto_type</code>,
+    gcc's vector types with the SSE to SSE4.2 intrinsics headers,
+    <code>__builtin_shufflevector</code> and
+    <code>__builtin_convertvector</code>, K&amp;R function definitions,
+    objects of 2 GiB and more, and <code>-fvisibility=</code>.</li>
+  <li>Releases are built by the release before them, with gcc and binutils
+    made to fail (<code>test/bootstrap.sh</code>); a build is the same
+    bytes whichever compiler starts it, and an object without
+    <code>-g</code> the same in any directory.</li>
+  <li>Smaller and faster: the single binary is 8.5 MB (was 11.3), tokens
+    and AST nodes take less memory (sqlite3.c peaks at 250 MB, was 540),
+    and mucc compiles its own source 2.7 times faster than
+    <code>gcc -O0</code>.</li>
+  <li>More real programs pass their own tests, each a script in
+    <code>test/thirdparty/</code>: redis, jq, GNU make, sed with gnulib's
+    tests, gawk, stb and miniz, besides SQLite, CPython, Git, Lua, zlib,
+    libpng and TinyCC. Bugs they found are fixed: <code>#line</code> inside
+    an <code>#if</code>, a directive after an empty macro, <code>#undef
+    __inline</code>, macros coming back after <code>#undef</code>, and
+    variables' visibility.</li>
 </ul>
 
 <h2 id="v1.1.0">Mucc 1.1.0 (October 1, 2026)</h2>
@@ -215,14 +195,8 @@ inside, which needs nothing else installed.</p>
   </dd>
 </dl>
 
-</main>
-</div>
-
-<footer>
-<p>Mucc&trade; and Dom-Yan&trade; are trademarks of Dominick.</p>
-<p>Mucc is released under the MIT License. See the
-<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">LICENSE</a> file.</p>
-</footer>
+<hr>
+<p>Copyright (c) 2026 Dominick and Rei</p>
 
 </body>
 </html>

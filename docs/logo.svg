@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="96" viewBox="0 0 240 96">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a4a5c"/>
+      <stop offset="1" stop-color="#11161d"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3" width="234" height="90" rx="12" fill="#e8e8e8" stroke="#555" stroke-width="2"/>
+  <rect x="11" y="11" width="218" height="74" rx="8" fill="url(#g)"/>
+  <text x="15" y="24" font-family="monospace" font-size="7" fill="#6f8fb0" opacity=".55">0110 1101 0111 0101 0110 0011 0110 0011 0100 0011</text>
+  <text x="15" y="80" font-family="monospace" font-size="7" fill="#6f8fb0" opacity=".55">int main(void) { return 0; }  mucc -o hello hello.c</text>
+  <text x="120" y="66" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="46" fill="#f2f2f2" stroke="#000" stroke-width="1">mucc</text>
+</svg>
