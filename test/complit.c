@@ -18,6 +18,14 @@ Tree *tree = &(Tree){
 
 static int complit_get(int *p) { return *p + 1; }
 
+// [GNU] A struct or union at file scope set from a compound literal, a
+// function's address in it included
+typedef struct { int a; int (*f)(int *); char s[4]; } ComplitFn;
+ComplitFn complit_fn = (ComplitFn){ 42, complit_get, "hi" };
+typedef union { long l; char *p; } ComplitU;
+ComplitU complit_u = (ComplitU){ .p = "str" };
+struct { int z; ComplitFn t; } complit_nest = { 5, (ComplitFn){ 7, complit_get, "ab" } };
+
 int main() {
   ASSERT(1, (int){1});
   ASSERT(2, ((int[]){0,1,2})[2]);
@@ -50,6 +58,16 @@ int main() {
   ASSERT(2, sizeof((int[]){0, 1}) / sizeof(int));
   ASSERT(3, ({ int *p = (int[]){1, 2, 3}; p[2]; }));
   ASSERT(8, sizeof(struct { int a, b; }));
+
+  ASSERT(42, complit_fn.a);
+  ASSERT(4, ({ int x = 3; complit_fn.f(&x); }));
+  ASSERT(0, strcmp(complit_fn.s, "hi"));
+  ASSERT(0, strcmp(complit_u.p, "str"));
+  ASSERT(5, complit_nest.z);
+  ASSERT(7, complit_nest.t.a);
+  ASSERT(1, complit_nest.t.f == complit_get);
+  ASSERT(0, strcmp(complit_nest.t.s, "ab"));
+  ASSERT(9, ({ static ComplitFn s = (ComplitFn){ 9, complit_get, "cd" }; s.a + strcmp(s.s, "cd"); }));
 
   printf("OK\n");
   return 0;

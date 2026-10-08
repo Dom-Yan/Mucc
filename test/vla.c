@@ -22,6 +22,37 @@ long vla_param_diff(int r, int c, int m[r][c]) { return (char *)(m + 2) - (char 
 long vla_param_expr(int n, char (*p)[n * 2 + 1]) { return sizeof(*p); }
 long vla_param_sizeof(int n, char (*p)[sizeof(n)]) { return sizeof(*p); }
 
+// A VLA typedef's size is computed where it's declared, once (C17
+// 6.7.8p3), and every use of it has that size, in any branch.
+int vla_typedef_once(int n) {
+  typedef int A[n++];
+  A a, b;
+  return n * 100 + sizeof a + sizeof(A) - sizeof b;
+}
+
+int vla_typedef_branch(int n, int c) {
+  typedef char A[n];
+  int s;
+  if (c)
+    s = sizeof(A);
+  else
+    s = sizeof(A) + 100;
+  return s;
+}
+
+int vla_typedef_loop(int n) {
+  int r = 0;
+  for (int i = 0; i < 3; i++) {
+    typedef int A[n + i];
+    r += sizeof(A);
+  }
+  return r;
+}
+
+// An array parameter's length is evaluated, though the parameter is a
+// pointer.
+int vla_param_side(int n, int a[n++]) { return n; }
+
 // Leaving a VLA's scope frees it, so a VLA in a loop gets the same
 // memory on every pass instead of using up the stack. Each returns 1.
 int vla_free_loop(int n) {
@@ -132,6 +163,12 @@ int main() {
   ASSERT(3, ({ int k; int a[k = 3]; k; }));
   ASSERT(4, ({ int n = 0; int a[n += 4][2]; n; }));
   ASSERT(32, ({ int n = 0; int a[n += 4][2]; sizeof(a); }));
+
+  ASSERT(412, vla_typedef_once(3));
+  ASSERT(105, vla_typedef_branch(5, 0));
+  ASSERT(7, vla_typedef_branch(7, 1));
+  ASSERT(24, vla_typedef_loop(1));
+  ASSERT(5, ({ int x[1]; vla_param_side(4, x); }));
 
   printf("OK\n");
   return 0;

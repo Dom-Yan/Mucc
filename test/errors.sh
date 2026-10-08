@@ -250,6 +250,48 @@ expect_error "1:44: error: type mismatch in conditional expression" <<'EOF'
 void f(int c, double d, int *p) { (void)(c ? d : p); }
 EOF
 
+# Operators that take no pointers, and casts between pointers and floats
+expect_error "1:24: error: invalid operands to binary '*' ('int *' and 'int')" <<'EOF'
+void f(int *p) { p = p * 2; }
+EOF
+expect_error "1:20: error: invalid operands to binary '/=' ('int *' and 'int')" <<'EOF'
+void f(int *p) { p /= 2; }
+EOF
+expect_error "1:24: error: invalid operands to binary '&' ('int *' and 'int')" <<'EOF'
+void f(int *p) { p = p & 1; }
+EOF
+expect_error "1:22: error: invalid argument type to unary '-'" <<'EOF'
+void f(int *p) { p = -p; }
+EOF
+expect_error "1:22: error: invalid argument type to unary '~'" <<'EOF'
+void f(int *p) { p = ~p; }
+EOF
+expect_error "1:31: error: invalid argument type to unary '~'" <<'EOF'
+void f(int i, double d) { i = ~d; }
+EOF
+expect_error "1:32: error: cannot convert 'int *' to 'double'" <<'EOF'
+void f(int *p, double d) { d = (double)p; }
+EOF
+expect_error "1:26: error: invalid operands to binary '<' ('int *' and 'double')" <<'EOF'
+int f(int *p) { return p < 1.0; }
+EOF
+
+# Values that aren't lvalues, though mucc can find their address
+expect_error "1:30: error: not an lvalue" <<'EOF'
+void f(int i, int j) { (i = 5, j) = 6; }
+EOF
+expect_error "2:21: error: not an lvalue" <<'EOF'
+struct S { int a; } s, t, g(void);
+void f(int c) { g().a = 1; (c ? s : t) = t; }
+EOF
+expect_error "1:34: error: not an lvalue" <<'EOF'
+int *f(int i, int j) { return &(i, j); }
+EOF
+expect_ok 'a statement expression or compound literal as an lvalue' <<'EOF'
+struct S { int a; } s, t;
+void f(void) { ({ s; }) = t; ({ s; }).a = 1; (struct S){1}.a = 2; int *p = &(int){3}; }
+EOF
+
 expect_error "1:1: error: static assertion failed: int must be 8 bytes" <<'EOF'
 _Static_assert(sizeof(int) == 8, "int must be 8 bytes");
 EOF
@@ -802,12 +844,16 @@ int f(int x) { if (x) return 1; die(); }
 int g(int x) { if (x) return 1; die2(); }
 EOF
 
-expect_error "1:22: error: unknown attribute 'bogus'" <<'EOF'
+expect_warning "1:22: warning: unknown attribute 'bogus' ignored [-Wattributes]" <<'EOF'
 int x __attribute__((bogus));
 EOF
 
-expect_error "1:8: error: unknown attribute 'bogus'" <<'EOF'
+expect_warning "1:8: warning: unknown attribute 'bogus' ignored [-Wattributes]" <<'EOF'
 [[gnu::bogus]] int x;
+EOF
+
+expect_warning "1:16: warning: unknown attribute 'whatever' ignored [-Wattributes]" <<'EOF'
+__attribute__((whatever(1, 2))) int y;
 EOF
 
 # Every attribute gcc has that would change what a program does, but mucc
@@ -1221,6 +1267,23 @@ EOF
 
 expect_error "1:29: error: attribute 'common' is not supported on a function" <<'EOF'
 void f(void) __attribute__((common));
+EOF
+
+# Excess elements in an initializer are skipped, with a warning.
+expect_warning "1:19: warning: excess elements in array initializer" <<'EOF'
+int a[2] = {1, 2, 3};
+EOF
+expect_warning "1:27: warning: excess elements in struct initializer" <<'EOF'
+struct { int x; } s = {1, 2};
+EOF
+expect_warning "1:13: warning: excess elements in scalar initializer" <<'EOF'
+int x = {1, 2};
+EOF
+expect_warning "1:34: warning: excess elements in union initializer" <<'EOF'
+union { int i; char c; } u = {1, 2};
+EOF
+expect_warning "1:32: warning: excess elements in struct initializer" <<'EOF'
+struct S{int a,b;} x[] = {{1,2,3},{4}};
 EOF
 
 # mode and transparent_union

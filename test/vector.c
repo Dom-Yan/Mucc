@@ -430,6 +430,13 @@ int main() {
   ASSERT(0, 1);
 #endif
 
+  // vector_size before the type, among a declaration's specifiers
+  ASSERT(16, ({ __attribute__((vector_size(16))) char v; sizeof(v); }));
+  ASSERT(8, ({ __attribute__((vector_size(8))) short v = {1, 2, 3, 4}; sizeof(v) + v[3] - 4; }));
+
+  // A vector literal cast to an integer, as a condition
+  ASSERT(1, ({ typedef int v2si __attribute__((vector_size(8))); int r = 0; if ((long long)(v2si){2, 2}) r = 1; r; }));
+
   printf("OK\n");
   return 0;
 }

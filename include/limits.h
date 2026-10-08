@@ -27,8 +27,13 @@
 #define UCHAR_MAX (__SCHAR_MAX__ * 2 + 1)
 #endif
 #ifndef CHAR_MAX
+#ifdef __CHAR_UNSIGNED__
+#define CHAR_MIN 0
+#define CHAR_MAX UCHAR_MAX
+#else
 #define CHAR_MIN SCHAR_MIN
 #define CHAR_MAX SCHAR_MAX
+#endif
 #endif
 
 #ifndef SHRT_MAX

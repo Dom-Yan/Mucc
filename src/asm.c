@@ -50,6 +50,8 @@ typedef struct Sym {
   int visibility;     // STV_DEFAULT, or STV_HIDDEN and so on (.hidden)
   struct Sym *alias_of; // .set sym, target: the target
   struct Sym *size_from, *size_to; // .size sym, .-start: from start to here
+  bool is_abs;        // `.set sym, 5`: a constant, `value`
+  bool is_used;       // named in an operand or data (see read_value())
 } Sym;
 
 // A jump to a label. It's short (2 bytes) or long (5 or 6); layout()
@@ -90,6 +92,7 @@ struct Section {
   int type;           // SHT_PROGBITS, SHT_NOBITS, SHT_INIT_ARRAY or SHT_FINI_ARRAY
   int flags;          // SHF_*
   int align;
+  int entsize;        // the size of each piece of a merged (M) section
   Bytes bytes;        // contents, without jumps (SHT_NOBITS: len only)
   Jump *jumps;
   int njumps, capjumps;
@@ -127,6 +130,10 @@ static int nsyms, capsyms;
 static Sym **lcomms;
 static int *lcomm_aligns;
 static int nlcomms;
+
+// The sections .pushsection left, innermost last
+static Section *section_stack[64];
+static int nsection_stack;
 
 static char *file_name;     // from `.file "name"`
 static StringArray dwarf_files; // from `.file N "name"`: [N - 1]
@@ -233,7 +240,7 @@ static Sym *find_sym(char *name, int len) {
 }
 
 static void define_sym(Sym *sym) {
-  if (sym->sec)
+  if (sym->sec || sym->is_abs)
     fail("'%s' is already defined", sym->name);
   sym->sec = cur;
   sym->pos = cur->bytes.len;
@@ -445,9 +452,11 @@ static Sym *read_sym(void) {
 }
 
 static int64_t read_sum(int64_t val);
+static bool is_symstart(char c);
 
-// A number, a negated one, or a parenthesized sum.
+// A number, a negated one, a constant or a parenthesized sum.
 static int64_t read_term(void) {
+  skip_space();
   if (*p == '-') {
     p++;
     return (int64_t)(0 - (uint64_t)read_term());
@@ -460,6 +469,13 @@ static int64_t read_term(void) {
     p++;
     return val;
   }
+  // A constant from .set
+  if (is_symstart(*p)) {
+    Sym *sym = read_sym();
+    if (!sym->is_abs)
+      fail("expected a number");
+    return sym->value;
+  }
   char *end;
   int64_t val = parse_number(&end, p);
   if (end == p)
@@ -468,15 +484,49 @@ static int64_t read_term(void) {
   return val;
 }
 
+// Is operator `op` next, after any spaces? Then it's skipped.
+static bool next_op(char *op) {
+  char *q = p;
+  while (*q == ' ' || *q == '\t')
+    q++;
+  if (strncmp(q, op, strlen(op)))
+    return false;
+  p = q + strlen(op);
+  return true;
+}
+
+// Multiplies, divides or shifts `val` by the terms that follow, as in
+// `4 * 8`: these bind tighter than + and -.
+static int64_t read_product(int64_t val) {
+  for (;;) {
+    if (next_op("*")) {
+      val = (uint64_t)val * read_term();
+    } else if (next_op("/")) {
+      int64_t t = read_term();
+      if (!t)
+        fail("division by zero");
+      val /= t;
+    } else if (next_op("<<")) {
+      val = (uint64_t)val << (read_term() & 63);
+    } else if (next_op(">>")) {
+      val >>= read_term() & 63;
+    } else {
+      return val;
+    }
+  }
+}
+
 // Adds or subtracts the terms that follow to `val`, as in `72+8` or
 // `(-1-2)`. Wraps around as GNU as does.
 static int64_t read_sum(int64_t val) {
-  while (*p == '+' || *p == '-') {
-    bool minus = *p++ == '-';
-    uint64_t t = read_term();
+  val = read_product(val);
+  for (;;) {
+    bool minus = next_op("-");
+    if (!minus && !next_op("+"))
+      return val;
+    uint64_t t = read_product(read_term());
     val = minus ? (uint64_t)val - t : (uint64_t)val + t;
   }
-  return val;
 }
 
 static bool is_symstart(char c) {
@@ -496,12 +546,29 @@ static void read_sym_terms(Operand *op) {
     bool minus = *p++ == '-';
     skip_space();
     if (minus && !op->minus && is_symstart(*p)) {
-      op->minus = read_sym();
-      continue;
+      char *save = p;
+      Sym *sym = read_sym();
+      if (!sym->is_abs) {
+        op->minus = sym;
+        sym->is_used = true;
+        continue;
+      }
+      p = save;
     }
-    uint64_t t = read_term();
+    uint64_t t = read_product(read_term());
     op->val = minus ? (uint64_t)op->val - t : (uint64_t)op->val + t;
   }
+}
+
+// A constant from .set in op is its value; another symbol is marked
+// used, so a .set after can't make it a constant.
+static void use_value_sym(Operand *op) {
+  if (op->sym && op->sym->is_abs) {
+    op->val = (uint64_t)op->val + op->sym->value;
+    op->sym = NULL;
+  }
+  if (op->sym)
+    op->sym->is_used = true;
 }
 
 // Reads `123`, `1+2`, `sym`, `sym+8`, `end - start`, `(end - start)`,
@@ -516,6 +583,7 @@ static void read_value(Operand *op) {
       fail("expected ')'");
     p++;
     op->val = read_sum(op->val);
+    use_value_sym(op);
     return;
   }
 
@@ -534,6 +602,7 @@ static void read_value(Operand *op) {
 
   op->sym = read_sym();
   read_sym_terms(op);
+  use_value_sym(op);
 
   if (*p == '@') {
     p++;
@@ -1843,6 +1912,16 @@ static int64_t read_int(void) {
   return read_sum(read_term());
 }
 
+// Skips the ',' before a directive's next argument, if there is one.
+static bool next_arg(void) {
+  skip_space();
+  if (*p != ',')
+    return false;
+  p++;
+  skip_space();
+  return true;
+}
+
 // Reads a double-quoted string (without escapes).
 static char *read_string(void) {
   skip_space();
@@ -1908,11 +1987,65 @@ static void string_directive(bool nul) {
   }
 }
 
-static void align_to_n(int n) {
-  if (n <= 0 || (n & (n - 1)))
+// `n` bytes of `fill`
+static void out_fill(int64_t n, int fill) {
+  if (n < 0)
+    fail("negative size");
+  if (fill & 0xff)
+    memset(reserve(n), fill, n);
+  else
+    out_zeros(n);
+}
+
+// `n` bytes of NOPs, as GNU as pads code (test/asm.sh compares the
+// bytes): from 88 bytes on, a jump over them first, then the shortest
+// NOP and 11-byte ones.
+static void out_nops(int64_t n) {
+  static char *nops[] = {
+    "", "\x90", "\x66\x90", "\x0f\x1f\x00", "\x0f\x1f\x40\x00",
+    "\x0f\x1f\x44\x00\x00", "\x66\x0f\x1f\x44\x00\x00",
+    "\x0f\x1f\x80\x00\x00\x00\x00", "\x0f\x1f\x84\x00\x00\x00\x00\x00",
+    "\x66\x0f\x1f\x84\x00\x00\x00\x00\x00",
+    "\x66\x2e\x0f\x1f\x84\x00\x00\x00\x00\x00",
+    "\x66\x66\x2e\x0f\x1f\x84\x00\x00\x00\x00\x00",
+  };
+  if (n >= 88 && n - 2 <= 127) {
+    out(0xeb);
+    out(n - 2);
+    n -= 2;
+  } else if (n >= 88) {
+    out(0xe9);
+    out_n(4, n - 5);
+    n -= 5;
+  }
+  for (int i = 0; i < n % 11; i++)
+    out((unsigned char)nops[n % 11][i]);
+  for (int64_t k = 0; k < n / 11; k++)
+    for (int i = 0; i < 11; i++)
+      out((unsigned char)nops[11][i]);
+}
+
+// Pads to a multiple of `n` bytes with `fill`, or by default with NOPs
+// in code and zeros elsewhere, unless that takes more than `max` bytes
+// (if max isn't 0).
+static void pad_to(int64_t n, int fill, int64_t max) {
+  if (n <= 0 || (n & (n - 1)) || n > (1 << 30))
     fail("bad alignment");
   cur->align = MAX(cur->align, n);
-  out_zeros((n - cur->bytes.len % n) % n);
+  int64_t pad = (n - cur->bytes.len % n) % n;
+  if (!pad || (max && pad > max))
+    return;
+  // A jump before it may still change size (see layout()), and move it.
+  if (cur->njumps)
+    fail("alignment after a jump");
+  if (fill < 0 && (cur->flags & SHF_EXECINSTR))
+    out_nops(pad);
+  else
+    out_fill(pad, fill < 0 ? 0 : fill);
+}
+
+static void align_to_n(int n) {
+  pad_to(n, -1, 0);
 }
 
 // .section name[,"flags"[,@type]]
@@ -1926,6 +2059,7 @@ static void section_directive(void) {
   // As with GNU as, the name alone makes .init_array.N an init array.
   int flags = 0;
   int type = SHT_PROGBITS;
+  int entsize = 0;
   if (!strncmp(name, ".init_array", 11))
     type = SHT_INIT_ARRAY;
   else if (!strncmp(name, ".fini_array", 11))
@@ -1942,6 +2076,10 @@ static void section_directive(void) {
         flags |= SHF_EXECINSTR;
       else if (*f == 'T')
         flags |= SHF_TLS;
+      else if (*f == 'M')
+        flags |= SHF_MERGE;
+      else if (*f == 'S')
+        flags |= SHF_STRINGS;
       else
         fail("unsupported section flag '%c'", *f);
     }
@@ -1957,8 +2095,18 @@ static void section_directive(void) {
         type = SHT_FINI_ARRAY;
       else if (strncmp(p, "@progbits", 9))
         fail("unsupported section type");
+      // A merged section's pieces are this many bytes: "aMS",@progbits,1
+      if (flags & SHF_MERGE) {
+        while (*p && *p != ',')
+          p++;
+        if (!next_arg())
+          fail("a merged section needs an entry size");
+        entsize = read_int();
+      }
       while (*p)
         p++;
+    } else if (flags & SHF_MERGE) {
+      fail("a merged section needs an entry size");
     }
   } else {
     // Without flags, a well-known name gets the ones GNU as gives it.
@@ -1979,6 +2127,8 @@ static void section_directive(void) {
 
   Section *sec = find_section(name);
   cur = sec ? sec : new_section(name, type, flags);
+  if (!sec)
+    cur->entsize = entsize;
 }
 
 static void directive(char *name, int len) {
@@ -1987,11 +2137,11 @@ static void directive(char *name, int len) {
 
   if (IS(".ascii") || IS(".asciz") || IS(".string")) {
     string_directive(!IS(".ascii"));
-  } else if (IS(".byte") || IS(".quad") || IS(".long") || IS(".value") ||
-             IS(".short")) {
+  } else if (IS(".byte") || IS(".quad") || IS(".long") || IS(".int") ||
+             IS(".value") || IS(".short") || IS(".word")) {
     // A list of values: numbers, symbols (in a .quad) or differences of
     // labels, as in `.long end - start`
-    int size = IS(".byte") ? 1 : IS(".quad") ? 8 : IS(".long") ? 4 : 2;
+    int size = IS(".byte") ? 1 : IS(".quad") ? 8 : IS(".long") || IS(".int") ? 4 : 2;
     for (;;) {
       Operand op = {0};
       skip_space();
@@ -2017,6 +2167,42 @@ static void directive(char *name, int len) {
         break;
       p++;
     }
+  } else if (IS(".float") || IS(".single") || IS(".double")) {
+    // Floating-point numbers, each rounded once from its decimal
+    bool dbl = IS(".double");
+    do {
+      char *end;
+      double d = dbl ? strtod(p, &end) : 0;
+      float f = dbl ? 0 : strtof(p, &end);
+      if (end == p)
+        fail("expected a floating-point number");
+      p = end;
+      uint64_t bits = 0;
+      memcpy(&bits, dbl ? (void *)&d : (void *)&f, dbl ? 8 : 4);
+      out_n(dbl ? 8 : 4, bits);
+    } while (next_arg());
+  } else if (IS(".skip") || IS(".space")) {
+    // .skip N[, fill]: N bytes of fill, or of zeros
+    int64_t n = read_int();
+    out_fill(n, next_arg() ? read_int() : 0);
+  } else if (IS(".fill")) {
+    // .fill repeat[, size[, value]]: repeat copies of value, in size
+    // bytes each (1 by default), of which only the low 4 are value's
+    int64_t repeat = read_int();
+    int64_t size = 1, value = 0;
+    if (next_arg()) {
+      size = read_int();
+      if (next_arg())
+        value = read_int();
+    }
+    if (repeat < 0 || size < 0 || size > 8)
+      fail("bad .fill");
+    if (size > 4)
+      value = (uint32_t)value;
+    if (!value)
+      out_zeros(repeat * size);
+    for (int64_t i = 0; value && i < repeat; i++)
+      out_n(size, value);
   } else if (IS(".loc")) {
     int file = read_int();
     int line = read_int();
@@ -2052,12 +2238,43 @@ static void directive(char *name, int len) {
   } else if (IS(".internal")) {
     read_sym()->visibility = STV_INTERNAL;
   } else if (IS(".set") || IS(".equ")) {
-    // Only another name for a symbol: `.set alias, target`
+    // Another name for a symbol, `.set alias, target`, or a constant,
+    // `.set n, 4 * 8`, which may be set again (as in a .rept loop)
     Sym *sym = read_sym();
     expect_comma();
-    sym->alias_of = read_sym();
-  } else if (IS(".align") || IS(".balign")) {
-    align_to_n(read_int());
+    char *start = p;
+    if (is_symstart(*p)) {
+      Sym *target = read_sym();
+      skip_space();
+      if (!target->is_abs && !*p) {
+        sym->alias_of = target;
+        return;
+      }
+      p = start;
+    }
+    int64_t val = read_int();
+    if (sym->sec || sym->alias_of || sym->is_used)
+      fail("'%s' is used before it's set to a constant", sym->name);
+    sym->is_abs = true;
+    sym->value = val;
+  } else if (IS(".align") || IS(".balign") || IS(".p2align")) {
+    // .balign N[, fill[, max]] (.align is the same on x86-64) and
+    // .p2align log2(N)[, fill[, max]]
+    int64_t n = read_int();
+    if (IS(".p2align")) {
+      if (n < 0 || n > 30)
+        fail("bad alignment");
+      n = (int64_t)1 << n;
+    }
+    int fill = -1;
+    int64_t max = 0;
+    if (next_arg()) {
+      if (*p != ',')
+        fill = read_int() & 0xff;
+      if (next_arg())
+        max = read_int();
+    }
+    pad_to(n, fill, max);
   } else if (IS(".size")) {
     // .size sym, N or .size sym, .-start (from start to here, known
     // after layout)
@@ -2080,6 +2297,34 @@ static void directive(char *name, int len) {
     cur = find_section(".bss");
   } else if (IS(".section")) {
     section_directive();
+  } else if (IS(".pushsection")) {
+    if (nsection_stack == sizeof(section_stack) / sizeof(*section_stack))
+      fail(".pushsection nested too deep");
+    section_stack[nsection_stack++] = cur;
+    section_directive();
+  } else if (IS(".popsection")) {
+    if (!nsection_stack)
+      fail(".popsection without .pushsection");
+    cur = section_stack[--nsection_stack];
+  } else if (IS(".ident")) {
+    // A note of what made the file, in .comment, as GNU as puts it
+    char *s = read_string();
+    Section *sec = cur;
+    cur = find_section(".comment");
+    if (!cur) {
+      cur = new_section(".comment", SHT_PROGBITS, SHF_MERGE | SHF_STRINGS);
+      cur->entsize = 1;
+      out(0);
+    }
+    do {
+      out(*s);
+    } while (*s++);
+    cur = sec;
+  } else if (len > 5 && !strncmp(name, ".cfi_", 5)) {
+    // Call frame information, for unwinding through the code: mucc makes
+    // none for C (no .eh_frame), so none for assembly either.
+    while (*p)
+      p++;
   } else if (IS(".zero")) {
     out_zeros(read_int());
   } else if (IS(".incbin")) {
@@ -2152,8 +2397,246 @@ static void directive(char *name, int len) {
 
 //---------- Reading the input -----------------------------------------------
 
-// Assembles one statement: optional labels, then a directive or an
-// instruction.
+// A macro, `.macro name a, b=1, c:vararg` up to `.endm`: its parameters,
+// their defaults ("" for none), and its lines, in which `\a` is the
+// argument for a, `\@` counts expansions and `\()` is nothing.
+typedef struct {
+  StringArray params;
+  StringArray defaults;
+  bool is_vararg;     // the last parameter takes the rest of the arguments
+  StringArray body;
+} Macro;
+
+static HashMap macros;
+static int nexpansions; // for \@
+static int expand_depth;
+
+// The .rept or .macro block being read: its first line, its lines up to
+// the matching .endr or .endm, and how many blocks are open inside it
+static char *block_head;
+static StringArray block;
+static int block_depth;
+
+static void line(char *s);
+
+// The directive or instruction name `s` starts with, after spaces
+static int first_word(char *s, char **start) {
+  while (*s == ' ' || *s == '\t')
+    s++;
+  *start = s;
+  while (is_symchar(*s))
+    s++;
+  return s - *start;
+}
+
+static bool word_is(char *w, int len, char *name) {
+  return len == strlen(name) && !strncmp(w, name, len);
+}
+
+// Reads `name a, b=1, c:vararg` after .macro.
+static void read_macro(char *s) {
+  p = s;
+  skip_space();
+  char *start = p;
+  while (is_symchar(*p))
+    p++;
+  if (p == start)
+    fail("expected a macro name");
+  Macro *m = calloc(1, sizeof(Macro));
+  hashmap_put2(&macros, start, p - start, m);
+
+  for (;;) {
+    while (*p == ' ' || *p == '\t' || *p == ',')
+      p++;
+    if (!*p)
+      break;
+    if (m->is_vararg)
+      fail("a parameter after a vararg one");
+    start = p;
+    while (is_symchar(*p))
+      p++;
+    if (p == start)
+      fail("expected a macro parameter");
+    strarray_push(&m->params, strndup(start, p - start));
+    char *def = "";
+    if (*p == ':') {
+      p++;
+      if (!strncmp(p, "vararg", 6))
+        m->is_vararg = true;
+      else if (strncmp(p, "req", 3))
+        fail("unsupported macro parameter qualifier");
+      while (isalpha((unsigned char)*p))
+        p++;
+    }
+    if (*p == '=') {
+      start = ++p;
+      while (*p && *p != ',' && *p != ' ' && *p != '\t')
+        p++;
+      def = strndup(start, p - start);
+    }
+    strarray_push(&m->defaults, def);
+  }
+  m->body = block;
+}
+
+// Splits a macro call's arguments at commas outside quotes and
+// parentheses, or at spaces if there are no commas.
+static StringArray macro_args(char *s) {
+  StringArray args = {};
+  bool commas = false;
+  int depth = 0;
+  bool in_string = false;
+  for (char *q = s; *q; q++) {
+    if (*q == '"')
+      in_string = !in_string;
+    else if (!in_string && *q == '(')
+      depth++;
+    else if (!in_string && *q == ')')
+      depth--;
+    else if (!in_string && !depth && *q == ',')
+      commas = true;
+  }
+
+  for (;;) {
+    while (*s == ' ' || *s == '\t')
+      s++;
+    if (!*s && !commas)
+      break;
+    char *start = s;
+    depth = 0;
+    in_string = false;
+    for (; *s; s++) {
+      if (*s == '"')
+        in_string = !in_string;
+      if (in_string)
+        continue;
+      if (*s == '(')
+        depth++;
+      else if (*s == ')')
+        depth--;
+      else if (!depth && (commas ? *s == ',' : (*s == ' ' || *s == '\t')))
+        break;
+    }
+    char *end = s;
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
+      end--;
+    strarray_push(&args, strndup(start, end - start));
+    if (!*s)
+      break;
+    s++;
+  }
+  return args;
+}
+
+// Runs macro `m` with the arguments in `s`.
+static void expand_macro(Macro *m, char *s) {
+  StringArray args = macro_args(s);
+  int n = m->params.len;
+  char **vals = calloc(n + 1, sizeof(char *));
+
+  int next = 0;
+  for (int i = 0; i < args.len; i++) {
+    // `name=value` sets that parameter.
+    char *arg = args.data[i];
+    char *eq = arg;
+    while (is_symchar(*eq))
+      eq++;
+    int k = n;
+    if (*eq == '=')
+      for (k = 0; k < n; k++)
+        if (word_is(arg, eq - arg, m->params.data[k]))
+          break;
+    if (k < n) {
+      vals[k] = eq + 1;
+      next = k + 1;
+      continue;
+    }
+
+    if (next >= n)
+      fail("too many macro arguments");
+    // The last vararg parameter takes the rest, commas and all.
+    if (m->is_vararg && next == n - 1) {
+      char *rest = arg;
+      for (int j = i + 1; j < args.len; j++)
+        rest = format("%s,%s", rest, args.data[j]);
+      vals[next++] = rest;
+      break;
+    }
+    vals[next++] = arg;
+  }
+
+  if (++expand_depth > 1000)
+    fail("macros nested too deep");
+  int id = nexpansions++;
+
+  for (int i = 0; i < m->body.len; i++) {
+    char *buf;
+    size_t len;
+    FILE *out = open_memstream(&buf, &len);
+    for (char *q = m->body.data[i]; *q; q++) {
+      if (*q != '\\') {
+        fputc(*q, out);
+        continue;
+      }
+      if (q[1] == '@') {
+        fprintf(out, "%d", id);
+        q++;
+        continue;
+      }
+      if (q[1] == '(' && q[2] == ')') {
+        q += 2;
+        continue;
+      }
+      char *start = q + 1;
+      char *end = start;
+      while (is_symchar(*end) && *end != '.' && *end != '$')
+        end++;
+      int k = 0;
+      while (k < n && !word_is(start, end - start, m->params.data[k]))
+        k++;
+      if (end == start || k == n) {
+        fputc(*q, out);
+        continue;
+      }
+      fputs(vals[k] ? vals[k] : m->defaults.data[k], out);
+      q = end - 1;
+    }
+    fclose(out);
+    line(buf);
+  }
+  expand_depth--;
+}
+
+// Ends the .rept or .macro block being read, and runs a .rept.
+static void end_block(void) {
+  char *head = block_head;
+  StringArray body = block;
+  block_head = NULL;
+  block = (StringArray){};
+
+  char *word;
+  int len = first_word(head, &word);
+  if (word_is(word, len, ".macro")) {
+    stmt = head;
+    block = body;
+    read_macro(word + len);
+    block = (StringArray){};
+    return;
+  }
+
+  stmt = head;
+  p = word + len;
+  int64_t count = read_int();
+  skip_space();
+  if (*p)
+    fail("unexpected text after directive");
+  for (int64_t i = 0; i < count; i++)
+    for (int j = 0; j < body.len; j++)
+      line(strdup(body.data[j]));
+}
+
+// Assembles one statement: optional labels, then a directive, a macro
+// call or an instruction.
 static void statement(char *s) {
   stmt = s;
   p = s;
@@ -2188,12 +2671,41 @@ static void statement(char *s) {
       continue;
     }
 
-    if (*start == '.')
+    Macro *m = hashmap_get2(&macros, start, len);
+    if (m)
+      expand_macro(m, p);
+    else if (*start == '.')
       directive(start, len);
     else
       instruction(start, len);
     return;
   }
+}
+
+// A statement, or a line of a .rept or .macro block, kept until it ends
+static void line(char *s) {
+  char *word;
+  int len = first_word(s, &word);
+
+  if (block_head) {
+    if (word_is(word, len, ".rept") || word_is(word, len, ".macro")) {
+      block_depth++;
+    } else if (word_is(word, len, ".endr") || word_is(word, len, ".endm")) {
+      if (!block_depth--) {
+        end_block();
+        return;
+      }
+    }
+    strarray_push(&block, strdup(s));
+    return;
+  }
+
+  if (word_is(word, len, ".rept") || word_is(word, len, ".macro")) {
+    block_head = strdup(s);
+    block_depth = 0;
+    return;
+  }
+  statement(s);
 }
 
 // Splits the text into statements: one per line, or several separated
@@ -2227,12 +2739,16 @@ static void read_input(char *text) {
     if (*q == '\0' || *q == '\n' || (!in_string && *q == ';')) {
       bool at_end = *q == '\0';
       *q = '\0';
-      statement(s);
+      line(s);
       if (at_end)
         break;
       s = q + 1;
       in_string = false;
     }
+  }
+  if (block_head) {
+    stmt = block_head;
+    fail("no .endr or .endm");
   }
   stmt = NULL;
 }
@@ -2654,12 +3170,13 @@ static void write_elf(char *path) {
       if (sym->is_global != global)
         continue;
       // .L labels stay out, unless a relocation names them.
-      bool defined = sym->sec || sym->common_align;
+      bool defined = sym->sec || sym->common_align || sym->is_abs;
       if (!sym->keep && (!defined || (!global && is_dot_l(sym->name))))
         continue;
 
       int type = sym->is_tls ? STT_TLS : sym->type;
-      int shndx = sym->common_align ? SHN_COMMON : sym->sec ? sym->sec->index : SHN_UNDEF;
+      int shndx = sym->common_align ? SHN_COMMON : sym->sec ? sym->sec->index :
+                  sym->is_abs ? SHN_ABS : SHN_UNDEF;
       uint64_t value = sym->common_align ? sym->common_align : sym->value;
       sym->index = symtab.len / sizeof(Elf64_Sym);
       int bind = !global ? STB_LOCAL : sym->is_weak ? STB_WEAK : STB_GLOBAL;
@@ -2693,6 +3210,7 @@ static void write_elf(char *path) {
     s->sh_type = sec->type;
     s->sh_flags = sec->flags;
     s->sh_addralign = sec->align;
+    s->sh_entsize = sec->entsize;
     s->sh_size = sec->type == SHT_NOBITS ? sec->bytes.len : sec->size;
 
     while (f.len % sec->align)
@@ -2797,6 +3315,11 @@ static void reset(void) {
   symlist = NULL;
   nsyms = capsyms = 0;
   nlcomms = 0;
+  nsection_stack = 0;
+  macros = (HashMap){0};
+  nexpansions = expand_depth = 0;
+  block_head = NULL;
+  block = (StringArray){0};
   file_name = NULL;
   dwarf_files = (StringArray){0};
   locs = NULL;

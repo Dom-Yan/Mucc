@@ -7,6 +7,8 @@ inline int inline_fn(void) {
   return 3;
 }
 
+int extern_twice(int x) { return x * 2; }
+
 int main() {
   ASSERT(5, ext1);
   ASSERT(5, *ext2);
@@ -19,6 +21,9 @@ int main() {
 
   extern int ext_fn2(int x);
   ASSERT(8, ext_fn2(8));
+
+  // A declaration in a block hides a local of the same name.
+  ASSERT(8, ({ int extern_twice = 3; int r; { extern int extern_twice(int); r = extern_twice(4); } r + extern_twice - 3; }));
 
   printf("OK\n");
   return 0;

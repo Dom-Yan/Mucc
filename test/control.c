@@ -65,8 +65,6 @@ int main() {
   ASSERT(55, ({ int i=0; int j=0; while(i<=10) {j=i+j; i=i+1;} j; }));
 
   ASSERT(3, (1,2,3));
-  ASSERT(5, ({ int i=2, j=3; (i=5,j)=6; i; }));
-  ASSERT(6, ({ int i=2, j=3; (i=5,j)=6; j; }));
 
   ASSERT(55, ({ int j=0; for (int i=0; i<=10; i=i+1) j=j+i; j; }));
   ASSERT(3, ({ int i=3; int j=0; for (int i=0; i<=10; i=i+1) j=j+i; i; }));
@@ -162,6 +160,9 @@ int main() {
   ASSERT(0, ({ int g = 5; (g = 0, 1) || 0; g; }));
   ASSERT(4, ({ int g = 5; (g = 4, 0) && 1; g; }));
   ASSERT(4, ({ int k = 3; (k++, 2) ? 10 : 20; k; }));
+
+  // A member of a struct that a statement expression gives
+  ASSERT(7, ({ struct { int a[20]; int x; } t; t.x = 7; t; }).x);
 
   printf("OK\n");
   return 0;

@@ -194,6 +194,9 @@ int main() {
   ASSERT(3, ({ int x=3; atomic_exchange(&x, 5); }));
   ASSERT(5, ({ int x=3; atomic_exchange(&x, 5); x; }));
 
+  ASSERT(0, ({ atomic_flag f = ATOMIC_FLAG_INIT; atomic_flag_test_and_set(&f); }));
+  ASSERT(3, ({ atomic_int i = ATOMIC_VAR_INIT(3); i; }));
+
   printf("OK\n");
   return 0;
 }

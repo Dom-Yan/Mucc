@@ -12,6 +12,9 @@
 Type *ty_void = &(Type){TY_VOID, 1, 1};
 Type *ty_bool = &(Type){TY_BOOL, 1, 1};
 
+// Plain char is signed char's twin, but is_distinct tells them apart.
+// With -funsigned-char, it's unsigned and is_distinct instead tells it
+// from unsigned char (see main.c).
 Type *ty_char = &(Type){TY_CHAR, 1, 1};
 Type *ty_schar = &(Type){TY_CHAR, 1, 1, .is_distinct = true};
 Type *ty_short = &(Type){TY_SHORT, 2, 2};
@@ -781,7 +784,10 @@ static char *unqual_type_name(Type *ty) {
   switch (ty->kind) {
   case TY_VOID: return "void";
   case TY_BOOL: return "_Bool";
-  case TY_CHAR: return ty->is_distinct ? "signed char" : format("%schar", u);
+  case TY_CHAR:
+    if (ty->is_distinct)
+      return ty->is_unsigned ? "char" : "signed char";
+    return format("%schar", u);
   case TY_SHORT: return format("%sshort", u);
   case TY_INT: return format("%sint", u);
   case TY_LONG: return format("%slong%s", u, ty->is_distinct ? " long" : "");

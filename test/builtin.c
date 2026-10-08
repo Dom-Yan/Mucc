@@ -140,6 +140,10 @@ int main() {
     ASSERT(1, reached);
   }
 
+  // A hint's other arguments are still evaluated.
+  ASSERT(1, ({ int i = 0; long x = 5; (void)__builtin_expect(x, i++); i; }));
+  ASSERT(5, ({ int i = 0; long x = 5; __builtin_expect(x, i++); }));
+
   printf("OK\n");
   return 0;
 }

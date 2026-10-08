@@ -587,6 +587,23 @@ int main() {
   ASSERT(0, strcmp(BOTH((EMPTY_FN() 5)), "(EMPTY_FN() 5)"));
   ASSERT(0, strcmp(BOTH2(1, (BOTH2(1, 2))), "(BOTH2(1, 2))"));
 
+  // gcc's predefined macros for <stdint.h>'s types, and types' widths
+  ASSERT(8, sizeof(__INT64_TYPE__));
+  ASSERT(1, _Generic((__UINT32_TYPE__)0, unsigned int: 1, default: 0));
+  ASSERT(1, _Generic((__INT_LEAST16_TYPE__)0, short: 1, default: 0));
+  ASSERT(1, _Generic((__UINT_LEAST8_TYPE__)0, unsigned char: 1, default: 0));
+  ASSERT(127, __INT8_MAX__);
+  ASSERT(1, __UINT64_MAX__ == 0xffffffffffffffffUL);
+  ASSERT(1, _Generic(__INT64_C(1), long: 1, default: 0));
+  ASSERT(1, _Generic(__UINT32_C(1), unsigned: 1, default: 0));
+  ASSERT(1, _Generic(__INT8_C(1), int: 1, default: 0));
+  ASSERT(32, __INT_WIDTH__);
+  ASSERT(64, __LONG_WIDTH__);
+  ASSERT(16, __INT_LEAST16_WIDTH__);
+  ASSERT(16, __BIGGEST_ALIGNMENT__);
+  ASSERT(-1021, __DBL_MIN_EXP__);
+  ASSERT(1, __FLT_MIN__ == 0x1p-126f);
+
   printf("OK\n");
   return 0;
 }

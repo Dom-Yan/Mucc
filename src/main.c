@@ -24,6 +24,7 @@ bool opt_g; // -g: debug info for variables and types (see cgen.c)
 bool opt_fcommon = true;
 char *opt_fvisibility; // -fvisibility=hidden and so on: definitions' default
 bool opt_fpic;
+bool opt_funsigned_char; // -funsigned-char: plain char is unsigned
 bool opt_asm_cpp; // preprocessing assembly (.S), not C
 int opt_std = 2017; // -std=: 1989, 1999, 2011, 2017 or 2023 (C17 by default, as gcc 14)
 
@@ -301,7 +302,8 @@ static void define(char *str) {
     define_macro(str, "1");
 }
 
-// Adds an input file (or -l, -Wl,), with the -x given before it.
+// Adds an input file (or -l, -Wl, or -Xlinker's argument, as
+// "-Xlinker=ARG"), with the -x given before it.
 static void add_input(char *path) {
   strarray_push(&input_paths, path);
   input_types = realloc(input_types, sizeof(FileType) * input_paths.len);
@@ -448,13 +450,14 @@ static char *ignored_options[] = {
   "-fno-math-errno", "-fexceptions", "-fno-exceptions",
   "-funwind-tables", "-fno-unwind-tables", "-fasynchronous-unwind-tables",
   "-fno-asynchronous-unwind-tables", "-fdiagnostics-*", "-fmessage-length=*",
-  "-fno-ident", "-fno-semantic-interposition", "-fsigned-char",
+  "-fno-ident", "-fno-semantic-interposition", "-fpermissive",
   "-fno-lto", "-flto*", "-fno-pie", "-fno-PIE", "-no-pie",
   // mucc makes non-PIE executables, which -fPIE objects would only be
   // linked into anyway.
   "-fpie", "-fPIE", "-pie",
-  // Optimizations, which mucc doesn't do
-  "-funroll-*", "-fno-unroll-*", "-finline*", "-fno-inline*", "-ftree-*",
+  // Optimizations, which mucc doesn't do. (-ffast-math only allows
+  // them: code that's right without it is right with it.)
+  "-ffast-math", "-fno-fast-math", "-funroll-*", "-fno-unroll-*", "-finline*", "-fno-inline*", "-ftree-*",
   "-fno-tree-*", "-fexcess-precision=*", "-mfpmath=sse",
   // Paths in debug info and __FILE__, kept as they are
   "-ffile-prefix-map=*", "-fdebug-prefix-map=*", "-fmacro-prefix-map=*",
@@ -468,6 +471,9 @@ static char *ignored_options[] = {
   "-save-temps*", "-fmax-errors=*", "--param=*",
   // Spec files tune gcc's own driver (distributions' hardening flags).
   "-specs=*",
+  // mucc always takes Microsoft's unnamed struct members (`struct in;`
+  // in a struct), which is all -fms-extensions adds to C.
+  "-fms-extensions",
   // The small code model is the one mucc's code always has.
   "-mcmodel=small",
   // Extensions past SSE4.2 (see isa_option())
@@ -718,8 +724,12 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    // -Xlinker ARG is -Wl,ARG, in its place among the inputs, but ARG
+    // isn't split at commas.
     if (!strcmp(argv[i], "-Xlinker")) {
-      strarray_push(&ld_extra_args, argv[++i]);
+      if (!argv[i + 1])
+        error("missing argument to '-Xlinker'");
+      add_input(format("-Xlinker=%s", argv[++i]));
       continue;
     }
 
@@ -818,6 +828,16 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-fpic") || !strcmp(argv[i], "-fPIC")) {
       opt_fpic = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-fno-pic") || !strcmp(argv[i], "-fno-PIC")) {
+      opt_fpic = false;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-funsigned-char") || !strcmp(argv[i], "-fsigned-char")) {
+      opt_funsigned_char = argv[i][2] == 'u';
       continue;
     }
 
@@ -991,6 +1011,13 @@ static void parse_args(int argc, char **argv) {
       error("unknown argument: %s", argv[i]);
 
     add_input(argv[i]);
+  }
+
+  // Plain char is still a type of its own, not unsigned char (see
+  // type_name()), but it's unsigned in values and conversions.
+  if (opt_funsigned_char) {
+    ty_char->is_unsigned = ty_char->is_distinct = true;
+    define("__CHAR_UNSIGNED__");
   }
 
   for (int i = 0; i < isystem.len; i++) {
@@ -1898,6 +1925,11 @@ int main(int argc, char **argv) {
 
     if (!strncmp(input, "-l", 2)) {
       strarray_push(&ld_args, input);
+      continue;
+    }
+
+    if (!strncmp(input, "-Xlinker=", 9)) {
+      strarray_push(&ld_args, input + 9);
       continue;
     }
 

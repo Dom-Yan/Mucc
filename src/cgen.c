@@ -334,6 +334,7 @@ static void gen_addr(Node *node) {
     break;
   case ND_ASSIGN:
   case ND_COND:
+  case ND_STMT_EXPR: // `({ struct S t = ...; t; }).x`
     if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION) {
       gen_expr(node);
       return;
@@ -4172,8 +4173,7 @@ static void emit_text(Obj *prog) {
 // writes it into the .debug_line named here. Numbers in LEB128 are
 // encoded here and written as .byte lists. A block's variables are in a
 // lexical block, which gdb shows them in only (see LexBlock). Typedef
-// names and qualifiers aren't recorded: gdb shows a size_t as unsigned
-// long.
+// names aren't recorded: gdb shows a size_t as unsigned long.
 
 // Abbreviation codes, for the table in emit_debug_abbrev()
 enum {
@@ -4182,7 +4182,8 @@ enum {
   AB_UNION, AB_UNION_ANON, AB_UNION_DECL, AB_MEMBER, AB_MEMBER_ANON,
   AB_BITFIELD, AB_ARRAY, AB_SUBRANGE, AB_SUBRANGE_NOCOUNT, AB_ENUM,
   AB_ENUM_ANON, AB_ENUMERATOR, AB_SUBR, AB_SUBR_VOID, AB_SUBR_PARAM,
-  AB_VARARGS, AB_BLOCK, AB_SUBRANGE_EXPR, AB_VECTOR,
+  AB_VARARGS, AB_BLOCK, AB_SUBRANGE_EXPR, AB_VECTOR, AB_CONST, AB_CONST_VOID,
+  AB_VOLATILE, AB_VOLATILE_VOID,
 };
 
 // The DWARF numbers of regs64[]'s registers: %rbx, %r12 to %r15
@@ -4233,11 +4234,23 @@ static Type **type_queue;
 static char **type_queue_labels;
 static int type_queue_len, type_queue_cap;
 
+// Does `ty` get a DIE for its const or volatile? An array's elements and
+// a function's return type have their own.
+static bool is_qualified(Type *ty) {
+  return (ty->is_const || ty->is_volatile) && ty->kind != TY_ARRAY &&
+         ty->kind != TY_VLA && ty->kind != TY_FUNC;
+}
+
 // A name for `ty` that types gcc would describe with one DIE share.
 static char *type_key(Type *ty) {
+  if (is_qualified(ty))
+    return format("%s%s%s", ty->is_const ? "const:" : "", ty->is_volatile ? "volatile:" : "",
+                  type_key(unqual(ty)));
+
   switch (ty->kind) {
   case TY_PTR:
-    return format("*%s", ty->base->kind == TY_VOID ? "void" : type_key(ty->base));
+    return format("*%s", ty->base->kind == TY_VOID && !is_qualified(ty->base) ? "void" :
+                         type_key(ty->base));
   case TY_VLA: // its length is read from its variables
     return format("vla%p", ty);
   case TY_ARRAY:
@@ -4262,9 +4275,9 @@ static char *type_key(Type *ty) {
   }
 }
 
-// The label of `ty`'s DIE, or NULL for void
+// The label of `ty`'s DIE, or NULL for void (but not const void)
 static char *type_die(Type *ty) {
-  if (ty->kind == TY_VOID)
+  if (ty->kind == TY_VOID && !is_qualified(ty))
     return NULL;
   char *key = type_key(ty);
   char *label = hashmap_get(&type_labels, key);
@@ -4292,7 +4305,9 @@ static char *base_type_name(Type *ty, int *encoding) {
   case TY_BOOL: *encoding = ATE_BOOLEAN; return "_Bool";
   case TY_CHAR:
     *encoding = u ? ATE_UNSIGNED_CHAR : ATE_SIGNED_CHAR;
-    return u ? "unsigned char" : ty->is_distinct ? "signed char" : "char";
+    if (ty->is_distinct) // signed char, or -funsigned-char's char
+      return u ? "char" : "signed char";
+    return u ? "unsigned char" : "char";
   case TY_SHORT: return u ? "unsigned short" : "short";
   case TY_INT: return u ? "unsigned int" : "int";
   case TY_LONG:
@@ -4325,6 +4340,23 @@ static int byte_count(char *list) {
 
 static void emit_type_die(Type *ty, char *label) {
   println("%s:", label);
+
+  // volatile outside const, outside the type, as gcc has them
+  if (is_qualified(ty)) {
+    Type *inner = copy_type(ty);
+    if (ty->is_volatile)
+      inner->is_volatile = false;
+    else
+      inner->is_const = false;
+    char *ref = type_die(inner);
+    if (ty->is_volatile)
+      dw_udata(ref ? AB_VOLATILE : AB_VOLATILE_VOID);
+    else
+      dw_udata(ref ? AB_CONST : AB_CONST_VOID);
+    if (ref)
+      dw_ref(ref);
+    return;
+  }
 
   // A complex number is a base type, named as gcc names it
   if (is_complex(ty)) {
@@ -4476,7 +4508,7 @@ static void emit_debug_abbrev(void) {
     STRUCTURE_TYPE = 0x13, UNION_TYPE = 0x17, MEMBER = 0x0d,
     ARRAY_TYPE = 0x01, SUBRANGE_TYPE = 0x21, ENUMERATION_TYPE = 0x04,
     ENUMERATOR = 0x28, SUBROUTINE_TYPE = 0x15, UNSPECIFIED_PARAMETERS = 0x18,
-    LEXICAL_BLOCK = 0x0b,
+    LEXICAL_BLOCK = 0x0b, CONST_TYPE = 0x26, VOLATILE_TYPE = 0x35,
     // Attributes
     NAME = 0x03, BYTE_SIZE = 0x0b, BIT_SIZE = 0x0d, STMT_LIST = 0x10,
     LOW_PC = 0x11, HIGH_PC = 0x12, LANGUAGE = 0x13, COMP_DIR = 0x1b,
@@ -4534,6 +4566,10 @@ static void emit_debug_abbrev(void) {
     AB_SUBRANGE_EXPR, SUBRANGE_TYPE, 0, COUNT, EXPRLOC, 0, 0,
     // DW_AT_GNU_vector (0x2107, two bytes in LEB128): an array that is a vector
     AB_VECTOR, ARRAY_TYPE, 1, 0x87, 0x42, FLAG_PRESENT, TYPE, REF4, 0, 0,
+    AB_CONST, CONST_TYPE, 0, TYPE, REF4, 0, 0,
+    AB_CONST_VOID, CONST_TYPE, 0, 0, 0,
+    AB_VOLATILE, VOLATILE_TYPE, 0, TYPE, REF4, 0, 0,
+    AB_VOLATILE_VOID, VOLATILE_TYPE, 0, 0, 0,
   };
 
   println("  .section .debug_abbrev,\"\",@progbits");

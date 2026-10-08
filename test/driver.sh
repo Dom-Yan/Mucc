@@ -410,6 +410,11 @@ if [ $musl ]; then
       -Wl,--hash-style=gnu 2> $tmp/wl.err && $tmp/wl && [ ! -s $tmp/wl.err ]
     check 'harmless -Wl, flags with the built-in linker'
 
+    # -Xlinker ARG is -Wl,ARG.
+    $mucc -o $tmp/wl $tmp/wl.c -Xlinker -rpath -Xlinker /nowhere \
+      -Xlinker --gc-sections 2> $tmp/wl.err && $tmp/wl && [ ! -s $tmp/wl.err ]
+    check '-Xlinker with the built-in linker'
+
     # ... but not one that changes what links, like -z muldefs
     $mucc -o $tmp/wl $tmp/wl.c -Wl,-z,muldefs 2>&1 |
         grep -q 'using the system linker for -z'
@@ -686,6 +691,28 @@ mkdir -p $tmp/obj
 echo 'int x;' > $tmp/md.c
 $mucc -MD -c -o $tmp/obj/md.o $tmp/md.c && grep -q "^$tmp/obj/md.o:" $tmp/obj/md.d
 check '-MD target with -o'
+
+# -ffast-math only allows optimizations; mucc always takes what
+# -fms-extensions adds; -fno-pic undoes -fpic.
+$mucc -ffast-math -fpermissive -fms-extensions -fpic -fno-pic -fno-PIC \
+    -o $tmp/v $tmp/v.c && $tmp/v
+check '-ffast-math -fpermissive -fms-extensions -fno-pic'
+
+# -funsigned-char makes plain char unsigned, still a type of its own, and
+# -fsigned-char after it undoes that.
+cat > $tmp/uchar.c <<'EOF'
+#if defined __CHAR_UNSIGNED__ != (WANT > 0)
+#error
+#endif
+int main(void) {
+  char c = '\xff';
+  return !(c == WANT && '\xff' == WANT &&
+           _Generic(c, char: 1, unsigned char: 2, signed char: 3) == 1);
+}
+EOF
+$mucc -funsigned-char -DWANT=255 -o $tmp/uchar $tmp/uchar.c && $tmp/uchar &&
+  $mucc -funsigned-char -fsigned-char -DWANT=-1 -o $tmp/uchar $tmp/uchar.c && $tmp/uchar
+check '-funsigned-char'
 
 # -march= and -mtune= are accepted and ignored
 echo 'int main() { return 0; }' > $tmp/march.c

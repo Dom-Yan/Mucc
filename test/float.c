@@ -172,6 +172,10 @@ int main() {
   ASSERT(5, 0.0 ? 3 : 5);
   ASSERT(3, 1.2 ? 3 : 5);
 
+  // A double constant is rounded from the decimal once, not through a
+  // long double, which would be 1 ULP off for this one.
+  ASSERT(1, 9.3365409393994098e30 == 0x1.d75ff69d0f56bp+102);
+
   printf("OK\n");
   return 0;
 }

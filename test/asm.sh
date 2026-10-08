@@ -34,6 +34,16 @@ check() {
 
 check test/asm-forms.s asm-forms.s
 echo "testing asm asm-forms.s ... passed"
+check test/asm-directives.s asm-directives.s
+echo "testing asm asm-directives.s ... passed"
+
+# Call frame information is dropped, as mucc makes none for C: it needs
+# no system assembler.
+printf 'f:\n .cfi_startproc\n push %%rbp\n .cfi_def_cfa_offset 16\n pop %%rbp\n ret\n .cfi_endproc\n' > $tmp/cfi.s
+if ! $mucc -c -o $tmp/cfi.o $tmp/cfi.s 2> $tmp/err || [ -s $tmp/err ]; then
+    echo "testing asm .cfi_* ... failed"; cat $tmp/err; exit 1
+fi
+echo "testing asm .cfi_* ... passed"
 
 # musl's x86-64 assembly, which the bundled C library needs (its math
 # overrides are left out; mucc builds musl's C versions instead).

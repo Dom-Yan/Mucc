@@ -21,13 +21,15 @@ struct Bits { unsigned a : 3, b : 5; int c : 4; };
 int counter = 42;
 static double ratio = 2.5;
 const char *greeting = "hello";
+const int limit = 9;
+const volatile int *cv;
 int table[3] = {10, 20, 30};
 struct Node head = {1, 0, "head"};
 
 static int add(int x, int y) {
   int sum = x + y;
   long big = (long)sum * 1000;
-  return (int)(big / 1000); // line 14
+  return (int)(big / 1000); // line 16
 }
 
 int walk(struct Node *n, enum Color c) {
@@ -40,7 +42,7 @@ int walk(struct Node *n, enum Color c) {
   _Alignas(32) int aligned = 7;
   for (; n; n = n->next)
     count += n->val;
-  return count + c + fp(1, 2) + bits.a + (int)arr[1] + u.i * 0 + aligned; // line 27
+  return count + c + fp(1, 2) + bits.a + (int)arr[1] + u.i * 0 + aligned; // line 29
 }
 
 int main(void) {
@@ -52,10 +54,11 @@ EOF
 
 # gdb's answers, one per command, then what they must be.
 cmds=(
-  'break 27' 'break 14' run
+  'break 29' 'break 16' run
   'print n' 'print c' 'print count' 'print u' 'print bits' 'print arr'
   'print fp' 'print aligned' 'ptype struct Node' 'whatis fp'
   'print counter' 'print ratio' 'print greeting' 'print table'
+  'ptype greeting' 'ptype limit' 'ptype cv'
   'print head.name' 'print head.next->name'
   continue
   'print x' 'print y' 'print sum' 'print big' 'ptype big' 'bt'
@@ -68,11 +71,12 @@ want=(
   'type = struct Node {' '    int val;' '    struct Node *next;'
   '    char name[8];' '}' 'type = int (*)(int, int)'
   '$9 = 42' '$10 = 2.5' '$11 = ADDR "hello"' '$12 = {10, 20, 30}'
+  'type = const char *' 'type = const int' 'type = const volatile int *'
   '$13 = "head\000\000\000"' '$14 = "second\000"'
   '$15 = 1' '$16 = 2' '$17 = 3' '$18 = 3000' 'type = long'
-  '#0  add (x=1, y=2) at t.c:14'
-  '#1  ADDR in walk (n=0x0, c=BLUE) at t.c:27'
-  '#2  ADDR in main () at t.c:33'
+  '#0  add (x=1, y=2) at t.c:16'
+  '#1  ADDR in walk (n=0x0, c=BLUE) at t.c:29'
+  '#2  ADDR in main () at t.c:35'
 )
 
 check() { # check NAME OPTIONS...

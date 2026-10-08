@@ -1770,6 +1770,13 @@ void define_macro(char *name, char *buf) {
   add_macro(name, true, tok);
 }
 
+// A predefined function-like macro, from `def` as a #define has it:
+// "__INT64_C(c) c ## L".
+static void define_fn_macro(char *def) {
+  Token *tok = tokenize(new_file("<built-in>", 1, format("%s\n", def)));
+  read_macro_definition(&tok, tok);
+}
+
 // gcc's other spellings of keywords, macros here. They are keywords in
 // gcc, which #undef leaves alone: gnulib's libc-config.h undefines
 // __inline, then musl's headers use it.
@@ -1993,7 +2000,7 @@ void init_macros(void) {
   define_macro("__FLT_MANT_DIG__", "24");
   define_macro("__FLT_DIG__", "6");
   define_macro("__FLT_MAX__", "3.40282346638528859811704183484516925e+38F");
-  define_macro("__FLT_MIN__", "1.17549435082228750796873653862224568e-38F");
+  define_macro("__FLT_MIN__", "1.17549435082228750796873653722224568e-38F");
   define_macro("__FLT_EPSILON__", "1.19209289550781250000000000000000000e-7F");
   define_macro("__DBL_MANT_DIG__", "53");
   define_macro("__DBL_DIG__", "15");
@@ -2014,6 +2021,95 @@ void init_macros(void) {
   define_macro("__GCC_ATOMIC_LLONG_LOCK_FREE", "2");
   define_macro("__GCC_ATOMIC_POINTER_LOCK_FREE", "2");
   define_macro("__GCC_ATOMIC_TEST_AND_SET_TRUEVAL", "1");
+  define_macro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1", "1");
+  define_macro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2", "1");
+  define_macro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4", "1");
+  define_macro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8", "1");
+  define_macro("__BIGGEST_ALIGNMENT__", "16");
+  define_macro("__SIZEOF_FLOAT80__", "16");
+  define_macro("__SIG_ATOMIC_TYPE__", "int");
+  define_macro("__SIG_ATOMIC_MAX__", "0x7fffffff");
+  define_macro("__SIG_ATOMIC_MIN__", "(-__SIG_ATOMIC_MAX__ - 1)");
+
+  // The bits in each integer type
+  define_macro("__SCHAR_WIDTH__", "8");
+  define_macro("__SHRT_WIDTH__", "16");
+  define_macro("__INT_WIDTH__", "32");
+  define_macro("__LONG_WIDTH__", "64");
+  define_macro("__LONG_LONG_WIDTH__", "64");
+  define_macro("__PTRDIFF_WIDTH__", "64");
+  define_macro("__SIG_ATOMIC_WIDTH__", "32");
+  define_macro("__SIZE_WIDTH__", "64");
+  define_macro("__WCHAR_WIDTH__", "32");
+  define_macro("__WINT_WIDTH__", "32");
+  define_macro("__INTMAX_WIDTH__", "64");
+  define_macro("__INTPTR_WIDTH__", "64");
+
+  // <stdint.h>'s exact and least-width types, as gcc names them:
+  // __INT8_TYPE__, __UINT16_MAX__, __INT_LEAST32_WIDTH__, __INT64_C(c).
+  // (Not the fast ones, which C libraries define differently.)
+  static char *int_types[][4] = {
+    {"INT8", "signed char", "0x7f", ""},
+    {"INT16", "short int", "0x7fff", ""},
+    {"INT32", "int", "0x7fffffff", ""},
+    {"INT64", "long int", "0x7fffffffffffffffL", "L"},
+    {"UINT8", "unsigned char", "0xff", ""},
+    {"UINT16", "short unsigned int", "0xffff", ""},
+    {"UINT32", "unsigned int", "0xffffffffU", "U"},
+    {"UINT64", "long unsigned int", "0xffffffffffffffffUL", "UL"},
+  };
+  for (int i = 0; i < sizeof(int_types) / sizeof(*int_types); i++) {
+    char *n = int_types[i][0];
+    char *least = format("%.*s_LEAST%s", n[0] == 'U' ? 4 : 3, n, n + (n[0] == 'U' ? 4 : 3));
+    define_macro(format("__%s_TYPE__", n), int_types[i][1]);
+    define_macro(format("__%s_MAX__", n), int_types[i][2]);
+    define_macro(format("__%s_TYPE__", least), int_types[i][1]);
+    define_macro(format("__%s_MAX__", least), int_types[i][2]);
+    if (n[0] == 'I')
+      define_macro(format("__%s_WIDTH__", least), n + 3);
+    define_fn_macro(format("__%s_C(c) c%s%s", n, *int_types[i][3] ? " ## " : "",
+                           int_types[i][3]));
+  }
+  define_fn_macro("__INTMAX_C(c) c ## L");
+  define_fn_macro("__UINTMAX_C(c) c ## UL");
+
+  // The rest of the floating-point formats, as <float.h> has them
+  define_macro("__FLT_MIN_EXP__", "(-125)");
+  define_macro("__FLT_MIN_10_EXP__", "(-37)");
+  define_macro("__FLT_MAX_EXP__", "128");
+  define_macro("__FLT_MAX_10_EXP__", "38");
+  define_macro("__FLT_DECIMAL_DIG__", "9");
+  define_macro("__FLT_DENORM_MIN__", "1.40129846432481707092372958328991613e-45F");
+  define_macro("__FLT_NORM_MAX__", "3.40282346638528859811704183484516925e+38F");
+  define_macro("__FLT_HAS_DENORM__", "1");
+  define_macro("__FLT_HAS_INFINITY__", "1");
+  define_macro("__FLT_HAS_QUIET_NAN__", "1");
+  define_macro("__FLT_IS_IEC_60559__", "1");
+  define_macro("__DBL_MIN_EXP__", "(-1021)");
+  define_macro("__DBL_MIN_10_EXP__", "(-307)");
+  define_macro("__DBL_MAX_EXP__", "1024");
+  define_macro("__DBL_MAX_10_EXP__", "308");
+  define_macro("__DBL_DECIMAL_DIG__", "17");
+  define_macro("__DBL_DENORM_MIN__", "((double)4.94065645841246544176568792868221372e-324L)");
+  define_macro("__DBL_NORM_MAX__", "((double)1.79769313486231570814527423731704357e+308L)");
+  define_macro("__DBL_HAS_DENORM__", "1");
+  define_macro("__DBL_HAS_INFINITY__", "1");
+  define_macro("__DBL_HAS_QUIET_NAN__", "1");
+  define_macro("__DBL_IS_IEC_60559__", "1");
+  define_macro("__LDBL_MIN_EXP__", "(-16381)");
+  define_macro("__LDBL_MIN_10_EXP__", "(-4931)");
+  define_macro("__LDBL_MAX_EXP__", "16384");
+  define_macro("__LDBL_MAX_10_EXP__", "4932");
+  define_macro("__LDBL_DECIMAL_DIG__", "21");
+  define_macro("__LDBL_MAX__", "1.18973149535723176502126385303097021e+4932L");
+  define_macro("__LDBL_NORM_MAX__", "1.18973149535723176502126385303097021e+4932L");
+  define_macro("__LDBL_MIN__", "3.36210314311209350626267781732175260e-4932L");
+  define_macro("__LDBL_EPSILON__", "1.08420217248550443400745280086994171e-19L");
+  define_macro("__LDBL_DENORM_MIN__", "3.64519953188247460252840593361941982e-4951L");
+  define_macro("__LDBL_HAS_DENORM__", "1");
+  define_macro("__LDBL_HAS_INFINITY__", "1");
+  define_macro("__LDBL_HAS_QUIET_NAN__", "1");
+  define_macro("__LDBL_IS_IEC_60559__", "1");
   define_macro("linux", "1");
   define_macro("unix", "1");
 

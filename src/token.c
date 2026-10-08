@@ -659,7 +659,7 @@ static Token *read_char_literal(char *start, char *quote, Type *ty) {
   if (len == 0)
     error_at(start, "empty character constant");
   if (is_plain)
-    val = (len == 1) ? (int8_t)val : (int32_t)val;
+    val = (len == 1) ? (opt_funsigned_char ? (uint8_t)val : (int8_t)val) : (int32_t)val;
 
   Token *tok = new_token(TK_NUM, start, p + 1);
   tok->val = val;
@@ -810,6 +810,14 @@ static void convert_pp_number(Token *tok) {
 
   if (s + len != end)
     error_tok(tok, "invalid numeric constant");
+
+  // A float or double is rounded from the decimal once: through a long
+  // double first, 9.3365409393994098e30 would be 1 ULP off.
+  if (ty == ty_double)
+    val = strtod(s, NULL);
+  else if (ty == ty_float)
+    val = strtof(s, NULL);
+
   if (imag)
     ty = complex_type(ty);
 

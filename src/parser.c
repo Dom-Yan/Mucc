@@ -169,6 +169,10 @@ static Scope *scope = &(Scope){};
 // Points to the function object the parser is currently parsing.
 static Obj *current_fn;
 
+// Whether a static variable's initializer is being parsed, where a
+// compound literal is static too (see postfix()).
+static bool in_static_init;
+
 // Lists of all goto statements and labels in the current function.
 static Node *gotos;
 static Node *labels;
@@ -266,7 +270,7 @@ static Node *postfix(Token **rest, Token *tok);
 static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
-static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr);
+static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr, Node **sizes);
 static Type *mode_type(Type *ty, Token *tok);
 static Type *vector_type(Type *ty, Attrs *a);
 static Node *vector_elem(Node *vec, Node *idx, Token *tok);
@@ -862,7 +866,15 @@ static void apply_attribute(Token *tok, Token *args, Attrs *a, bool allow_decl) 
   if (in_list(name, unsupported_attributes,
               sizeof(unsupported_attributes) / sizeof(*unsupported_attributes)))
     error_tok(tok, "attribute '%s' is not supported", name);
-  error_tok(tok, "unknown attribute '%s'", name);
+  // Any other is ignored with a warning, as with gcc and clang: once,
+  // though a lookahead (is_function()) reads it too.
+  static HashMap warned;
+  if (hashmap_get2(&warned, (char *)&tok, sizeof(tok)))
+    return;
+  Token **key = arena_alloc(sizeof(tok));
+  *key = tok;
+  hashmap_put2(&warned, (char *)key, sizeof(tok), tok);
+  warn_opt("attributes", tok, "unknown attribute '%s' ignored", name);
 }
 
 static void merge_attrs(Attrs *dst, Attrs *src) {
@@ -1416,9 +1428,12 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     if (ty2->kind == TY_ARRAY || ty2->kind == TY_VLA) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this, and
-      // `int a[n]` to `int *a`.
+      // `int a[n]` to `int *a`. Its length is still evaluated on entry
+      // (see function()), for its side effects: `int a[n++]`.
+      Node *len = ty2->kind == TY_VLA ? ty2->vla_len : NULL;
       ty2 = pointer_to(ty2->base);
       ty2->name = name;
+      ty2->vla_len = len;
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
       // only in the parameter context.
@@ -2114,9 +2129,13 @@ static bool is_variably_modified(Type *ty) {
   return false;
 }
 
-// Generate code for computing a VLA size.
+// Generate code for computing a VLA size. A type whose size is already
+// computed, as a typedef's is where it's declared, keeps that size: its
+// length isn't evaluated again (C17 6.7.8p3).
 static Node *compute_vla_size(Type *ty, Token *tok) {
   Node *node = new_node(ND_NULL_EXPR, tok);
+  if (ty->kind == TY_VLA && ty->vla_size)
+    return node;
   if (ty->base)
     node = new_binary(ND_COMMA, node, compute_vla_size(ty->base, tok), tok);
 
@@ -2191,7 +2210,14 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       }
     }
 
+    // mode() and vector_size() before the type change it as they do after
+    // the name: `__attribute__((vector_size(16))) char v;` is a vector.
     Attrs da = {};
+    if (attr) {
+      da.mode_tok = attr->gnu.mode_tok;
+      da.vector_tok = attr->gnu.vector_tok;
+      da.vector_size = attr->gnu.vector_size;
+    }
     Type *ty = declarator(&tok, tok, basety, &da);
     if (ty->kind == TY_VOID)
       error_tok(tok, "variable declared void");
@@ -2326,6 +2352,17 @@ static Token *skip_excess_element(Token *tok) {
 
   assign(&tok, tok);
   return tok;
+}
+
+// An element past the end of an array, struct, union, vector or scalar
+// `what` is skipped with a warning, as with gcc: once, though
+// count_array_init_elements() reads it first.
+static bool counting_elements;
+
+static Token *excess_element(Token *tok, char *what) {
+  if (!counting_elements)
+    warn_tok(tok, "excess elements in %s initializer", what);
+  return skip_excess_element(tok);
 }
 
 // string-initializer = string-literal
@@ -2542,6 +2579,8 @@ static int64_t count_array_init_elements(Token *tok, Type *ty) {
                 (base->kind != TY_ARRAY && base->kind != TY_STRUCT && base->kind != TY_UNION);
 
   int64_t i = 0, max = 0;
+  bool was_counting = counting_elements;
+  counting_elements = true;
 
   while (!consume_end(&tok, tok)) {
     if (!first)
@@ -2573,6 +2612,7 @@ static int64_t count_array_init_elements(Token *tok, Type *ty) {
     i++;
     max = MAX(max, i);
   }
+  counting_elements = was_counting;
   return max;
 }
 
@@ -2613,7 +2653,7 @@ static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
     if (i < init->ty->array_len)
       initializer2(&tok, tok, elem_init(init, i));
     else
-      tok = skip_excess_element(tok);
+      tok = excess_element(tok, "array");
   }
 }
 
@@ -2668,7 +2708,7 @@ static void struct_initializer1(Token **rest, Token *tok, Initializer *init) {
       initializer2(&tok, tok, mem_init(init, mem));
       mem = init_member(mem->next);
     } else {
-      tok = skip_excess_element(tok);
+      tok = excess_element(tok, "struct");
     }
   }
 }
@@ -2725,6 +2765,8 @@ static void union_initializer(Token **rest, Token *tok, Initializer *init) {
 
   if (equal(tok, "{")) {
     initializer2(&tok, tok->next, mem_init(init, init->mem));
+    while (equal(tok, ",") && !equal(tok->next, "}"))
+      tok = excess_element(tok->next, "union");
     consume(&tok, tok, ",");
     *rest = skip(tok, "}");
   } else {
@@ -2787,7 +2829,7 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
         if (i < ty->array_len)
           initializer2(&tok, tok, elem_init(init, i));
         else
-          tok = skip_excess_element(tok);
+          tok = excess_element(tok, "vector");
       }
       init->ty = ty;
       return;
@@ -2856,7 +2898,7 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
     // the first are skipped, as an array's excess elements are.
     initializer2(&tok, tok->next, init);
     while (equal(tok, ",") && !equal(tok->next, "}"))
-      tok = skip_excess_element(tok->next);
+      tok = excess_element(tok->next, "scalar");
     consume(&tok, tok, ",");
     *rest = skip(tok, "}");
     return;
@@ -3113,6 +3155,25 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int64_t
     return cur;
   }
 
+  // [GNU] A struct or union from a compound literal, as in
+  // `T x = (T){1, f};`: the literal's bytes and relocations. Any other
+  // struct value isn't a constant.
+  if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && init->expr) {
+    Node *expr = init->expr;
+    Obj *lit = expr->kind == ND_VAR ? expr->var : NULL;
+    if (!lit || lit->is_local || !lit->init_data || strncmp(lit->name, ".L..", 4))
+      error_tok(expr->tok, "not a compile-time constant");
+    memcpy(buf + offset, lit->init_data, ty->size);
+    for (Relocation *r = lit->rel; r; r = r->next) {
+      Relocation *rel = arena_alloc(sizeof(Relocation));
+      *rel = *r;
+      rel->offset += offset;
+      rel->next = NULL;
+      cur = cur->next = rel;
+    }
+    return cur;
+  }
+
   if (ty->kind == TY_STRUCT) {
     for (Member *mem = ty->members; mem; mem = mem->next) {
       if (mem->is_bitfield)
@@ -3205,7 +3266,10 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int64_t
 static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
   Type *decl_ty = var->ty;
   Type *ty;
+  bool was_static_init = in_static_init;
+  in_static_init = true;
   Initializer *init = initializer(rest, tok, decl_ty, &ty);
+  in_static_init = was_static_init;
 
   Relocation head = {};
   char *buf = calloc(1, ty->size);
@@ -4073,9 +4137,12 @@ static Node *block_item(Token **rest, Token *tok) {
   VarAttr attr = {};
   Type *basety = declspec(&tok, tok, &attr);
 
+  // A variably modified typedef's sizes are computed where it is
+  // declared, once.
   if (attr.is_typedef) {
-    *rest = parse_typedef(tok, basety, &attr);
-    return NULL;
+    Node *node = new_node(ND_BLOCK, tok);
+    *rest = parse_typedef(tok, basety, &attr, &node->body);
+    return node->body ? node : NULL;
   }
 
   // Function declarations, maybe followed by variables: `int f(void), x;`
@@ -4623,6 +4690,10 @@ static bool is_const_complex(Node *node) {
 static bool is_const_expr(Node *node) {
   add_type(node);
 
+  // A node with no value, like a compound literal's ND_MEMZERO, isn't.
+  if (!node->ty)
+    return false;
+
   // (A complex constant is computed by eval_complex().)
   if (is_complex(node->ty))
     return false;
@@ -4754,6 +4825,40 @@ static long double eval_double(Node *node) {
 
 //---------- Assignment ------------------------------------------------------
 
+// A pointer, an array or a function, which only some operators take
+static bool is_pointer_like(Type *ty) {
+  return ty->base || ty->kind == TY_FUNC;
+}
+
+// `lhs op rhs` for * / % << >> & | ^ (and their op=), which take no
+// pointers: `p * 2` is an error, not math on its address.
+static Node *new_arith(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+  add_type(lhs);
+  add_type(rhs);
+  // (A struct operand is reported as one; a vector is fine.)
+  if (!is_vector(lhs->ty))
+    check_scalar(lhs);
+  if (!is_vector(rhs->ty))
+    check_scalar(rhs);
+  if (is_pointer_like(lhs->ty) || is_pointer_like(rhs->ty))
+    error_tok(tok, "invalid operands to binary '%.*s' ('%s' and '%s')", tok->len,
+              tok->loc, type_name(lhs->ty), type_name(rhs->ty));
+  return new_binary(kind, lhs, rhs, tok);
+}
+
+// A comparison: a pointer can be compared with a pointer or an integer,
+// but not a floating number.
+static Node *new_compare(NodeKind kind, Node *lhs, Node *rhs, Token *tok) {
+  add_type(lhs);
+  add_type(rhs);
+  Type *l = lhs->ty, *r = rhs->ty;
+  if ((is_pointer_like(l) && (is_flonum(r) || is_complex(r))) ||
+      (is_pointer_like(r) && (is_flonum(l) || is_complex(l))))
+    error_tok(tok, "invalid operands to binary '%.*s' ('%s' and '%s')", tok->len,
+              tok->loc, type_name(l), type_name(r));
+  return new_binary(kind, lhs, rhs, tok);
+}
+
 // Convert op= operators to expressions containing an assignment.
 //
 // In general, `A op= C` is converted to ``tmp = &A, *tmp = *tmp op B`.
@@ -4774,12 +4879,36 @@ static bool has_const_member(Type *ty) {
   return false;
 }
 
+// Some values cgen can find the address of aren't lvalues, so they can't
+// be assigned, incremented or have their address taken: `(a, b)`,
+// `c ? s : t`, `s = t` and `f()`, and their members. (gcc takes a
+// statement expression's value, `({ s; })`, as one.)
+static bool is_rvalue(Node *node) {
+  switch (node->kind) {
+  case ND_COMMA: // a compound literal is one too, made at its `(`
+    return equal(node->tok, ",");
+  case ND_COND:
+  case ND_ASSIGN:
+  case ND_FUNCALL:
+    return true;
+  case ND_MEMBER:
+    return is_rvalue(node->lhs);
+  }
+  return false;
+}
+
+static void check_lvalue(Node *node) {
+  if (is_rvalue(node))
+    error_tok(node->tok, "not an lvalue");
+}
+
 // Nothing const can change: a const variable, what a pointer to const
 // points to, a member of a const struct (const too, see add_type), or a
 // struct with a const member. Nor can a constexpr, whose value is also
 // baked into constant expressions.
 static void check_modifiable(Node *lhs) {
   add_type(lhs);
+  check_lvalue(lhs);
   if (lhs->kind == ND_VAR && lhs->var->is_constexpr)
     error_tok(lhs->tok, "cannot modify constexpr '%s'", lhs->var->name);
 
@@ -4948,28 +5077,28 @@ static Node *assign(Token **rest, Token *tok) {
     return to_assign(new_sub(node, assign(rest, tok->next), tok));
 
   if (equal(tok, "*="))
-    return to_assign(new_binary(ND_MUL, node, assign(rest, tok->next), tok));
+    return to_assign(new_arith(ND_MUL, node, assign(rest, tok->next), tok));
 
   if (equal(tok, "/="))
-    return to_assign(new_binary(ND_DIV, node, assign(rest, tok->next), tok));
+    return to_assign(new_arith(ND_DIV, node, assign(rest, tok->next), tok));
 
   if (equal(tok, "%="))
-    return to_assign(new_binary(ND_MOD, node, assign(rest, tok->next), tok));
+    return to_assign(new_arith(ND_MOD, node, assign(rest, tok->next), tok));
 
   if (equal(tok, "&="))
-    return to_assign(new_binary(ND_BITAND, node, assign(rest, tok->next), tok));
+    return to_assign(new_arith(ND_BITAND, node, assign(rest, tok->next), tok));
 
   if (equal(tok, "|="))
-    return to_assign(new_binary(ND_BITOR, node, assign(rest, tok->next), tok));
+    return to_assign(new_arith(ND_BITOR, node, assign(rest, tok->next), tok));
 
   if (equal(tok, "^="))
-    return to_assign(new_binary(ND_BITXOR, node, assign(rest, tok->next), tok));
+    return to_assign(new_arith(ND_BITXOR, node, assign(rest, tok->next), tok));
 
   if (equal(tok, "<<="))
-    return to_assign(new_binary(ND_SHL, node, assign(rest, tok->next), tok));
+    return to_assign(new_arith(ND_SHL, node, assign(rest, tok->next), tok));
 
   if (equal(tok, ">>="))
-    return to_assign(new_binary(ND_SHR, node, assign(rest, tok->next), tok));
+    return to_assign(new_arith(ND_SHR, node, assign(rest, tok->next), tok));
 
   *rest = tok;
   return node;
@@ -5114,7 +5243,7 @@ static Node *bitor(Token **rest, Token *tok) {
   Node *node = bitxor(&tok, tok);
   while (equal(tok, "|")) {
     Token *start = tok;
-    node = new_binary(ND_BITOR, node, bitxor(&tok, tok->next), start);
+    node = new_arith(ND_BITOR, node, bitxor(&tok, tok->next), start);
   }
   *rest = tok;
   return node;
@@ -5125,7 +5254,7 @@ static Node *bitxor(Token **rest, Token *tok) {
   Node *node = bitand(&tok, tok);
   while (equal(tok, "^")) {
     Token *start = tok;
-    node = new_binary(ND_BITXOR, node, bitand(&tok, tok->next), start);
+    node = new_arith(ND_BITXOR, node, bitand(&tok, tok->next), start);
   }
   *rest = tok;
   return node;
@@ -5136,7 +5265,7 @@ static Node *bitand(Token **rest, Token *tok) {
   Node *node = equality(&tok, tok);
   while (equal(tok, "&")) {
     Token *start = tok;
-    node = new_binary(ND_BITAND, node, equality(&tok, tok->next), start);
+    node = new_arith(ND_BITAND, node, equality(&tok, tok->next), start);
   }
   *rest = tok;
   return node;
@@ -5152,7 +5281,7 @@ static Node *equality(Token **rest, Token *tok) {
     if (equal(tok, "==") || equal(tok, "!=")) {
       Node *rhs = relational(&tok, tok->next);
       warn_string_compare(node, rhs, start);
-      node = new_binary(equal(start, "==") ? ND_EQ : ND_NE, node, rhs, start);
+      node = new_compare(equal(start, "==") ? ND_EQ : ND_NE, node, rhs, start);
       continue;
     }
 
@@ -5169,22 +5298,22 @@ static Node *relational(Token **rest, Token *tok) {
     Token *start = tok;
 
     if (equal(tok, "<")) {
-      node = new_binary(ND_LT, node, shift(&tok, tok->next), start);
+      node = new_compare(ND_LT, node, shift(&tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, "<=")) {
-      node = new_binary(ND_LE, node, shift(&tok, tok->next), start);
+      node = new_compare(ND_LE, node, shift(&tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, ">")) {
-      node = new_binary(ND_LT, shift(&tok, tok->next), node, start);
+      node = new_compare(ND_LT, shift(&tok, tok->next), node, start);
       continue;
     }
 
     if (equal(tok, ">=")) {
-      node = new_binary(ND_LE, shift(&tok, tok->next), node, start);
+      node = new_compare(ND_LE, shift(&tok, tok->next), node, start);
       continue;
     }
 
@@ -5203,7 +5332,7 @@ static Node *shift(Token **rest, Token *tok) {
     if (equal(tok, "<<") || equal(tok, ">>")) {
       Node *rhs = add(&tok, tok->next);
       warn_shift_count(node, rhs, start);
-      node = new_binary(equal(start, "<<") ? ND_SHL : ND_SHR, node, rhs, start);
+      node = new_arith(equal(start, "<<") ? ND_SHL : ND_SHR, node, rhs, start);
       continue;
     }
 
@@ -5342,14 +5471,14 @@ static Node *mul(Token **rest, Token *tok) {
     Token *start = tok;
 
     if (equal(tok, "*")) {
-      node = new_binary(ND_MUL, node, cast(&tok, tok->next), start);
+      node = new_arith(ND_MUL, node, cast(&tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, "/") || equal(tok, "%")) {
       Node *rhs = cast(&tok, tok->next);
       warn_div_by_zero(node, rhs, start);
-      node = new_binary(equal(start, "/") ? ND_DIV : ND_MOD, node, rhs, start);
+      node = new_arith(equal(start, "/") ? ND_DIV : ND_MOD, node, rhs, start);
       continue;
     }
 
@@ -5370,6 +5499,14 @@ static void check_vector_cast(Node *node) {
               "so the sizes must match", type_name(from), type_name(to));
 }
 
+// A pointer can't be cast to or from a floating type.
+static void check_pointer_cast(Node *node) {
+  Type *from = node->lhs->ty, *to = node->ty;
+  if ((is_pointer_like(from) && (is_flonum(to) || is_complex(to))) ||
+      (is_pointer_like(to) && (is_flonum(from) || is_complex(from))))
+    error_tok(node->tok, "cannot convert '%s' to '%s'", type_name(from), type_name(to));
+}
+
 // cast = "(" type-name ")" cast | unary
 static Node *cast(Token **rest, Token *tok) {
   if (equal(tok, "(") && is_typename(tok->next)) {
@@ -5385,6 +5522,7 @@ static Node *cast(Token **rest, Token *tok) {
     Node *node = new_cast(cast(rest, tok), unqual(ty));
     node->tok = start;
     check_vector_cast(node);
+    check_pointer_cast(node);
     return node;
   }
 
@@ -5407,8 +5545,13 @@ static Node *unary(Token **rest, Token *tok) {
     return new_cast(node, node->ty);
   }
 
-  if (equal(tok, "-"))
-    return new_unary(ND_NEG, cast(rest, tok->next), tok);
+  if (equal(tok, "-")) {
+    Node *node = cast(rest, tok->next);
+    add_type(node);
+    if (is_pointer_like(node->ty))
+      error_tok(tok, "invalid argument type to unary '-'");
+    return new_unary(ND_NEG, node, tok);
+  }
 
   if (equal(tok, "&")) {
     Node *lhs = cast(rest, tok->next);
@@ -5417,6 +5560,7 @@ static Node *unary(Token **rest, Token *tok) {
       error_tok(tok, "cannot take address of bitfield");
     if (lhs->kind == ND_VAR && lhs->var->is_register)
       error_tok(tok, "address of register variable '%s' requested", lhs->var->name);
+    check_lvalue(lhs);
     return new_unary(ND_ADDR, lhs, tok);
   }
 
@@ -5455,8 +5599,14 @@ static Node *unary(Token **rest, Token *tok) {
     return part;
   }
 
-  if (equal(tok, "~"))
-    return new_unary(ND_BITNOT, cast(rest, tok->next), tok);
+  // (~ of a complex number is its conjugate, in GNU C.)
+  if (equal(tok, "~")) {
+    Node *node = cast(rest, tok->next);
+    add_type(node);
+    if (is_pointer_like(node->ty) || is_flonum(node->ty))
+      error_tok(tok, "invalid argument type to unary '~'");
+    return new_unary(ND_BITNOT, node, tok);
+  }
 
   // Read ++i as i+=1
   if (equal(tok, "++"))
@@ -5908,7 +6058,7 @@ static Node *postfix(Token **rest, Token *tok) {
     Type *ty = typename(&tok, tok->next);
     tok = skip(tok, ")");
 
-    if (scope->next == NULL) {
+    if (scope->next == NULL || in_static_init) {
       Obj *var = new_anon_gvar(ty);
       gvar_initializer(&tok, tok, var);
       node = new_var_node(var, start);
@@ -7104,14 +7254,23 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
   if (equal(start, "__builtin_bswap64"))
     return bswap_node(args[0], ty_ulong, start);
 
-  // Hints: the value of the first argument
+  // Hints: the value of the first argument. The others are still
+  // evaluated, as with gcc: `__builtin_expect(x, i++)` increments i.
+  Type *hint_ty = NULL;
   if (equal(start, "__builtin_expect") ||
       equal(start, "__builtin_expect_with_probability"))
-    return new_cast(args[0], ty_long);
-  if (equal(start, "__builtin_assume_aligned"))
-    return new_cast(args[0], pointer_to(ty_void));
-  if (equal(start, "__builtin_prefetch"))
-    return new_cast(args[0], ty_void);
+    hint_ty = ty_long;
+  else if (equal(start, "__builtin_assume_aligned"))
+    hint_ty = pointer_to(ty_void);
+  else if (equal(start, "__builtin_prefetch"))
+    hint_ty = ty_void;
+  if (hint_ty) {
+    Node *node = new_cast(args[0], hint_ty);
+    for (int i = nargs - 1; i > 0; i--)
+      if (!is_const_expr(args[i]))
+        node = new_binary(ND_COMMA, new_cast(args[i], ty_void), node, start);
+    return node;
+  }
 
   // Whether the argument is a constant. It isn't evaluated.
   if (equal(start, "__builtin_constant_p"))
@@ -8537,7 +8696,9 @@ static void warn_function(Obj *fn, Token *rbrace) {
 
 //---------- Top level: typedefs and function definitions --------------------
 
-static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr) {
+// In a function, `sizes` gets statements that compute a variably modified
+// typedef's sizes.
+static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr, Node **sizes) {
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
@@ -8579,6 +8740,11 @@ static Token *parse_typedef(Token *tok, Type *basety, VarAttr *attr) {
     if (prev && !is_compatible(prev->type_def, ty))
       error_tok(ty->name, "conflicting types for '%s'", name);
     push_scope(name)->type_def = ty;
+
+    if (sizes && is_variably_modified(ty)) {
+      *sizes = new_unary(ND_EXPR_STMT, compute_vla_size(ty, tok), tok);
+      sizes = &(*sizes)->next;
+    }
   }
   return tok;
 }
@@ -8760,6 +8926,9 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || equal(tok, "{");
     fn->is_noreturn = fn->is_noreturn || is_noreturn;
+    // In a block, it hides a local of the same name: `{ extern int f(int); }`
+    if (scope->next)
+      push_scope(name_str)->var = fn;
   } else {
     fn = new_gvar(name_str, ty);
     fn->is_function = true;
@@ -8858,12 +9027,18 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   // parsed, since pointer arithmetic on `m` uses that size.
   Node vla_head = {};
   Node *vla_cur = &vla_head;
-  for (Type *param = params; param; param = param->next)
+  for (Type *param = params; param; param = param->next) {
+    if (param->vla_len) {
+      vla_cur = vla_cur->next =
+        new_unary(ND_EXPR_STMT, new_cast(param->vla_len, ty_void), tok);
+      add_type(vla_cur);
+    }
     if (param->base && is_variably_modified(param->base)) {
       vla_cur = vla_cur->next =
         new_unary(ND_EXPR_STMT, compute_vla_size(param, tok), tok);
       add_type(vla_cur);
     }
+  }
 
   // A K&R parameter declared narrower than it's passed, like a char or a
   // float, is a local of its declared type, set from it on entry.
@@ -9227,7 +9402,7 @@ static Token *top_level_item(Token *tok) {
   Type *basety = declspec(&tok, tok, &attr);
 
   if (attr.is_typedef)
-    return parse_typedef(tok, basety, &attr);
+    return parse_typedef(tok, basety, &attr, NULL);
   if (is_function(tok, basety))
     return function(tok, basety, &attr);
   return global_variable(tok, basety, &attr);
