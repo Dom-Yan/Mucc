@@ -365,9 +365,9 @@ What mucc does not do, and what to use instead.
 
 | | Time |
 | --- | --- |
-| mucc compiling its own source | 0.44 s |
-| gcc 15.2 `-O0`, the same | 1.18 s |
-| gcc 15.2 `-O2`, the same | 5.13 s |
+| mucc 1.3.0 compiling its own source | 0.46 s |
+| gcc 15.2 `-O0`, the same | 1.22 s |
+| gcc 15.2 `-O2`, the same | 5.35 s |
 
 The generated code runs about as fast as `gcc -O0` with glibc
 (`--libc=system`), and about 1.3 to 1.5 times slower with the bundled musl,
@@ -476,7 +476,7 @@ mucc and run its own test suite.
 | --- | --- |
 | Source | 27,667 lines of C in 13 files (`wc -l src/*`) |
 | Released binary | about 8.5 MB, with musl and Linux's headers inside |
-| Compiling its own source | 0.44 s (gcc `-O0`: 1.18 s, gcc `-O2`: 5.13 s) |
+| Compiling its own source | 0.46 s (gcc `-O0`: 1.22 s, gcc `-O2`: 5.35 s) |
 | Tests | 57 programs with over 2,700 assertions, 8 Linux programs with 166 checks, plus hundreds of command-line, error, assembler, linker and debugger checks |
 | Real programs | With the bundled musl: SQLite (249,453 tests, 0 errors), Lua, zlib, Redis, Tcl, jq, the kilo text editor. With `--libc=system`: CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), libpng, TinyCC, QuickJS (its 9 test files pass) |
 | Self-hosting | a mucc built by mucc builds a byte-identical mucc |

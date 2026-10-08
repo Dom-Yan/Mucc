@@ -32,9 +32,10 @@ use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
   <li><b>FAST!</b> It compiles, assembles and links about 2.7 times
     <a href="#speed">faster</a> than <code>gcc -O0</code>.</li>
   <li><b>REAL C!</b> C17 by default, C23 with <code>-std=c23</code>, and the
-    GNU extensions real code uses. SQLite, CPython, Git, redis, Lua, jq,
-    GNU make, sed, gawk and TinyCC build with it and pass their own test
-    suites. Mucc of course compiles itself, byte for byte.</li>
+    GNU extensions real code uses. SQLite, Lua, Redis, Tcl, jq and zlib
+    build with it and pass their own test suites with the bundled musl;
+    CPython, Git, libpng, QuickJS and TinyCC do with the system's glibc.
+    Mucc of course compiles itself, byte for byte.</li>
   <li><b>DEBUGGABLE!</b> <code>-g</code> lets gdb show variables, types and
     lines, and <code>-Wall</code>, <code>-Werror</code> and
     <code>-Wno-</code><i>name</i> work as with gcc.</li>
@@ -43,21 +44,29 @@ use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
     and comes out the same bytes on any machine.</li>
   <li><b>SMALL!</b> About 28,000 lines of C, in sections, that one person can
     read from end to end.</li>
+  <li><b>ITS OWN TOOLCHAIN!</b> Its assembler takes hand-written
+    assembly with GNU as's common directives (<code>.macro</code>,
+    <code>.rept</code>, <code>.p2align</code>, ...), its linker makes static
+    programs, and <code>mucc -ar</code> makes static libraries.</li>
   <li>It takes gcc's flags (<code>-c</code>, <code>-S</code>, <code>-E</code>,
     <code>-o</code>, <code>-I</code>, <code>-D</code>, <code>-l</code>,
     <code>-std=</code> and the rest), so build scripts work unchanged. Like
     clang, it says it is gcc 4.2.</li>
 </ul>
+<p>The <a href="https://github.com/Dom-Yan/Mucc#readme">README</a> is the
+full guide: how to use mucc day to day, every option, and what it
+doesn't do.</p>
 
 <h2 id="speed">Compilation Speed</h2>
-<p>Compilation speed for mucc's own source. There are 26,713 lines; 49,159
-lines (1.7 MBytes) are compiled because the same headers are included in
-many files. Mucc is about <b>2.7 times</b> faster than GCC <code>-O0</code>.</p>
+<p>Compilation speed for mucc's own source. There are 27,667 lines; 47,319
+lines (1.0 MBytes) are compiled because the same headers are included in
+many files. Mucc is about <b>2.7 times</b> faster than GCC <code>-O0</code>
+and 12 times faster than GCC <code>-O2</code>.</p>
 <table class="speed">
   <tr><th>Compiler</th><th>Time(s)</th><th>lines/second</th><th>MBytes/second</th></tr>
-  <tr><td>Mucc 1.2.1</td><td>0.44</td><td>112000</td><td>3.9</td></tr>
-  <tr><td>GCC 15.2 -O0</td><td>1.18</td><td>41500</td><td>1.4</td></tr>
-  <tr><td>GCC 15.2 -O2</td><td>5.13</td><td>9600</td><td>0.33</td></tr>
+  <tr><td>Mucc 1.3.0</td><td>0.46</td><td>103000</td><td>2.3</td></tr>
+  <tr><td>GCC 15.2 -O0</td><td>1.22</td><td>38800</td><td>0.86</td></tr>
+  <tr><td>GCC 15.2 -O2</td><td>5.35</td><td>8800</td><td>0.20</td></tr>
 </table>
 <p>Measures were done on an AMD Ryzen 5 7600X under WSL 2, one file at a
 time, best of 7. Real time is measured. Compilation time includes
@@ -85,10 +94,17 @@ only mucc, is explained in the
 <ul>
   <li>Run anywhere but 64-bit Intel or AMD Linux (on Windows, WSL 2), or
     make programs for anything else.</li>
-  <li>Optimize: use gcc or clang where performance is crucial.</li>
-  <li>C++, <code>_BitInt</code>, AVX and later vector instructions, or shared
-    libraries without <code>--libc=system</code>.</li>
+  <li>Optimize beyond register allocation and constant folding: use gcc or
+    clang where performance is crucial.</li>
+  <li>C++, <code>_BitInt</code>, gcc's nested functions, AVX and later
+    vector instructions, or Intel-syntax assembly without the system's
+    <code>as</code>.</li>
+  <li>Shared libraries and <code>dlopen</code> with the bundled musl: use
+    <code>--libc=system</code> for those.</li>
 </ul>
+<p>The README's
+<a href="https://github.com/Dom-Yan/Mucc#limitations">Limitations</a> has
+the full list.</p>
 
 <h2>You want to help ?</h2>
 <p>Here are some suggestions:</p>
