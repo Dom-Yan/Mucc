@@ -1,6 +1,8 @@
 # GNU as directives beyond those mucc's own output uses, which hand-written
 # assembly does: test/asm.sh checks that mucc's assembler makes the same
-# object as GNU as from this.
+# object as GNU as from this. Code is aligned with an explicit fill byte:
+# the NOPs GNU as pads code with differ between its versions, so test/asm.sh
+# checks mucc's NOP padding on its own.
 
   .set COUNT, 3
   .equ SIZE, COUNT * 0 + 8
@@ -26,22 +28,22 @@ lbl\@_\n\():
   .globl func
 func:
   int3
-  .p2align 4
+  .p2align 4,0xcc
   mov $COUNT, %eax
   mov $SIZE + 1, %ecx
   save %rax
   save %rdi, 8
   save off=16, reg=%rsi
-  .balign 32
+  .balign 32,0xcc
   .rept COUNT
   nop
   .endr
   .p2align 3,0xcc
-  .p2align 6,,7
+  .p2align 6,0xcc,7
   ret
-  .align 64
+  .align 64,0xcc
   push %rbp
-  .p2align 7
+  .p2align 7,0xcc
   ret
 
   .data

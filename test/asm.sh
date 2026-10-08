@@ -45,6 +45,22 @@ if ! $mucc -c -o $tmp/cfi.o $tmp/cfi.s 2> $tmp/err || [ -s $tmp/err ]; then
 fi
 echo "testing asm .cfi_* ... passed"
 
+# Code padded to an alignment, by 1 to 127 bytes, is NOPs, or a jump to
+# the aligned address over them, as GNU as pads it (not byte for byte:
+# that differs between GNU as versions).
+for k in $(seq 1 127); do
+    printf ' .p2align 7,0xcc\n .fill %d,1,0xcc\n .p2align 7\n' $k
+done > $tmp/nops.s
+echo ' ret' >> $tmp/nops.s
+$mucc -c -o $tmp/nops.o $tmp/nops.s &&
+objdump -d --no-show-raw-insn $tmp/nops.o | grep -E '^ +[0-9a-f]+:' |
+    grep -vE '\s(int3|nop[wl]?|ret|data16|cs nopw|xchg +%ax,%ax)\b' > $tmp/nops.left
+# What's left are the jumps, each to an address aligned to 128.
+if grep -vE 'jmp +(0x)?[0-9a-f]*[08]0( |$)' $tmp/nops.left | grep -q .; then
+    echo "testing asm NOP padding ... failed"; grep -vE 'jmp +(0x)?[0-9a-f]*[08]0( |$)' $tmp/nops.left | head; exit 1
+fi
+echo "testing asm NOP padding ... passed"
+
 # musl's x86-64 assembly, which the bundled C library needs (its math
 # overrides are left out; mucc builds musl's C versions instead).
 n=0
