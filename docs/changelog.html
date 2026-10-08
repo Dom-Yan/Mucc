@@ -18,6 +18,53 @@
 Downloads for each release are on the
 <a href="https://github.com/Dom-Yan/Mucc/releases">releases page</a>.</p>
 
+<h2 id="v1.3.0">Mucc 1.3.0 (October 8, 2026)</h2>
+<ul>
+  <li>Fixes for wrong code: a file-scope struct or union set from a
+    compound literal (<code>T x = (T){...};</code>) was all zeros; a VLA
+    typedef's length was evaluated again at each use, and its
+    <code>sizeof</code> could be 0 after a branch;
+    <code>__attribute__((vector_size(N)))</code> before the type was
+    ignored; some decimal <code>double</code> and <code>float</code>
+    constants were 1 ULP off; the side effects of
+    <code>__builtin_expect</code>'s second argument and of a VLA
+    parameter's length were dropped.</li>
+  <li>A crash on a vector compound literal cast to an integer in a
+    condition is fixed.</li>
+  <li>Valid code now accepted: <code>ATOMIC_FLAG_INIT</code> and
+    <code>ATOMIC_VAR_INIT</code>; unknown attributes (a warning, as with
+    gcc); a member of a struct a statement expression gives; a
+    block-scope <code>extern</code> function declaration hiding a local;
+    gcc's predefined macros for <code>&lt;stdint.h&gt;</code>'s types,
+    the types' widths, <code>__BIGGEST_ALIGNMENT__</code> and the
+    floating-point limits.</li>
+  <li>Invalid code now rejected: arithmetic and bitwise operators on
+    pointers, <code>~</code> on floats, casts between pointers and
+    floats, comparing a pointer with a float, and assigning to, or
+    taking the address of, values that aren't lvalues. Excess
+    initializer elements warn.</li>
+  <li><code>-funsigned-char</code>, <code>-fno-pic</code>,
+    <code>-ffast-math</code>, <code>-fpermissive</code> and
+    <code>-fms-extensions</code>; <code>-Xlinker</code> is
+    <code>-Wl,</code> and needs no system <code>ld</code>.</li>
+  <li>The assembler: <code>.int</code>, <code>.word</code>,
+    <code>.float</code>, <code>.double</code>, <code>.skip</code>,
+    <code>.space</code>, <code>.fill</code>, <code>.p2align</code> and
+    <code>.balign</code> with fill and maximum (code padded with GNU as's
+    NOPs), <code>.set</code> and <code>.equ</code> with constants and
+    <code>*</code>, <code>/</code>, <code>&lt;&lt;</code> and
+    <code>&gt;&gt;</code>, <code>.rept</code>, <code>.macro</code>,
+    <code>.pushsection</code>, <code>.popsection</code>,
+    <code>.ident</code>, merged sections (<code>"aMS"</code>), and
+    <code>.cfi_*</code> (dropped). The same objects as GNU as.</li>
+  <li><code>-g</code> records <code>const</code> and
+    <code>volatile</code>.</li>
+  <li>The README is a full guide to using mucc, with its limitations,
+    and its numbers are corrected: which real programs were tested with
+    <code>--libc=system</code>, the speed of generated code, and the
+    line count.</li>
+</ul>
+
 <h2 id="v1.2.1">Mucc 1.2.1 (October 7, 2026)</h2>
 <ul>
   <li>The first release built by mucc alone: 1.2.0 compiled, assembled

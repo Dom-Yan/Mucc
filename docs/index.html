@@ -13,15 +13,14 @@
 <h1>Mucc C Compiler</h1>
 
 <h2>News</h2>
-<p>[October 7, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.2.1">Mucc
-1.2.1</a>, the first release built by mucc alone: 1.2.0 compiled,
-assembled and linked it, with no gcc or binutils.
-<a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.2.0">Mucc
-1.2.0</a>, the same day, brought <code>-g</code> debug info,
-<code>__int128</code>, <code>_Complex</code>, SSE vector types and
-intrinsics, <code>&lt;stdbit.h&gt;</code>, K&amp;R function definitions,
-objects of 2 GiB and more, an 8.5 MB binary, and 22 real programs passing
-their own tests. See the <a href="changelog.html">changelog</a>.]</p>
+<p>[October 8, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.3.0">Mucc
+1.3.0</a> fixes every wrong-code bug, the crash and the rejected valid
+code an outside test of 1.2.1 found, and needs no system <code>as</code>
+or <code>ld</code> for <code>-Xlinker</code> or for assembly files that
+use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
+<code>.p2align</code>, ...). See the <a href="changelog.html">changelog</a>.
+<a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.2.1">Mucc
+1.2.1</a> was the first release built by mucc alone.]</p>
 
 <h2>Features</h2>
 <ul>
@@ -42,7 +41,7 @@ their own tests. See the <a href="changelog.html">changelog</a>.]</p>
   <li><b>BUILT BY ITSELF!</b> Each release is compiled, assembled and
     linked by the one before it, with gcc and binutils nowhere in sight,
     and comes out the same bytes on any machine.</li>
-  <li><b>SMALL!</b> About 27,000 lines of C, in sections, that one person can
+  <li><b>SMALL!</b> About 28,000 lines of C, in sections, that one person can
     read from end to end.</li>
   <li>It takes gcc's flags (<code>-c</code>, <code>-S</code>, <code>-E</code>,
     <code>-o</code>, <code>-I</code>, <code>-D</code>, <code>-l</code>,
@@ -63,8 +62,9 @@ many files. Mucc is about <b>2.7 times</b> faster than GCC <code>-O0</code>.</p>
 <p>Measures were done on an AMD Ryzen 5 7600X under WSL 2, one file at a
 time, best of 7. Real time is measured. Compilation time includes
 compilation and assembly. Code that mucc generates runs about as fast as
-code from <code>gcc -O0</code>: for the fastest programs, use gcc or
-clang.</p>
+code from <code>gcc -O0</code> with glibc (<code>--libc=system</code>), and
+about 1.3 to 1.5 times slower with the bundled musl: for the fastest
+programs, use gcc or clang.</p>
 
 <h2 id="download">Download</h2>
 <p>The latest release is at
