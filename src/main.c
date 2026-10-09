@@ -1400,6 +1400,13 @@ static Token *must_tokenize_file(char *path) {
   return tok;
 }
 
+
+/*
+thinking about it, 2 MiB is too small for some files, and the preprocessor
+may need more than that. But the preprocessor's output buffer is allocated
+char a [2048 * 1024 * 1024]; // 2 MiB, for the preprocessor's output buffer
+*/
+
 static Token *append_tokens(Token *tok1, Token *tok2) {
   if (!tok1 || tok1->kind == TK_EOF)
     return tok2;
