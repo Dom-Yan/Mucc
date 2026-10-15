@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Mucc is a small, fast, self-hosting C compiler for x86-64 Linux, in one static file that needs nothing else installed.">
+<meta name="description" content="Mucc is a small, fast, self-hosting C compiler for x86-64 and ARM64 Linux, in one static file that needs nothing else installed.">
 <title>Mucc C Compiler</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -13,12 +13,17 @@
 <h1>Mucc C Compiler</h1>
 
 <h2>News</h2>
-<p>[October 8, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.3.0">Mucc
+<p>[October 14, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.4.0">Mucc
+1.4.0</a> runs on and makes programs for 64-bit ARM Linux (the Raspberry
+Pi 4 and 5, Asahi Linux, ARM servers) as well as x86-64, natively or
+with <code>--target=</code>, starts several times faster, and fixes the
+bugs a deep review found. See the <a href="changelog.html">changelog</a>.
+October 8, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.3.0">Mucc
 1.3.0</a> fixes every wrong-code bug, the crash and the rejected valid
 code an outside test of 1.2.1 found, and needs no system <code>as</code>
 or <code>ld</code> for <code>-Xlinker</code> or for assembly files that
 use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
-<code>.p2align</code>, ...). See the <a href="changelog.html">changelog</a>.
+<code>.p2align</code>, ...).
 <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.2.1">Mucc
 1.2.1</a> was the first release built by mucc alone.]</p>
 
@@ -26,7 +31,7 @@ use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
 <ul>
   <li><b>ONE FILE!</b> The compiler, preprocessor, assembler, linker, headers
     and C library (musl) are one static program of about 8.5 MB. Copy it onto
-    any x86-64 Linux machine, an empty container or a USB stick, and build C
+    any x86-64 or ARM64 Linux machine, an empty container or a USB stick, and build C
     programs with nothing else installed: no gcc, no binutils, no system
     headers.</li>
   <li><b>FAST!</b> It compiles, assembles and links about 2.7 times
@@ -78,22 +83,24 @@ programs, use gcc or clang.</p>
 <h2 id="download">Download</h2>
 <p>The latest release is at
 <a href="https://github.com/Dom-Yan/Mucc/releases/latest">github.com/Dom-Yan/Mucc/releases/latest</a>.
-To install it on any x86-64 Linux (Ubuntu, Debian, Fedora, Arch, Alpine,
-WSL 2 and others):</p>
+To install it on any x86-64 or ARM64 Linux (Ubuntu, Debian, Fedora, Arch,
+Alpine, WSL 2, Raspberry Pi OS and others):</p>
 <pre>mkdir -p ~/.local/bin
-curl -Lo ~/.local/bin/mucc https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-x86_64-linux
+curl -Lo ~/.local/bin/mucc https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-$(uname -m)-linux
 chmod +x ~/.local/bin/mucc
 mucc -o hello hello.c &amp;&amp; ./hello</pre>
 <p>Programs are linked statically against the musl inside mucc, so they run
-on any x86-64 Linux. To use the system's glibc and shared libraries
+on any Linux for that CPU. To make programs for the other CPU, add
+<code>--target=aarch64-linux</code> or <code>--target=x86_64-linux</code>.
+To use the system's glibc and shared libraries
 instead, add <code>--libc=system</code>. Building mucc from source, with
 only mucc, is explained in the
 <a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
 
 <h2>What it doesn't do</h2>
 <ul>
-  <li>Run anywhere but 64-bit Intel or AMD Linux (on Windows, WSL 2), or
-    make programs for anything else.</li>
+  <li>Run anywhere but 64-bit Intel, AMD or ARM Linux (on Windows, WSL 2),
+    or make programs for anything else.</li>
   <li>Optimize beyond register allocation and constant folding: use gcc or
     clang where performance is crucial.</li>
   <li>C++, <code>_BitInt</code>, gcc's nested functions, AVX and later

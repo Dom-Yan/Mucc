@@ -18,6 +18,33 @@
 Downloads for each release are on the
 <a href="https://github.com/Dom-Yan/Mucc/releases">releases page</a>.</p>
 
+<h2 id="v1.4.0">Mucc 1.4.0 (October 14, 2026)</h2>
+<ul>
+  <li>64-bit ARM (AArch64) Linux: mucc runs there and makes programs for
+    it, with its own assembler, linker and runtime library and the
+    bundled musl, as on x86-64. Releases include
+    <code>mucc-aarch64-linux</code>. <code>--target=aarch64-linux</code>
+    and <code>--target=x86_64-linux</code> cross-compile either way.
+    Programs are aligned to 64 KB pages, so they run on kernels with 4,
+    16 or 64 KB pages (the Raspberry Pi 5's, Asahi Linux).</li>
+  <li>Faster: compiling a small file takes about a fifth of the
+    instructions it did, as the embedded headers are found by binary
+    search and the predefined macros are read only when used; large
+    files take about a fifth fewer.</li>
+  <li>Crashes fixed: a <code>-D</code> value ending in a
+    <code>//</code> comment, pasting <code>/</code> and <code>/</code>,
+    a <code>#define</code> ending a macro argument, division by zero or
+    <code>LONG_MIN / -1</code> in a constant, and a file-scope array of
+    run-time size (now an error, as with gcc). A file that includes
+    itself stops at a depth of 200.</li>
+  <li><code>-c</code>, <code>-S</code>, <code>-E</code> and
+    <code>-fsyntax-only</code> with linker inputs (<code>-lm</code>,
+    objects) no longer link, or reject <code>-o</code>.</li>
+  <li>The assembler keeps <code>\"</code> inside a string, as in
+    <code>.ascii "a\";b"</code>.</li>
+  <li>Memory leaks in the hash tables are fixed.</li>
+</ul>
+
 <h2 id="v1.3.0">Mucc 1.3.0 (October 8, 2026)</h2>
 <ul>
   <li>Fixes for wrong code: a file-scope struct or union set from a
