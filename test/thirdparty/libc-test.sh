@@ -18,10 +18,13 @@ musl_mucc=$top/build/musl
 musl_gcc=$work/musl-gcc
 rm -rf $musl_gcc
 mkdir -p $musl_gcc
-(cd $musl_gcc && $top/thirdparty/musl/configure --target=x86_64 --disable-shared CC=gcc > configure.log)
+arch=$(uname -m | sed 's/arm64/aarch64/')
+skip='$(srcdir)/src/math/x86_64/%'
+[ $arch = aarch64 ] && skip='$(srcdir)/src/string/aarch64/%'
+(cd $musl_gcc && $top/thirdparty/musl/configure --target=$arch --disable-shared CC=gcc > configure.log)
 printf '%s\n' \
   'BASE_SRCS = $(filter-out $(srcdir)/src/complex/%,$(sort $(wildcard $(BASE_GLOBS))))' \
-  'ARCH_SRCS = $(filter-out $(srcdir)/src/math/x86_64/%,$(sort $(wildcard $(ARCH_GLOBS))))' \
+  "ARCH_SRCS = \$(filter-out $skip,\$(sort \$(wildcard \$(ARCH_GLOBS))))" \
   >> $musl_gcc/config.mak
 $make -C $musl_gcc AR=ar RANLIB=ranlib lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o > $musl_gcc/make.log
 

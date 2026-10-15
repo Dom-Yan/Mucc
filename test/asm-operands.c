@@ -1,8 +1,10 @@
 #include "test.h"
 
 // GNU asm with operands (see asm_stmt() in src/parser.c). Every expected
-// value here is what the same code gives with gcc.
+// value here is what the same code gives with gcc. x86-64 first, then
+// ARM64.
 
+#ifdef __x86_64__
 static long add(long a, long b) {
   asm("add %1, %0" : "+r"(a) : "r"(b));
   return a;
@@ -282,3 +284,259 @@ int main() {
   printf("OK\n");
   return 0;
 }
+
+#else // ARM64
+
+static long add(long a, long b) {
+  asm("add %0, %0, %1" : "+r"(a) : "r"(b));
+  return a;
+}
+
+static int add_int(int a, int b) {
+  int r;
+  asm("mov %w0, %w1\n\tadd %w0, %w0, %w2" : "=&r"(r) : "r"(a), "r"(b));
+  return r;
+}
+
+static unsigned char add_char(unsigned char a, unsigned char b) {
+  asm("add %w0, %w0, %w1" : "+r"(a) : "r"(b));
+  return a;
+}
+
+// Register variables, as musl's system calls use them
+static long reg_vars(void) {
+  register long x8 asm("x8") = 7;
+  register long x0 asm("x0");
+  asm("add %0, %1, 1" : "=r"(x0) : "r"(x8));
+  return x0;
+}
+
+// Named clobbers keep the operands out of those registers, and the
+// function saves the callee-saved ones.
+static long clobbers(long v) {
+  long r;
+  asm("mov x19, %1\n\tmov x20, x19\n\tmov %0, x20"
+      : "=r"(r)
+      : "r"(v)
+      : "x19", "x20", "cc", "memory");
+  return r;
+}
+
+// The caller keeps its most used variables in x19-x28, so the functions
+// above must leave those as they were.
+static long callee_saved(void) {
+  long x = 1, y = 2, z = 3, w = 4, v = 5;
+  for (int i = 0; i < 10; i++) {
+    x += reg_vars() - 8;
+    y += clobbers(i) - i;
+    z += add(i, 1) - i - 1;
+    w += x + y + z;
+    v += w;
+  }
+  return x + y * 10 + z * 100 + w * 1000 + v * 10000;
+}
+
+static int mem_inout(void) {
+  int x = 5, y;
+  asm("ldr w9, %1\n\tstr w9, %0" : "=m"(y) : "m"(x) : "x9");
+  return y;
+}
+
+static void inc_mem(int *p) {
+  asm("ldr w9, %0\n\tadd w9, w9, 1\n\tstr w9, %0" : "+Q"(*p) : : "x9");
+}
+
+struct S { int a, b; };
+
+static int mem_member(struct S *s) {
+  int r;
+  asm("ldr %w0, %1" : "=r"(r) : "m"(s->b));
+  return r;
+}
+
+static long imm(void) {
+  long r;
+  asm("mov %0, %1" : "=r"(r) : "i"(42));
+  return r;
+}
+
+static long imm_bare(void) {
+  long r, s;
+  asm("mov %0, %c2\n\tmov %1, %n3" : "=r"(r), "=r"(s) : "n"(7), "i"(5));
+  return r * 100 + s;
+}
+
+int global_var = 77;
+
+static int imm_address(void) {
+  int *p;
+  asm("adrp %0, %c1\n\tadd %0, %0, :lo12:%c1" : "=r"(p) : "i"(&global_var));
+  return *p;
+}
+
+static long matching(long a) {
+  long r;
+  asm("add %0, %0, 10" : "=r"(r) : "0"(a));
+  return r;
+}
+
+static long named(long a, long b) {
+  long r;
+  asm("sub %[out], %[x], %[y]" : [out] "=&r"(r) : [x] "r"(a), [y] "r"(b));
+  return r;
+}
+
+// %= makes the labels of each asm statement different.
+static int unique_labels(int a, int b) {
+  asm("cbz %w0, .Lz%=\n\tadd %w0, %w0, 1\n.Lz%=:" : "+r"(a));
+  asm("cbz %w0, .Lz%=\n\tadd %w0, %w0, 1\n.Lz%=:" : "+r"(b));
+  return a * 10 + b;
+}
+
+static long w_modifier(long x) {
+  long r;
+  asm("mov %w0, %w1" : "=r"(r) : "r"(x));
+  return r;
+}
+
+static long array_input(void) {
+  long a[2] = {3, 9};
+  long r;
+  asm("ldr %0, [%1, 8]" : "=r"(r) : "r"(a));
+  return r;
+}
+
+// Braces are ARM64's own, as in `ld1 {v0.4s}`: not x86's alternatives.
+static int braces(int x) {
+  asm("add %w0, %w0, 1 // {not|alternatives}" : "+r"(x));
+  return x;
+}
+
+static long sys_write(int fd, const void *buf, long n) {
+  register long x8 asm("x8") = 64;
+  register long x0 asm("x0") = fd;
+  register long x1 asm("x1") = (long)buf;
+  register long x2 asm("x2") = n;
+  asm volatile("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory");
+  return x0;
+}
+
+// rt_sigprocmask(SIG_BLOCK, NULL, &old, 8): with anything but 8 in x3,
+// the kernel returns -EINVAL.
+static long sys_sigprocmask(void) {
+  unsigned long old;
+  register long x8 asm("x8") = 135;
+  register long x0 asm("x0") = 0;
+  register long x1 asm("x1") = 0;
+  register long x2 asm("x2") = (long)&old;
+  register long x3 asm("x3") = 8;
+  asm volatile("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3) : "memory");
+  return x0;
+}
+
+// asm goto jumps to one of its labels, numbered after the operands, or
+// falls through.
+static int asm_goto(int x) {
+  asm goto("cmp %w0, 1; b.eq %l1" : : "r"(x) : : one);
+  return 0;
+one:
+  return 1;
+}
+
+static int asm_goto_loop(int n) {
+  int i = 0;
+again:
+  i++;
+  asm goto("cmp %w0, %w1; b.lt %l[again]; b %l[done]"
+           : : "r"(i), "r"(n) : "cc" : again, done);
+  return -1;
+done:
+  return i;
+}
+
+// With outputs, as gcc 11 allows: stored on every path out of the asm.
+static int asm_goto_output(int x) {
+  int y;
+  asm goto("add %w0, %w1, 1; cmp %w1, 1; b.eq %l[one]" : "=r"(y) : "r"(x) : : one);
+  return y * 10;
+one:
+  return y + 100;
+}
+
+// A jump out of a cleanup variable's scope runs its cleanup.
+static int cleaned;
+static void add_cleaned(int *p) { cleaned += *p; }
+
+static int asm_goto_cleanup(void) {
+  {
+    int c __attribute__((cleanup(add_cleaned))) = 5;
+    asm goto("b %l0" : : : : out);
+    cleaned = -100;
+  }
+out:
+  return cleaned;
+}
+
+// "w": an FP/SIMD register, for float, double and 64-bit integers
+static double asm_sqrt(double x) {
+  double r;
+  asm("fsqrt %d0, %d1" : "=w"(r) : "w"(x));
+  return r;
+}
+
+static float asm_sqrtf(float x) {
+  asm("fsqrt %s0, %s0" : "+w"(x));
+  return x;
+}
+
+static double asm_add3(double a, double b, double c) {
+  asm("fadd %d0, %d0, %d2\n\tfadd %d0, %d0, %d3" : "=w"(a) : "0"(a), "w"(b), "w"(c) : "v0", "v1");
+  return a;
+}
+
+static long asm_bits(double d) {
+  long r;
+  asm("fmov %0, %d1" : "=r"(r) : "w"(d));
+  return r;
+}
+
+int main() {
+  ASSERT(12, add(5, 7));
+  ASSERT(1, add(0x100000000, 5) == 0x100000005);
+  ASSERT(30, add_int(10, 20));
+  ASSERT(4, add_char(250, 10));
+  ASSERT(8, reg_vars());
+  ASSERT(9, clobbers(9));
+  ASSERT(3814321, callee_saved());
+  ASSERT(5, mem_inout());
+  ASSERT(8, ({ int x = 7; inc_mem(&x); x; }));
+  ASSERT(4, ({ struct S s = {3, 4}; mem_member(&s); }));
+  ASSERT(42, imm());
+  ASSERT(695, imm_bare());
+  ASSERT(77, imm_address());
+  ASSERT(15, matching(5));
+  ASSERT(6, named(10, 4));
+  ASSERT(0, unique_labels(0, 0));
+  ASSERT(22, unique_labels(1, 1));
+  ASSERT(20, unique_labels(1, 0));
+  ASSERT(1, w_modifier(0x100000005) == 5);
+  ASSERT(9, array_input());
+  ASSERT(4, braces(3));
+  ASSERT(21, sys_write(1, "written by a syscall\n", 21));
+  ASSERT(0, sys_sigprocmask());
+  ASSERT(1, asm_goto(1));
+  ASSERT(0, asm_goto(2));
+  ASSERT(5, asm_goto_loop(5));
+  ASSERT(102, asm_goto_output(1));
+  ASSERT(30, asm_goto_output(2));
+  ASSERT(5, asm_goto_cleanup());
+
+  ASSERT(3, asm_sqrt(9.0));
+  ASSERT(4, asm_sqrtf(16.0f));
+  ASSERT(6, asm_add3(1, 2, 3));
+  ASSERT(1, asm_bits(1.0) == 0x3ff0000000000000);
+
+  printf("OK\n");
+  return 0;
+}
+#endif

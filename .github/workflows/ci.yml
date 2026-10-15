@@ -21,9 +21,12 @@ jobs:
       - name: Build
         run: make -j"$(nproc)" mucc
 
-      # For test/debug.sh, which runs -g programs in gdb
-      - name: Install gdb
-        run: sudo apt-get install -y gdb
+      # gdb for test/debug.sh, which runs -g programs in it; qemu, and
+      # ARM64's binutils and gcc, for the ARM64 tests (test/cross.sh, which
+      # compares struct layouts with gcc's, and test/asm.sh
+      # against GNU as for ARM64)
+      - name: Install gdb, qemu, binutils and gcc for ARM64
+        run: sudo apt-get install -y gdb qemu-user-binfmt binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu
 
       - name: Test and self-host
         run: make test-all
@@ -74,6 +77,29 @@ jobs:
           gh release download --dir latest --pattern mucc-x86_64-linux
           chmod +x latest/mucc-x86_64-linux
           test/bootstrap.sh latest/mucc-x86_64-linux latest/next
+
+  # Natively on ARM64 (GitHub's ARM64 runner): the same tests with glibc
+  # and with the bundled musl, self-hosting, the single binary, and its
+  # bootstrap, as for x86-64
+  test-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build
+        run: make -j"$(nproc)" mucc
+
+      - name: Install gdb
+        run: sudo apt-get install -y gdb
+
+      - name: Test and self-host
+        run: make test-all
+
+      - name: Test and self-host on musl
+        run: make test-all LIBC=mucc
+
+      - name: Bootstrap
+        run: make test-bootstrap
 
   # On each distribution, with no C compiler, binutils or C headers, the
   # single binary builds zlib, Lua, Tcl, SQLite and mucc, and each passes

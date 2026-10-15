@@ -6,6 +6,20 @@ mucc=$1
 musl=
 [[ $mucc == *--libc=mucc* ]] && musl=1
 
+# The CPU, which mucc targets by default: x86_64 or aarch64, and assembly
+# for it: exit(7) by a system call, return 42, and an instruction GNU as
+# knows and the built-in assembler doesn't
+arch=$(uname -m | sed 's/arm64/aarch64/')
+if [ $arch = aarch64 ]; then
+  exit7='mov x8, 93; mov x0, 7; svc 0'
+  ret42='mov w0, 42'
+  unknown_insn='csdb'
+else
+  exit7='mov $60, %eax; mov $7, %edi; syscall'
+  ret42='mov $42, %eax'
+  unknown_insn='fwait'
+fi
+
 tmp=`mktemp -d /tmp/mucc-test-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
 echo > $tmp/empty.c
@@ -24,6 +38,22 @@ rm -f $tmp/out
 ./mucc -c -o $tmp/out $tmp/empty.c
 [ -f $tmp/out ]
 check -o
+
+# With -c, linker inputs are unused: no link, and -o is still allowed
+rm -f $tmp/out $tmp/a.out
+$mucc -c -o $tmp/out $tmp/empty.c $tmp/out2.o -lm -Wl,-z,now 2> $tmp/err &&
+    [ -f $tmp/out ] &&
+    grep -q 'out2.o: linker input file unused because linking not done' $tmp/err
+check '-c with linker inputs'
+$mucc -fsyntax-only $tmp/empty.c -lm
+check '-fsyntax-only with -l'
+
+# A failed fork() is an error. (The process limit doesn't bind root.)
+if [ $(id -u) != 0 ]; then
+  (ulimit -u 1; exec $mucc -c -o $tmp/out $tmp/empty.c) 2>&1 |
+      grep -q 'cannot run .*: Resource temporarily unavailable'
+  check 'fork failure'
+fi
 
 # Temporary files go in $TMPDIR (or /tmp, or the current directory with
 # no /tmp, as in an empty container)
@@ -169,6 +199,10 @@ check -D
 # -D
 echo foo | $mucc -Dfoo=bar -E -xc - | grep -q bar
 check -D
+
+# A -D value can end in a comment, with no newline after it.
+echo foo | $mucc '-Dfoo=bar // a comment' -E -xc - | grep -q bar
+check '-D with a comment'
 
 # -U
 echo foo | $mucc -Dfoo=bar -Ufoo -E -xc - | grep -q foo
@@ -457,9 +491,9 @@ if [ $musl ]; then
 fi
 
 # -nostdlib: a program with its own _start, and no C library
-cat > $tmp/nostdlib.c <<'EOF'
+cat > $tmp/nostdlib.c <<EOF
 void _start(void) {
-  __asm__ volatile("mov $60, %eax; mov $7, %edi; syscall");
+  __asm__ volatile("$exit7");
 }
 EOF
 $mucc -nostdlib -static -o $tmp/nostdlib $tmp/nostdlib.c
@@ -527,7 +561,7 @@ check '-I of a default include directory'
 # <sys/cdefs.h> then came first and dropped the packed from epoll_event.)
 # Only for a mucc with its include/ next to it, as stage2/mucc has none,
 # and with glibc.
-if [ -d "$(dirname ${mucc%% *})/include" ] && [ ! $musl ]; then
+if [ -d "$(dirname ${mucc%% *})/include" ] && [ ! $musl ] && [ $arch = x86_64 ]; then
   printf '#include <sys/epoll.h>\n_Static_assert(sizeof(struct epoll_event) == 12, "");\n' > $tmp/sysdir.c
   $mucc -I/usr/include/x86_64-linux-gnu -I/usr/include -c -o $tmp/sysdir.o $tmp/sysdir.c
   check '-I of a system directory'
@@ -569,6 +603,14 @@ echo 'int foo() {}' | $mucc -c -o $tmp/bar.o -xc -
 echo 'int main() {}' | $mucc -c -o $tmp/baz.o -xc -
 cc -Wl,-z,muldefs,--gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
 check -Wl,
+
+# Objects mucc makes link into the system compiler's default executables
+# (PIEs), with data from a shared library (on ARM64, through the GOT)
+if [ -z "$musl" ]; then
+  printf '#include <stdio.h>\nint main(void) { fputs("ok\\n", stdout); return 0; }\n' > $tmp/pie.c
+  $mucc -Iinclude -c -o $tmp/pie.o $tmp/pie.c && cc -o $tmp/pie $tmp/pie.o && $tmp/pie | grep -q ok
+  check 'linked by cc'
+fi
 
 # -Xlinker
 echo 'int foo() {}' | $mucc -c -o $tmp/foo.o -xc -
@@ -632,14 +674,38 @@ std_version() {
 check -std=
 
 # -dumpmachine prints the target, as gcc does
-[ "$($mucc -dumpmachine)" = x86_64-linux-gnu ]
+[ "$($mucc -dumpmachine)" = $arch-linux-gnu ]
 check -dumpmachine
+
+# --target= picks the other CPU (or this one), and so does -target, as
+# clang has it
+[ "$($mucc --target=aarch64-linux-gnu -dumpmachine)" = aarch64-linux-gnu ] &&
+  [ "$($mucc -target x86_64-linux -dumpmachine)" = x86_64-linux-gnu ] &&
+  ! $mucc --target=riscv64-linux -dumpmachine 2> /dev/null
+check '--target='
+
+# An object for each: its e_machine is 62 for x86-64, 183 for ARM64.
+for t in x86_64 aarch64; do
+  $mucc --target=$t-linux -c -o $tmp/target-$t.o $tmp/empty.c &&
+    od -An -tu2 -j18 -N2 $tmp/target-$t.o | tr -d ' ' > $tmp/target-$t.m
+done
+[ "$(cat $tmp/target-x86_64.m)" = 62 ] && [ "$(cat $tmp/target-aarch64.m)" = 183 ]
+check '--target= objects'
+
+# ARM64's own macros, and its char and wchar_t, which are unsigned
+$mucc --target=aarch64-linux -E -dM -xc /dev/null > $tmp/arm64.dm &&
+  grep -q '^#define __aarch64__ 1$' $tmp/arm64.dm &&
+  grep -q '^#define __CHAR_UNSIGNED__ 1$' $tmp/arm64.dm &&
+  grep -q '^#define __WCHAR_TYPE__ unsigned int$' $tmp/arm64.dm &&
+  grep -q '^#define __LDBL_MANT_DIG__ 113$' $tmp/arm64.dm &&
+  ! grep -q -e __x86_64__ -e __SSE $tmp/arm64.dm
+check '--target=aarch64 macros'
 
 # -dumpversion, -print-multiarch, -print-file-name= and -print-prog-name=,
 # which build tools ask
 $mucc -dumpversion | grep -q '^[0-9][0-9.]*$'
 check -dumpversion
-[ "$($mucc -print-multiarch)" = x86_64-linux-gnu ]
+[ "$($mucc -print-multiarch)" = $arch-linux-gnu ]
 check -print-multiarch
 [ "$($mucc -print-file-name=libfoo.a)" = libfoo.a ]
 check -print-file-name=
@@ -722,9 +788,9 @@ check '-march= -mtune='
 # x86-64's SSE and SSE2 are on; -msse4.1 and the like define the macros of
 # their extensions and those before; AVX's are accepted and define nothing
 printf '#if !defined __SSE__ || !defined __SSE2__ || !defined __MMX__ || defined __SSE3__\n#error\n#endif\n' > $tmp/isa.c
-$mucc -fsyntax-only $tmp/isa.c
+$mucc --target=x86_64-linux -fsyntax-only $tmp/isa.c
 check 'SSE2 macros'
-$mucc -E -dM -msse4.1 -maes -mavx2 -mfma -x c /dev/null > $tmp/isa.out &&
+$mucc --target=x86_64-linux -E -dM -msse4.1 -maes -mavx2 -mfma -x c /dev/null > $tmp/isa.out &&
   grep -q __SSE4_1__ $tmp/isa.out && grep -q __SSSE3__ $tmp/isa.out &&
   grep -q __AES__ $tmp/isa.out && ! grep -q __SSE4_2__ $tmp/isa.out &&
   ! grep -q __AVX $tmp/isa.out
@@ -761,7 +827,7 @@ $tmp/incdir.out
 check '-I dir and -L dir'
 
 # Built-in assembler: a .s file and a C file link together
-printf '  .globl answer\n  .text\nanswer:\n  mov $42, %%eax\n  ret\n' > $tmp/answer.s
+printf '  .globl answer\n  .text\nanswer:\n  %s\n  ret\n' "$ret42" > $tmp/answer.s
 printf 'int answer(void);\nint main(void) { return answer(); }\n' > $tmp/main.c
 $mucc -o $tmp/answer $tmp/answer.s $tmp/main.c
 $tmp/answer
@@ -770,10 +836,33 @@ check '.s and .c linked together'
 
 # .S: assembly through the preprocessor, as with gcc. `#` lines that
 # aren't directives are comments, a quote in one is just a character, and
-# $NAME is an immediate whose NAME is a macro.
+# $NAME is an immediate whose NAME is a macro. (On ARM64, the same with
+# its instructions and comments.)
 cat > $tmp/sys.h <<'EOF'
 #define ANSWER 40
 EOF
+if [ $arch = aarch64 ]; then
+cat > $tmp/answer2.S <<'EOF'
+#include "sys.h"
+#define STR(x) #x
+# don't mind this comment
+  .text
+  .globl answer2
+answer2:
+#ifdef __ASSEMBLER__
+  mov w0, ANSWER           // the answer, less 2
+#endif
+  add w0, w0, 2
+  mov w1, 0
+1:
+  add w1, w1, 1            // 1b and 1f are labels, not numbers
+  cmp w1, 3
+  b.ne 1b
+  ret
+EOF
+answer2_E='mov w0, 40'
+else
+answer2_E='mov \$40, %eax'
 cat > $tmp/answer2.S <<'EOF'
 #include "sys.h"
 #define STR(x) #x
@@ -795,6 +884,7 @@ answer2:
 start: .ascii "ab"
 end:
 EOF
+fi
 printf 'int answer2(void);\nint main(void) { return answer2(); }\n' > $tmp/main2.c
 $mucc -fno-as-fallback -o $tmp/answer2 $tmp/answer2.S $tmp/main2.c
 $tmp/answer2
@@ -802,25 +892,25 @@ $tmp/answer2
 check '.S'
 $mucc -E $tmp/answer2.S | grep -q '^# don.t mind this comment$'
 check '.S with -E keeps comments'
-$mucc -E $tmp/answer2.S | grep -q 'mov \$40, %eax'
+$mucc -E $tmp/answer2.S | grep -q "$answer2_E"
 check '.S with -E expands $NAME'
 cp $tmp/answer2.S $tmp/answer3.asm
 $mucc -fno-as-fallback -c -o $tmp/answer3.o -x assembler-with-cpp $tmp/answer3.asm
 check '-x assembler-with-cpp'
 
 # ... an instruction it doesn't know in a .s file: a note, then `as`
-printf '  .text\n  .globl f\nf:\n  fwait\n  ret\n' > $tmp/unknown.s
+printf '  .text\n  .globl f\nf:\n  %s\n  ret\n' $unknown_insn > $tmp/unknown.s
 $mucc -c -o $tmp/unknown.o $tmp/unknown.s 2>&1 | grep -q 'using the system assembler'
 check 'unknown instruction in a .s file falls back to as'
 
 # ... and in an asm() statement: quietly `as`
-echo 'int main() { asm("fwait"); return 0; }' > $tmp/unknown.c
+echo "int main() { asm(\"$unknown_insn\"); return 0; }" > $tmp/unknown.c
 $mucc -o $tmp/unknown $tmp/unknown.c 2> $tmp/err && [ ! -s $tmp/err ] && $tmp/unknown
 check 'unknown instruction in asm() falls back to as'
 
 # -fno-as-fallback: either one is an error instead, naming the reason
 $mucc -fno-as-fallback -c -o $tmp/unknown.o $tmp/unknown.s 2>&1 |
-    grep -q "unknown.s: the built-in assembler can't assemble this: unknown instruction 'fwait'"
+    grep -q "unknown.s: the built-in assembler can't assemble this: unknown instruction '$unknown_insn'"
 check '-fno-as-fallback with a .s file'
 
 $mucc -fno-as-fallback -c -o $tmp/unknown.o $tmp/unknown.c 2>&1 |
@@ -923,7 +1013,7 @@ check '-MG'
 
 echo '#define MINE(a, ...) a + __VA_ARGS__' | $mucc -dM -E -xc - > $tmp/opt/dm
 grep -qx '#define MINE(a, \.\.\.) a + __VA_ARGS__' $tmp/opt/dm &&
-  grep -q '^#define __x86_64__ 1$' $tmp/opt/dm && ! grep -q '__LINE__' $tmp/opt/dm
+  grep -q "^#define __${arch}__ 1$" $tmp/opt/dm && ! grep -q '__LINE__' $tmp/opt/dm
 check '-dM'
 
 echo IM | $mucc -imacros $tmp/opt/im.h -E -P -xc - | grep -qx 5
@@ -980,9 +1070,11 @@ $mucc -fvisibility=hidden -S -o $tmp/vis4.s $tmp/vis4.c &&
   $mucc -S -o $tmp/vis5.s $tmp/vis4.c && grep -q '\.hidden e$' $tmp/vis5.s
 check 'visibility of an earlier declaration'
 
-# __builtin_trap() traps (SIGILL), unlike __builtin_unreachable()
+# __builtin_trap() traps, unlike __builtin_unreachable(): as with gcc,
+# SIGILL from ud2 on x86-64, SIGTRAP from brk on ARM64
+[ $arch = aarch64 ] && trap_status=133 || trap_status=132
 echo 'int main(void) { __builtin_trap(); return 0; }' > $tmp/trap.c
-$mucc -o $tmp/trap $tmp/trap.c && { $tmp/trap; [ $? -eq 132 ]; } 2> /dev/null
+$mucc -o $tmp/trap $tmp/trap.c && { $tmp/trap; [ $? -eq $trap_status ]; } 2> /dev/null
 check '__builtin_trap'
 
 # -g: code from a macro after #line is on #line's numbering, as with gcc

@@ -8,12 +8,15 @@
 //   2 preprocess.c  Token list -> Token list, with macros expanded
 //   3 parser.c      Token list -> Obj (functions, globals) and Node (AST),
 //     type.c        typed by add_type()
-//   4 cgen.c        AST -> x86-64 assembly text
+//   4 cgen.c        AST -> x86-64 assembly text (with what both share)
+//     cgen_arm64.c  AST -> ARM64 assembly text
 //   5 asm.c         assembly text -> ELF object file
 //   6 link.c        object files and archives -> static executable
 //
 // main.c is the driver that runs them; ar.c is `mucc -ar`; strings.c,
-// hashmap.c and unicode.c are support code.
+// hashmap.c and unicode.c are support code. The target is x86-64 or ARM64
+// (target_arm64), the CPU mucc runs on unless --target= says otherwise;
+// runtime/arm64.c is the library ARM64 code needs (see cgen_arm64.c).
 //
 // Where things are
 //
@@ -38,8 +41,10 @@
 //                           and is_known_attribute()
 //   a warning               parser.c "Warnings"
 //   a new AST node kind     NodeKind below, type.c add_type(), and cgen.c
-//                           gen_expr() or gen_stmt()
+//                           and cgen_arm64.c gen_expr() or gen_stmt()
 //   an x86 instruction      asm.c "Instructions", insns[]
+//   an ARM64 instruction    asm.c "ARM64: instructions", a64_insns[]
+//   an ARM64 relocation     asm.c arm64_put_field(), link.c apply_arm64()
 //   a test                  test/*.c (ASSERT) for the language,
 //                           test/errors.sh for diagnostics, test/driver.sh
 //                           for options, test/thirdparty/NAME.sh for a
@@ -104,6 +109,7 @@ typedef struct {
 } StringArray;
 
 void *arena_alloc(size_t size);
+void *grow(void *arr, int n, int *cap, int elem_size);
 void strarray_push(StringArray *arr, char *s);
 char *format(char *fmt, ...) __attribute__((format(printf, 1, 2)));
 char *vformat(char *fmt, va_list ap);
@@ -126,6 +132,7 @@ typedef struct {
   char *name;
   int file_no;
   char *contents;
+  int include_depth; // how many #includes deep it was read
 
   // For #line directive
   char *display_name;
@@ -183,7 +190,17 @@ extern int diag_state;
 void pragma_diagnostic(Token *tok);
 bool warning_on(char *name);
 noreturn void error_expected(Token *tok, char *what);
-bool equal(Token *tok, char *op);
+
+// Returns true if the current token is `op`. The parser and preprocessor
+// call this for nearly every token and nearly every call fails, usually
+// on the first character, so that's checked here, inline, before the
+// rest. strncmp, not memcmp, stops at the end of an `op` shorter than the
+// token instead of reading past it.
+static inline bool equal(Token *tok, char *op) {
+  return tok->loc[0] == op[0] && strncmp(tok->loc, op, tok->len) == 0 &&
+         op[tok->len] == '\0';
+}
+
 Token *skip(Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
 void convert_pp_tokens(Token *tok);
@@ -226,7 +243,7 @@ struct Obj {
   int offset;
   bool is_used; // named somewhere after its declaration (for warnings)
   int reg;      // kept in callee-saved register reg - 1, or 0 (cgen.c)
-  int asm_reg;  // `register T x asm("r10")`: x86 register number + 1, or 0
+  int asm_reg;  // `register T x asm("r10")`: its register number + 1, or 0
   bool is_overaligned; // aligned above 16: its slot holds its address (cgen.c)
   int uses;     // how often it's used, weighted by loop depth (cgen.c)
   bool is_addr_taken;
@@ -270,7 +287,7 @@ struct Obj {
   int stack_size;
   int nregs;        // callee-saved registers its variables use
   int regs_offset;  // where it saves them in its frame
-  int asm_regs;     // x86 registers its asm statements use (bit mask)
+  int asm_regs;     // registers its asm statements use (bit mask)
   bool is_kept;     // __attribute__((used)): emitted even if never called
   bool is_ctor;     // __attribute__((constructor)): run before main
   bool is_dtor;     // __attribute__((destructor)): run after main
@@ -360,7 +377,8 @@ typedef enum {
 
 // An operand of an asm statement: `[name] "constraint" (expr)`. x86
 // registers are numbered as the instruction set does: %rax 0, %rcx 1,
-// %rdx 2, %rbx 3, %rsp 4, %rbp 5, %rsi 6, %rdi 7, %r8-%r15 8-15.
+// %rdx 2, %rbx 3, %rsp 4, %rbp 5, %rsi 6, %rdi 7, %r8-%r15 8-15; ARM64's
+// x0-x30 0-30, and v0-v31 0-31.
 typedef struct {
   char *name;      // [name], or NULL
   Token *tok;      // the constraint, for errors
@@ -625,6 +643,8 @@ extern Type *ty_uint128;
 extern Type *ty_float;
 extern Type *ty_double;
 extern Type *ty_ldouble;
+Type *ty_wchar(void);
+void write_ldouble(char *buf, long double v);
 
 bool is_integer(Type *ty);
 bool is_int128(Type *ty);
@@ -636,6 +656,7 @@ bool is_numeric(Type *ty);
 bool is_vector(Type *ty);
 bool has_ldouble(Type *ty);
 bool is_ret_in_memory(Type *ty);
+int hfa_count(Type *ty, Type **base);
 bool has_unaligned_member(Type *ty);
 bool is_assignable(Type *to, Node *from);
 bool is_compatible(Type *t1, Type *t2);
@@ -654,7 +675,7 @@ bool has_stmt_fields(NodeKind kind);
 void add_type(Node *node);
 void check_scalar(Node *node);
 char *type_name(Type *ty);
-void check_assign(Type *to, Node *from, char *what);
+void check_assign(Type *to, Node *from, char *fmt, ...) __attribute__((format(printf, 3, 4)));
 
 //---------- cgen.c: code generator (stage 4) --------------------------------
 
@@ -662,11 +683,36 @@ void codegen(Obj *prog, FILE *out);
 int64_t align_to(int64_t n, int64_t align);
 extern bool has_inline_asm;
 
+// Shared with cgen_arm64.c, which cgen.c's codegen() calls for ARM64
+extern char *pending_push;
+void flush_push(void);
+void println(char *fmt, ...) __attribute__((format(printf, 1, 2)));
+int count(void);
+bool is_foldable(Node *node);
+int64_t fold(Node *node);
+bool is_aggregate(Type *ty);
+bool is_int_or_ptr(Type *ty);
+Obj *local_scalar(Node *node);
+bool is_param(Obj *fn, Obj *var);
+void emit_binding(Obj *prog, Obj *var);
+void emit_loc(Token *tok);
+void emit_function_loc(Obj *fn);
+bool block_begin(Node *node);
+void block_end(Node *node);
+char *asm_template(Node *node, char **targets,
+                   char *(*operand_text)(Node *, AsmOperand *, char));
+
+//---------- cgen_arm64.c: code generator for ARM64 (stage 4) ----------------
+
+void assign_frames_arm64(Obj *prog);
+void emit_text_arm64(Obj *prog);
+
 //---------- asm.c: assembler (stage 5) --------------------------------------
 
 bool assemble_text(char *src, char *path, char **why);
 int gp_reg_number(char *name);
 char *gp_reg_name(int num, int size);
+bool arm64_put_field(unsigned char *loc, int type, int64_t val);
 
 //---------- ar.c: archiver --------------------------------------------------
 
@@ -692,6 +738,7 @@ int display_width(char *p, int len);
 typedef struct {
   char *key;
   int keylen;
+  uint32_t hash; // the key's, so a probe can skip other keys quickly
   void *val;
 } HashEntry;
 
@@ -707,6 +754,7 @@ void hashmap_put(HashMap *map, char *key, void *val);
 void hashmap_put2(HashMap *map, char *key, int keylen, void *val);
 void hashmap_delete(HashMap *map, char *key);
 void hashmap_delete2(HashMap *map, char *key, int keylen);
+void hashmap_free(HashMap *map);
 void hashmap_test(void);
 
 //---------- main.c: driver --------------------------------------------------
@@ -727,4 +775,5 @@ extern bool opt_asm_cpp;
 extern bool opt_fcommon;
 extern char *opt_fvisibility;
 extern int opt_std;
+extern bool target_arm64;
 extern char *base_file;

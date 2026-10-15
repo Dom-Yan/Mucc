@@ -2,6 +2,11 @@
 // argument, it prints each result's bytes: test/intrin.sh compares that,
 // built by mucc, with gcc's, built with gcc's own headers.
 // flags: -msse4.2 -maes -mpclmul
+#ifndef __x86_64__
+// They are x86-64's alone.
+#include <stdio.h>
+int main(void) { printf("OK\n"); return 0; }
+#else
 #include <immintrin.h>
 #include <stdio.h>
 #include <string.h>
@@ -1607,3 +1612,4 @@ int main(int argc, char **argv) {
   return 0;
 }
 
+#endif

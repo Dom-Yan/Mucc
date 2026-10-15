@@ -34,6 +34,7 @@ struct Macro {
   MacroParam *params;
   char *va_args_name;
   Token *body;
+  char *text; // define_macro()'s body, until macro_body() tokenizes it
   macro_handler_fn *handler;
   bool is_spelling; // a gcc keyword's other spelling (see keyword_spellings)
 };
@@ -94,10 +95,13 @@ static Token *copy_token(Token *tok) {
   return t;
 }
 
+// An EOF always starts a line, so a directive's line ends at it, as in
+// a macro's argument with a #define in it.
 static Token *new_eof(Token *tok) {
   Token *t = copy_token(tok);
   t->kind = TK_EOF;
   t->len = 0;
+  t->at_bol = true;
   return t;
 }
 
@@ -454,6 +458,16 @@ static Macro *add_macro(char *name, bool is_objlike, Token *body) {
   m->body = body;
   hashmap_put(&macros, name, m);
   return m;
+}
+
+// A macro's body. One define_macro() made (the predefined ones and -D's)
+// is tokenized when it's first needed: most never are.
+static Token *macro_body(Macro *m) {
+  if (m->text) {
+    m->body = tokenize(new_file("<built-in>", 1, m->text));
+    m->text = NULL;
+  }
+  return m->body;
 }
 
 // Definitions #pragma push_macro saved, the latest first. `m` is NULL if
@@ -819,7 +833,7 @@ static Token *paste(Token *lhs, Token *rhs) {
 
   // Tokenize the resulting string.
   Token *tok = tokenize(new_file(lhs->file->name, lhs->file->file_no, buf));
-  if (tok->next->kind != TK_EOF)
+  if (tok->kind == TK_EOF || tok->next->kind != TK_EOF)
     error_tok(lhs, "pasting forms '%s', an invalid token", buf);
   return tok;
 }
@@ -1046,7 +1060,7 @@ static bool expand_macro(Token **rest, Token *tok) {
   // Object-like macro application
   if (m->is_objlike) {
     Hideset *hs = hideset_union(tok->hideset, new_hideset(m->name));
-    *rest = expansion(m->body, hs, tok, tok->next, false);
+    *rest = expansion(macro_body(m), hs, tok, tok->next, false);
     take_place(*rest, tok, tok->next);
     return true;
   }
@@ -1228,6 +1242,12 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok) {
   if (guard_name && hashmap_get(&macros, guard_name))
     return tok;
 
+  // A file that includes itself with nothing to stop it would go on until
+  // memory runs out. gcc's limit is 200.
+  int depth = filename_tok->file->include_depth + 1;
+  if (depth > 200)
+    error_tok(filename_tok, "#include nested depth 200 exceeds maximum of 200");
+
   Token *tok2 = tokenize_file(path);
 
   // -MG: a header that isn't there yet is a dependency, to be generated.
@@ -1237,6 +1257,7 @@ static Token *include_file(Token *tok, char *path, Token *filename_tok) {
   }
   if (!tok2)
     error_tok(filename_tok, "%s: cannot open file: %s", path, strerror(errno));
+  tok2->file->include_depth = depth;
 
   guard_name = detect_include_guard(tok2);
   if (guard_name)
@@ -1766,8 +1787,7 @@ static Token *preprocess2(Token *tok) {
 //---------- Predefined and builtin macros -----------------------------------
 
 void define_macro(char *name, char *buf) {
-  Token *tok = tokenize(new_file("<built-in>", 1, buf));
-  add_macro(name, true, tok);
+  add_macro(name, true, NULL)->text = buf;
 }
 
 // A predefined function-like macro, from `def` as a #define has it:
@@ -1827,7 +1847,7 @@ void print_macros(FILE *out) {
         fprintf(out, "...");
       fprintf(out, ")");
     }
-    for (Token *t = m->body; t && t->kind != TK_EOF; t = t->next)
+    for (Token *t = macro_body(m); t && t->kind != TK_EOF; t = t->next)
       fprintf(out, "%s%.*s", t == m->body || t->has_space ? " " : "", t->len, t->loc);
     fprintf(out, "\n");
   }
@@ -1928,8 +1948,6 @@ void init_macros(void) {
   define_macro("__STDC_UTF_32__", "1");
   define_macro("__STDC__", "1");
   define_macro("__USER_LABEL_PREFIX__", "");
-  define_macro("__amd64", "1");
-  define_macro("__amd64__", "1");
   define_macro("__mucc__", "1");
   define_macro("__builtin_alloca", "alloca"); // as musl's <alloca.h> uses
   define_macro("__extension__", ""); // only quiets gcc's -pedantic
@@ -1938,19 +1956,42 @@ void init_macros(void) {
   define_macro("__linux__", "1");
   define_macro("__unix", "1");
   define_macro("__unix__", "1");
-  define_macro("__x86_64", "1");
-  define_macro("__x86_64__", "1");
-
-  // The instruction set extensions every x86-64 CPU has, as gcc defines
-  // them; include/*intrin.h has their intrinsics (see mmintrin.h).
-  define_macro("__MMX__", "1");
-  define_macro("__SSE__", "1");
-  define_macro("__SSE2__", "1");
-  define_macro("__FXSR__", "1");
-  define_macro("__SSE_MATH__", "1");
-  define_macro("__SSE2_MATH__", "1");
-  define_macro("__MMX_WITH_SSE__", "1");
   define_macro("__VERSION__", "\"mucc " MUCC_VERSION "\"");
+
+  if (target_arm64) {
+    // ARMv8-A as gcc describes it, but for NEON: mucc has no <arm_neon.h>,
+    // so code takes its portable paths.
+    define_macro("__aarch64__", "1");
+    define_macro("__AARCH64EL__", "1");
+    define_macro("__AARCH64_CMODEL_SMALL__", "1");
+    define_macro("__ARM_64BIT_STATE", "1");
+    define_macro("__ARM_ARCH", "8");
+    define_macro("__ARM_ARCH_8A", "1");
+    define_macro("__ARM_ARCH_ISA_A64", "1");
+    define_macro("__ARM_ARCH_PROFILE", "65");
+    define_macro("__ARM_FEATURE_CLZ", "1");
+    define_macro("__ARM_FEATURE_IDIV", "1");
+    define_macro("__ARM_FEATURE_UNALIGNED", "1");
+    define_macro("__ARM_FP", "14");
+    define_macro("__ARM_PCS_AAPCS64", "1");
+    define_macro("__ARM_SIZEOF_MINIMAL_ENUM", "4");
+    define_macro("__ARM_SIZEOF_WCHAR_T", "4");
+  } else {
+    define_macro("__amd64", "1");
+    define_macro("__amd64__", "1");
+    define_macro("__x86_64", "1");
+    define_macro("__x86_64__", "1");
+
+    // The instruction set extensions every x86-64 CPU has, as gcc defines
+    // them; include/*intrin.h has their intrinsics (see mmintrin.h).
+    define_macro("__MMX__", "1");
+    define_macro("__SSE__", "1");
+    define_macro("__SSE2__", "1");
+    define_macro("__FXSR__", "1");
+    define_macro("__SSE_MATH__", "1");
+    define_macro("__SSE2_MATH__", "1");
+    define_macro("__MMX_WITH_SSE__", "1");
+  }
 
   // As clang does, mucc says it is gcc 4.2, so headers take their GNU
   // paths (glibc's __REDIRECT and attributes, libtool's checks) but none
@@ -1974,8 +2015,9 @@ void init_macros(void) {
   define_macro("__INT_MAX__", "0x7fffffff");
   define_macro("__LONG_MAX__", "0x7fffffffffffffffL");
   define_macro("__LONG_LONG_MAX__", "0x7fffffffffffffffLL");
-  define_macro("__WCHAR_MAX__", "0x7fffffff");
-  define_macro("__WCHAR_MIN__", "(-__WCHAR_MAX__ - 1)");
+  // wchar_t is int, but unsigned int on ARM64
+  define_macro("__WCHAR_MAX__", target_arm64 ? "0xffffffffU" : "0x7fffffff");
+  define_macro("__WCHAR_MIN__", target_arm64 ? "0U" : "(-__WCHAR_MAX__ - 1)");
   define_macro("__WINT_MAX__", "0xffffffffU");
   define_macro("__WINT_MIN__", "0U");
   define_macro("__SIZE_MAX__", "0xffffffffffffffffUL");
@@ -1987,7 +2029,7 @@ void init_macros(void) {
   define_macro("__SIZEOF_WCHAR_T__", "4");
   define_macro("__SIZEOF_WINT_T__", "4");
   define_macro("__PTRDIFF_TYPE__", "long int");
-  define_macro("__WCHAR_TYPE__", "int");
+  define_macro("__WCHAR_TYPE__", target_arm64 ? "unsigned int" : "int");
   define_macro("__WINT_TYPE__", "unsigned int");
   define_macro("__INTMAX_TYPE__", "long int");
   define_macro("__UINTMAX_TYPE__", "long unsigned int");
@@ -2007,9 +2049,6 @@ void init_macros(void) {
   define_macro("__DBL_MAX__", "((double)1.79769313486231570814527423731704357e+308L)");
   define_macro("__DBL_MIN__", "((double)2.22507385850720138309023271733240406e-308L)");
   define_macro("__DBL_EPSILON__", "((double)2.22044604925031308084726333618164062e-16L)");
-  define_macro("__LDBL_MANT_DIG__", "64");
-  define_macro("__LDBL_DIG__", "18");
-  define_macro("__DECIMAL_DIG__", "21");
   define_macro("__GCC_ATOMIC_BOOL_LOCK_FREE", "2");
   define_macro("__GCC_ATOMIC_CHAR_LOCK_FREE", "2");
   define_macro("__GCC_ATOMIC_CHAR16_T_LOCK_FREE", "2");
@@ -2026,7 +2065,8 @@ void init_macros(void) {
   define_macro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4", "1");
   define_macro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8", "1");
   define_macro("__BIGGEST_ALIGNMENT__", "16");
-  define_macro("__SIZEOF_FLOAT80__", "16");
+  if (!target_arm64)
+    define_macro("__SIZEOF_FLOAT80__", "16");
   define_macro("__SIG_ATOMIC_TYPE__", "int");
   define_macro("__SIG_ATOMIC_MAX__", "0x7fffffff");
   define_macro("__SIG_ATOMIC_MIN__", "(-__SIG_ATOMIC_MAX__ - 1)");
@@ -2100,12 +2140,28 @@ void init_macros(void) {
   define_macro("__LDBL_MIN_10_EXP__", "(-4931)");
   define_macro("__LDBL_MAX_EXP__", "16384");
   define_macro("__LDBL_MAX_10_EXP__", "4932");
-  define_macro("__LDBL_DECIMAL_DIG__", "21");
-  define_macro("__LDBL_MAX__", "1.18973149535723176502126385303097021e+4932L");
-  define_macro("__LDBL_NORM_MAX__", "1.18973149535723176502126385303097021e+4932L");
   define_macro("__LDBL_MIN__", "3.36210314311209350626267781732175260e-4932L");
-  define_macro("__LDBL_EPSILON__", "1.08420217248550443400745280086994171e-19L");
-  define_macro("__LDBL_DENORM_MIN__", "3.64519953188247460252840593361941982e-4951L");
+  if (target_arm64) {
+    // IEEE quadruple precision: a 113-bit mantissa
+    define_macro("__LDBL_MANT_DIG__", "113");
+    define_macro("__LDBL_DIG__", "33");
+    define_macro("__DECIMAL_DIG__", "36");
+    define_macro("__LDBL_DECIMAL_DIG__", "36");
+    define_macro("__LDBL_MAX__", "1.18973149535723176508575932662800702e+4932L");
+    define_macro("__LDBL_NORM_MAX__", "1.18973149535723176508575932662800702e+4932L");
+    define_macro("__LDBL_EPSILON__", "1.92592994438723585305597794258492732e-34L");
+    define_macro("__LDBL_DENORM_MIN__", "6.47517511943802511092443895822764655e-4966L");
+  } else {
+    // x87 extended precision: a 64-bit mantissa
+    define_macro("__LDBL_MANT_DIG__", "64");
+    define_macro("__LDBL_DIG__", "18");
+    define_macro("__DECIMAL_DIG__", "21");
+    define_macro("__LDBL_DECIMAL_DIG__", "21");
+    define_macro("__LDBL_MAX__", "1.18973149535723176502126385303097021e+4932L");
+    define_macro("__LDBL_NORM_MAX__", "1.18973149535723176502126385303097021e+4932L");
+    define_macro("__LDBL_EPSILON__", "1.08420217248550443400745280086994171e-19L");
+    define_macro("__LDBL_DENORM_MIN__", "3.64519953188247460252840593361941982e-4951L");
+  }
   define_macro("__LDBL_HAS_DENORM__", "1");
   define_macro("__LDBL_HAS_INFINITY__", "1");
   define_macro("__LDBL_HAS_QUIET_NAN__", "1");

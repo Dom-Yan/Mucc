@@ -55,13 +55,17 @@ typedef struct Sym {
 } Sym;
 
 // A jump to a label. It's short (2 bytes) or long (5 or 6); layout()
-// decides, and finish_section() writes its bytes at `pos`.
+// decides, and finish_section() writes its bytes at `pos`. On ARM64, a
+// conditional branch is short (4 bytes) or long (8: the opposite branch
+// over a b).
 typedef struct {
   int pos;
-  int cc;             // condition code (4 for je, ...), or -1 for jmp
+  int cc;             // condition code (4 for je, ...), or -1 for jmp; on
+                      // ARM64, the short branch's relocation type
   Sym *target;
   bool is_long;
   uint64_t field;     // after layout: final offset of a long jump's rel32
+  uint32_t insn;      // ARM64: the short branch, without its offset
 } Jump;
 
 // A 4- or 8-byte hole at `pos` for the address of `sym` + `addend`, made
@@ -155,14 +159,6 @@ static noreturn void fail(char *fmt, ...) {
   fail_msg = format("%s, in '%s'", vformat(fmt, ap), stmt ? stmt : "");
   va_end(ap);
   longjmp(*fail_jmp, 1);
-}
-
-// Makes room for one more element in a growing array.
-static void *grow(void *arr, int n, int *cap, int elem_size) {
-  if (n < *cap)
-    return arr;
-  *cap = *cap ? *cap * 2 : 64;
-  return realloc(arr, (size_t)*cap * elem_size);
 }
 
 static void put(Bytes *b, int byte) {
@@ -296,6 +292,13 @@ static void hole(int type, Sym *sym, int64_t addend, int size) {
   out_n(size, 0);
 }
 
+// The relocation for an absolute address in `size` (4 or 8) bytes
+static int abs_reloc(int size) {
+  if (target_arm64)
+    return size == 8 ? R_AARCH64_ABS64 : R_AARCH64_ABS32;
+  return size == 8 ? R_X86_64_64 : R_X86_64_32;
+}
+
 // Leaves a `size`-byte hole for `sym - minus + addend`, filled in pass 3,
 // when the labels' addresses are known.
 static void diff_hole(Sym *sym, Sym *minus, int64_t addend, int size) {
@@ -347,19 +350,27 @@ static Reg regs[] = {
   {"fs", SEG, 0x64},
 };
 
+static int arm64_gp_reg_number(char *name);
+
 // The number (0-15) of general register `name`, as in "r10", "%eax" or
-// "ah", or -1. For asm statements' clobbers and register variables.
+// "ah", or -1. For asm statements' clobbers and register variables. (On
+// ARM64, x0-x30 are 0-30.)
 int gp_reg_number(char *name) {
   if (*name == '%')
     name++;
+  if (target_arm64)
+    return arm64_gp_reg_number(name);
   for (int i = 0; i < sizeof(regs) / sizeof(*regs); i++)
     if (regs[i].kind == GP && !strcmp(regs[i].name, name))
       return regs[i].is_high ? regs[i].num - 4 : regs[i].num;
   return -1;
 }
 
-// The name of general register `num` for `size` bytes, as in "r10d".
+// The name of general register `num` for `size` bytes, as in "r10d" (or
+// on ARM64, "x10" or "w10").
 char *gp_reg_name(int num, int size) {
+  if (target_arm64)
+    return format("%c%d", size == 8 ? 'x' : 'w', num);
   for (int i = 0; i < sizeof(regs) / sizeof(*regs); i++)
     if (regs[i].kind == GP && regs[i].num == num && regs[i].size == size &&
         !regs[i].is_high)
@@ -394,10 +405,11 @@ static void skip_space(void) {
     p++;
 }
 
-// Symbol names may also contain UTF-8, as C identifiers can.
+// Symbol names may also contain UTF-8, as C identifiers can. (No
+// isalnum(): it finds its table through a function call each time.)
 static bool is_symchar(char c) {
-  return isalnum((unsigned char)c) || c == '_' || c == '.' || c == '$' ||
-         (unsigned char)c >= 0x80;
+  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') ||
+         c == '_' || c == '.' || c == '$' || (unsigned char)c >= 0x80;
 }
 
 // Reads a number. Big positive ones like 18446744073709551615 wrap
@@ -1491,8 +1503,14 @@ static void sse_imm8(Operand *op) {
   out(op->val & 0xff);
 }
 
+static void a64_instruction(char *name, int len);
+
 // Encodes one instruction: mnemonic `name` (`len` chars), operands at p.
 static void instruction(char *name, int len) {
+  if (target_arm64) {
+    a64_instruction(name, len);
+    return;
+  }
   Insn *insn = find_insn(name, len);
   if (!insn)
     fail("unknown instruction '%.*s'", len, name);
@@ -1897,6 +1915,1566 @@ static void instruction(char *name, int len) {
   unreachable();
 }
 
+//---------- ARM64: operands -------------------------------------------------
+//
+// With --target=aarch64-linux (target_arm64), instructions are ARM64's,
+// in GNU as's syntax: registers by name (x0, w0, sp, xzr, s0, d0, q0,
+// v0.d[1]), immediates with or without '#', memory as [x0], [x0, 8],
+// [x0, 8]! (pre-index), [x0], 8 (post-index) or [x0, x1, lsl 3], and
+// relocation operators, as in :lo12:sym. Every instruction is 4 bytes.
+// The rest of the assembler (sections, symbols, directives, layout and
+// the ELF file) is shared.
+
+static bool word_is(char *w, int len, char *name);
+static int64_t read_int(void);
+
+typedef enum {
+  A_GP, A_FP, A_VEC, A_IMM, A_FLOAT, A_MEM, A_COND, A_SHIFT, A_SYSREG,
+} AKind;
+
+// Shifts and extends, as in `lsl 12` or `sxtw 2`. An extend's code (from
+// UXTB) is the option field of the instructions that take one.
+enum { LSL, LSR, ASR, ROR, UXTB, UXTH, UXTW, UXTX, SXTB, SXTH, SXTW, SXTX };
+
+// The relocation operators, as in :lo12:sym, each with the relocation it
+// makes in an add (or adrp, or a load and store, see a64_lo12())
+typedef struct {
+  char *name;
+  int reloc;
+} AMod;
+
+static AMod a64_mods[] = {
+  {"lo12", R_AARCH64_ADD_ABS_LO12_NC},
+  {"got", R_AARCH64_ADR_GOT_PAGE},
+  {"got_lo12", R_AARCH64_LD64_GOT_LO12_NC},
+  {"tprel_hi12", R_AARCH64_TLSLE_ADD_TPREL_HI12},
+  {"tprel_lo12", R_AARCH64_TLSLE_ADD_TPREL_LO12},
+  {"tprel_lo12_nc", R_AARCH64_TLSLE_ADD_TPREL_LO12_NC},
+  {"tlsdesc", R_AARCH64_TLSDESC_ADR_PAGE21},
+  {"tlsdesc_lo12", R_AARCH64_TLSDESC_ADD_LO12},
+  {"gottprel", R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21},
+  {"gottprel_lo12", R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC},
+  {"abs_g0", R_AARCH64_MOVW_UABS_G0}, {"abs_g0_nc", R_AARCH64_MOVW_UABS_G0_NC},
+  {"abs_g1", R_AARCH64_MOVW_UABS_G1}, {"abs_g1_nc", R_AARCH64_MOVW_UABS_G1_NC},
+  {"abs_g2", R_AARCH64_MOVW_UABS_G2}, {"abs_g2_nc", R_AARCH64_MOVW_UABS_G2_NC},
+  {"abs_g3", R_AARCH64_MOVW_UABS_G3},
+};
+
+typedef struct {
+  AKind kind;
+  int reg;          // A_GP, A_FP, A_VEC; A_MEM: the base register
+  int size;         // A_GP: 4 or 8; A_FP: 1 to 16 (b to q); A_VEC: an element's
+  bool is_sp;       // A_GP 31 named sp or wsp, not the zero register
+  int lanes;        // A_VEC: v0.4s has 4, v0.d[1] and plain v0 have 0
+  int elem;         // A_VEC: v0.d[1] is element 1; -1 for none
+  int64_t val;      // A_IMM, A_MEM's offset; A_COND, A_SYSREG: the code
+  Sym *sym;         // A_IMM, A_MEM's offset: a symbol, plus val
+  AMod *mod;        // its relocation operator, or NULL
+  double fval;      // A_FLOAT
+  int shift;        // A_SHIFT: LSL ... SXTX; A_MEM: the index's
+  int amount;       // A_SHIFT, A_MEM's index: the amount, or -1 for none
+  int index;        // A_MEM: the index register, or -1
+  int index_size;   // A_MEM: 4 (w) or 8 (x)
+  int mode;         // A_MEM: 0 offset, 1 pre-index ([x0, 8]!), 2 post-index
+  char *text;       // where it starts in the statement
+} AOp;
+
+static char *a64_conds[] = {
+  "eq", "ne", "hs", "lo", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt",
+  "le", "al", "nv", "cs", "cc",
+};
+
+// Condition `name`'s code, or -1. (cs and cc are hs and lo.)
+static int a64_cond(char *name, int len) {
+  for (int i = 0; i < 18; i++)
+    if (word_is(name, len, a64_conds[i]))
+      return i < 16 ? i : i - 14;
+  return -1;
+}
+
+static char *a64_shifts[] = {
+  "lsl", "lsr", "asr", "ror", "uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth",
+  "sxtw", "sxtx",
+};
+
+// The system registers mrs and msr take, by name: op0:op1:CRn:CRm:op2,
+// as the instructions encode them (op0 less 2)
+static struct {
+  char *name;
+  int code;
+} a64_sysregs[] = {
+  {"tpidr_el0", 0x5e82}, {"tpidrro_el0", 0x5e83}, {"fpcr", 0x5a20},
+  {"fpsr", 0x5a21}, {"nzcv", 0x5a10}, {"ctr_el0", 0x5801}, {"dczid_el0", 0x5807},
+  {"cntvct_el0", 0x5f02}, {"cntfrq_el0", 0x5f00}, {"midr_el1", 0x4000},
+};
+
+// Reads `name`, a word of letters, digits and '_', at p.
+static int a64_word(char **name) {
+  *name = p;
+  while (isalnum((unsigned char)*p) || *p == '_')
+    p++;
+  return p - *name;
+}
+
+// Is the word at `s` a register, and which? Sets op's kind, register and
+// size. Doesn't move p.
+static bool a64_reg_name(char *s, int len, AOp *op) {
+  char c = tolower((unsigned char)s[0]);
+  char *end;
+  long n = len > 1 && isdigit((unsigned char)s[1]) ? strtol(s + 1, &end, 10) : -1;
+  bool numbered = n >= 0 && end == s + len && (s[1] != '0' || len == 2);
+
+  if (numbered && (c == 'x' || c == 'w') && n <= 30) {
+    *op = (AOp){A_GP, n, c == 'x' ? 8 : 4};
+    return true;
+  }
+  if (numbered && strchr("bhsdq", c) && n <= 31) {
+    *op = (AOp){A_FP, n, c == 'b' ? 1 : c == 'h' ? 2 : c == 's' ? 4 : c == 'd' ? 8 : 16};
+    return true;
+  }
+  if (numbered && c == 'v' && n <= 31) {
+    *op = (AOp){A_VEC, n, 0, .elem = -1};
+    return true;
+  }
+  static struct { char *name; int reg, size; bool sp; } named[] = {
+    {"sp", 31, 8, true}, {"wsp", 31, 4, true}, {"xzr", 31, 8}, {"wzr", 31, 4},
+    {"lr", 30, 8}, {"fp", 29, 8}, {"ip0", 16, 8}, {"ip1", 17, 8},
+  };
+  for (int i = 0; i < sizeof(named) / sizeof(*named); i++) {
+    if (word_is(s, len, named[i].name)) {
+      *op = (AOp){A_GP, named[i].reg, named[i].size, named[i].sp};
+      return true;
+    }
+  }
+  return false;
+}
+
+// gp_reg_number() for ARM64: x0-x30 (or w0-w30) are 0-30, fp is x29,
+// lr x30, and sp 31.
+static int arm64_gp_reg_number(char *name) {
+  AOp op;
+  if (!a64_reg_name(name, strlen(name), &op) || op.kind != A_GP ||
+      (op.reg == 31 && !op.is_sp))
+    return -1;
+  return op.reg;
+}
+
+// After v0: an arrangement, .4s, or an element, .s[1]. An element's size
+// (and an arrangement's) goes in op->size, its count in op->lanes.
+static void a64_vec_suffix(AOp *op) {
+  if (*p != '.')
+    return;
+  p++;
+  int lanes = 0;
+  while (isdigit((unsigned char)*p))
+    lanes = lanes * 10 + *p++ - '0';
+  char t = tolower((unsigned char)*p++);
+  op->size = t == 'b' ? 1 : t == 'h' ? 2 : t == 's' ? 4 : t == 'd' ? 8 : t == 'q' ? 16 : 0;
+  if (!op->size)
+    fail("bad vector arrangement");
+  op->lanes = lanes;
+  if (*p == '[') {
+    p++;
+    op->elem = strtol(p, &p, 10);
+    if (*p++ != ']')
+      fail("expected ']'");
+  }
+}
+
+// An immediate or an address: a number, or a symbol plus one, maybe after
+// a relocation operator, :lo12:sym.
+static void a64_value(AOp *op) {
+  skip_space();
+  if (*p == '#')
+    p++;
+  op->kind = A_IMM;
+  if (*p == ':') {
+    char *name = ++p;
+    while (*p && *p != ':')
+      p++;
+    if (!*p)
+      fail("expected ':'");
+    int len = p++ - name;
+    for (int i = 0; i < sizeof(a64_mods) / sizeof(*a64_mods); i++)
+      if (word_is(name, len, a64_mods[i].name))
+        op->mod = &a64_mods[i];
+    if (!op->mod)
+      fail("unknown relocation operator ':%.*s:'", len, name);
+  }
+
+  // A floating-point number, for fmov and fcmp
+  char *q = p + (*p == '-');
+  while (isdigit((unsigned char)*q))
+    q++;
+  if (!op->mod && q > p && (*q == '.' || *q == 'e' || *q == 'E') &&
+      isdigit((unsigned char)p[*p == '-'])) {
+    op->kind = A_FLOAT;
+    op->fval = strtod(p, &p);
+    return;
+  }
+
+  Operand v = {0};
+  read_value(&v);
+  if (v.suffix != NO_SUFFIX || v.minus)
+    fail("unsupported operand");
+  op->val = v.val;
+  op->sym = v.sym;
+}
+
+// [base], [base, offset], [base, index{, extend {amount}}], and a
+// following '!'
+static void a64_mem(AOp *op) {
+  p++; // '['
+  skip_space();
+  char *name;
+  int len = a64_word(&name);
+  AOp base;
+  if (!a64_reg_name(name, len, &base) || base.kind != A_GP || base.size != 8 ||
+      (base.reg == 31 && !base.is_sp))
+    fail("expected a base register");
+  *op = (AOp){A_MEM, base.reg, .index = -1, .amount = -1};
+  skip_space();
+
+  if (*p == ',') {
+    p++;
+    skip_space();
+    char *save = p;
+    len = a64_word(&name);
+    AOp index;
+    if (len && a64_reg_name(name, len, &index) && index.kind == A_GP) {
+      op->index = index.reg;
+      op->index_size = index.size;
+      op->shift = index.size == 8 ? LSL : UXTW;
+      skip_space();
+      if (*p == ',') {
+        p++;
+        skip_space();
+        len = a64_word(&name);
+        int k = 0;
+        while (k < 12 && !word_is(name, len, a64_shifts[k]))
+          k++;
+        if (k == 12 || k == LSR || k == ASR || k == ROR)
+          fail("bad index extend");
+        op->shift = k;
+        skip_space();
+        if (*p && *p != ']') {
+          if (*p == '#')
+            p++;
+          op->amount = read_int();
+        }
+      }
+    } else {
+      p = save;
+      AOp off = {0};
+      a64_value(&off);
+      op->val = off.val;
+      op->sym = off.sym;
+      op->mod = off.mod;
+    }
+  }
+  skip_space();
+  if (*p++ != ']')
+    fail("expected ']'");
+  if (*p == '!') {
+    p++;
+    op->mode = 1;
+  }
+}
+
+static void a64_operand2(AOp *op) {
+  *op = (AOp){0};
+  op->elem = -1;
+  if (*p == '[') {
+    a64_mem(op);
+    return;
+  }
+  if (*p == '{')
+    fail("register lists are not supported");
+
+  char *save = p;
+  char *name;
+  int len = a64_word(&name);
+  bool whole = len && !is_symchar(*p);
+
+  if (len && (whole || *p == '.') && a64_reg_name(name, len, op)) {
+    if (op->kind == A_VEC)
+      a64_vec_suffix(op);
+    else if (!whole)
+      fail("bad register");
+    return;
+  }
+  if (whole) {
+    int k = a64_cond(name, len);
+    if (k >= 0) {
+      *op = (AOp){A_COND, .val = k};
+      return;
+    }
+    for (k = 0; k < 12; k++) {
+      if (word_is(name, len, a64_shifts[k])) {
+        *op = (AOp){A_SHIFT, .shift = k, .amount = -1};
+        skip_space();
+        if (*p && *p != ',') {
+          if (*p == '#')
+            p++;
+          op->amount = read_int();
+        }
+        return;
+      }
+    }
+    for (k = 0; k < sizeof(a64_sysregs) / sizeof(*a64_sysregs); k++) {
+      if (word_is(name, len, a64_sysregs[k].name)) {
+        *op = (AOp){A_SYSREG, .val = a64_sysregs[k].code};
+        return;
+      }
+    }
+  }
+  p = save;
+  a64_value(op);
+}
+
+static void a64_operand(AOp *op) {
+  skip_space();
+  char *text = p;
+  a64_operand2(op);
+  op->text = text;
+}
+
+// Reads operand `op` again as a label, where an instruction takes one: a
+// symbol may be named like a register or a condition (v3, hi), as GNU as
+// lets it be.
+static void a64_label(AOp *op) {
+  if (op->kind == A_IMM || op->kind == A_MEM)
+    return;
+  char *save = p;
+  char *text = op->text;
+  *op = (AOp){0};
+  p = text;
+  a64_value(op);
+  op->text = text;
+  p = save;
+}
+
+// Splits the operands at commas outside brackets.
+static int a64_operands(AOp *ops, int max) {
+  int n = 0;
+  skip_space();
+  while (*p) {
+    if (n == max)
+      fail("too many operands");
+    a64_operand(&ops[n++]);
+    skip_space();
+    if (*p == ',')
+      p++;
+    else if (*p)
+      fail("unexpected '%c'", *p);
+  }
+  return n;
+}
+
+//---------- ARM64: instructions ---------------------------------------------
+
+// Encodes `val` as a logical instruction's immediate, N:immr:imms in 13
+// bits, for a `size`-byte operation, or returns -1 if it isn't one: a run
+// of ones, rotated, repeated in elements of 2, 4, ... 64 bits.
+static int64_t a64_bitmask(uint64_t val, int size) {
+  if (size == 4)
+    val = (val & 0xffffffff) | val << 32;
+  if (val == 0 || val == ~0ULL)
+    return -1;
+
+  int e = 64, lg = 6;
+  while (e > 2) {
+    int h = e / 2;
+    uint64_t m = (1ULL << h) - 1;
+    if (((val >> h) & m) != (val & m))
+      break;
+    e = h;
+    lg--;
+  }
+  uint64_t emask = e == 64 ? ~0ULL : (1ULL << e) - 1;
+  uint64_t elem = val & emask;
+  int ones = 0;
+  for (int i = 0; i < e; i++)
+    ones += (elem >> i) & 1;
+
+  // The rotation that brings the ones down to the bottom
+  for (int r = 0; r < e; r++) {
+    uint64_t rot = r ? ((elem >> r) | (elem << (e - r))) & emask : elem;
+    if (rot != (1ULL << ones) - 1)
+      continue;
+    int immr = (e - r) % e;
+    int imms = ((0x3f << (lg + 1)) & 0x3f) | (ones - 1);
+    return (int64_t)(e == 64) << 12 | immr << 6 | imms;
+  }
+  return -1;
+}
+
+// Puts the bits of a value into an instruction's (or data's) field, as
+// relocation `type` says: `val` is the result of the relocation's
+// calculation (S + A - P, Page(S + A) - Page(P), ...). Returns false if
+// it doesn't fit. The linker uses this too.
+bool arm64_put_field(unsigned char *loc, int type, int64_t val) {
+  uint32_t insn;
+  memcpy(&insn, loc, 4);
+  int64_t lo12 = val & 0xfff;
+  int64_t field;
+  int shift = 0;
+
+  switch (type) {
+  case R_AARCH64_NONE:
+  case R_AARCH64_TLSDESC_CALL:
+    return true;
+  case R_AARCH64_ABS64:
+  case R_AARCH64_PREL64:
+    memcpy(loc, &val, 8);
+    return true;
+  case R_AARCH64_ABS32:
+  case R_AARCH64_PREL32: {
+    uint32_t v = val;
+    memcpy(loc, &v, 4);
+    return val >= INT32_MIN && val <= (type == R_AARCH64_ABS32 ? UINT32_MAX : INT32_MAX);
+  }
+  case R_AARCH64_ABS16:
+  case R_AARCH64_PREL16: {
+    uint16_t v = val;
+    memcpy(loc, &v, 2);
+    return val >= INT16_MIN && val <= UINT16_MAX;
+  }
+  case R_AARCH64_CALL26:
+  case R_AARCH64_JUMP26:
+    insn |= (val >> 2) & 0x3ffffff;
+    memcpy(loc, &insn, 4);
+    return !(val & 3) && val >= -(1L << 27) && val < (1L << 27);
+  case R_AARCH64_CONDBR19:
+  case R_AARCH64_LD_PREL_LO19:
+    insn |= ((val >> 2) & 0x7ffff) << 5;
+    memcpy(loc, &insn, 4);
+    return !(val & 3) && val >= -(1L << 20) && val < (1L << 20);
+  case R_AARCH64_TSTBR14:
+    insn |= ((val >> 2) & 0x3fff) << 5;
+    memcpy(loc, &insn, 4);
+    return !(val & 3) && val >= -(1L << 15) && val < (1L << 15);
+  case R_AARCH64_ADR_PREL_LO21:
+  case R_AARCH64_ADR_PREL_PG_HI21:
+  case R_AARCH64_ADR_PREL_PG_HI21_NC:
+  case R_AARCH64_ADR_GOT_PAGE:
+  case R_AARCH64_TLSDESC_ADR_PAGE21:
+  case R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21: {
+    int64_t imm = type == R_AARCH64_ADR_PREL_LO21 ? val : val >> 12;
+    insn |= (imm & 3) << 29 | ((imm >> 2) & 0x7ffff) << 5;
+    memcpy(loc, &insn, 4);
+    return type == R_AARCH64_ADR_PREL_PG_HI21_NC || (imm >= -(1L << 20) && imm < (1L << 20));
+  }
+  case R_AARCH64_ADD_ABS_LO12_NC:
+  case R_AARCH64_LDST8_ABS_LO12_NC:
+  case R_AARCH64_TLSDESC_ADD_LO12:
+  case R_AARCH64_TLSLE_ADD_TPREL_LO12_NC:
+    field = lo12;
+    break;
+  case R_AARCH64_TLSLE_ADD_TPREL_LO12:
+    field = val;
+    if (val < 0 || val > 0xfff)
+      return false;
+    break;
+  case R_AARCH64_TLSLE_ADD_TPREL_HI12:
+    field = (val >> 12) & 0xfff;
+    if (val < 0 || val >= (1 << 24))
+      return false;
+    break;
+  case R_AARCH64_LDST16_ABS_LO12_NC: field = lo12 >> 1; shift = 1; break;
+  case R_AARCH64_LDST32_ABS_LO12_NC: field = lo12 >> 2; shift = 2; break;
+  case R_AARCH64_LDST64_ABS_LO12_NC:
+  case R_AARCH64_LD64_GOT_LO12_NC:
+  case R_AARCH64_TLSDESC_LD64_LO12:
+  case R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC:
+    field = lo12 >> 3;
+    shift = 3;
+    break;
+  case R_AARCH64_LDST128_ABS_LO12_NC: field = lo12 >> 4; shift = 4; break;
+  case R_AARCH64_MOVW_UABS_G0:
+  case R_AARCH64_MOVW_UABS_G0_NC:
+  case R_AARCH64_MOVW_UABS_G1:
+  case R_AARCH64_MOVW_UABS_G1_NC:
+  case R_AARCH64_MOVW_UABS_G2:
+  case R_AARCH64_MOVW_UABS_G2_NC:
+  case R_AARCH64_MOVW_UABS_G3: {
+    static int groups[] = {0, 0, 1, 1, 2, 2, 3};
+    int g = groups[type - R_AARCH64_MOVW_UABS_G0];
+    insn |= ((val >> (16 * g)) & 0xffff) << 5;
+    memcpy(loc, &insn, 4);
+    return true;
+  }
+  default:
+    return false;
+  }
+
+  // A 12-bit immediate at bit 10, of an add or a load or store, which
+  // scales it by the access's size: the low bits must be 0.
+  insn |= field << 10;
+  memcpy(loc, &insn, 4);
+  return !(lo12 & ((1 << shift) - 1));
+}
+
+static void a64_out(uint32_t insn) {
+  cur->align = MAX(cur->align, 4);
+  out_n(4, insn);
+}
+
+// A hole in the instruction about to be written (see a64_out()), which
+// fill_hole() fills or makes a relocation of.
+static void a64_hole(int type, Sym *sym, int64_t addend) {
+  cur->holes = grow(cur->holes, cur->nholes, &cur->capholes, sizeof(Hole));
+  cur->holes[cur->nholes++] = (Hole){cur->bytes.len, cur->njumps, type, sym, addend};
+  sym->is_used = true;
+  // A symbol in a TLS relocation is thread-local (STT_TLS), as GNU as
+  // marks it, if only declared here.
+  if (type >= R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21 && type <= R_AARCH64_TLSDESC_CALL)
+    sym->is_tls = true;
+}
+
+static bool is_x(AOp *op) {
+  return op->kind == A_GP && op->size == 8;
+}
+
+// Register operand `op` of a general register, sp only if `sp` (31 is
+// the zero register otherwise)
+static int gpreg(AOp *op, bool sp) {
+  if (op->kind != A_GP)
+    fail("expected a general register");
+  if (op->reg == 31 && op->is_sp != sp)
+    fail(sp ? "the zero register can't be used here" : "sp can't be used here");
+  return op->reg;
+}
+
+// A constant operand, in [lo, hi]
+static int64_t imm(AOp *op, int64_t lo, int64_t hi) {
+  if (op->kind != A_IMM || op->sym || op->mod)
+    fail("expected a number");
+  if (op->val < lo || op->val > hi)
+    fail("immediate out of range");
+  return op->val;
+}
+
+// The size bit, sf, of a general register operand: bit 31
+static uint32_t sf(AOp *op) {
+  return op->size == 8 ? 1u << 31 : 0;
+}
+
+static void same_size(AOp *a, AOp *b) {
+  if (a->size != b->size)
+    fail("operands of different sizes");
+}
+
+// The FP type field (bits 22-23) of a scalar operand: s, d or h
+static uint32_t ftype(AOp *op) {
+  if (op->kind != A_FP)
+    fail("expected an FP register");
+  switch (op->size) {
+  case 4: return 0;
+  case 8: return 1 << 22;
+  case 2: return 3 << 22;
+  }
+  fail("expected an s, d or h register");
+}
+
+// A shifted-register operand's shift: `ops[i]`, if there is one, as the
+// shift (bits 22-23) and amount (bits 10-15).
+static uint32_t opt_shift(AOp *ops, int n, int i, int size, bool ror) {
+  if (i >= n)
+    return 0;
+  if (ops[i].kind != A_SHIFT || ops[i].shift > (ror ? ROR : ASR) || ops[i].amount < 0 ||
+      ops[i].amount >= size * 8)
+    fail("bad shift");
+  return ops[i].shift << 22 | ops[i].amount << 10;
+}
+
+// add, adds, sub, subs, and cmp, cmn, neg, negs: `op` is 0 for add, 2
+// for sub, plus 1 to set the flags. A negative immediate turns add into
+// sub and back, as GNU as does.
+static void a64_addsub(int op, AOp *d, AOp *n, AOp *ops, int nops) {
+  AOp *m = &ops[0];
+  bool flags = op & 1;
+  uint32_t base = sf(d) | (op >> 1) << 30 | flags << 29;
+
+  if (m->kind == A_IMM) {
+    same_size(d, n);
+    int64_t v = m->val;
+    if (m->mod || m->sym) {
+      if (!m->mod)
+        fail("a symbol needs a relocation operator, as in :lo12:");
+      a64_hole(m->mod->reloc, m->sym, v);
+      v = 0;
+    } else if (v < 0) {
+      v = -v;
+      base ^= 1 << 30;
+    }
+    uint32_t sh = 0;
+    if (nops > 1) {
+      if (ops[1].kind != A_SHIFT || ops[1].shift != LSL ||
+          (ops[1].amount != 0 && ops[1].amount != 12))
+        fail("bad shift");
+      sh = ops[1].amount == 12;
+    } else if (v > 0xfff && !(v & 0xfff)) {
+      v >>= 12;
+      sh = 1;
+    }
+    if (v > 0xfff)
+      fail("immediate out of range");
+    a64_out(base | 0x11000000 | sh << 22 | v << 10 | gpreg(n, true) << 5 |
+            gpreg(d, !flags));
+    return;
+  }
+
+  // The extended register form takes sp, and an extend; the shifted
+  // register form takes the zero register, and a shift.
+  bool extended = (d->reg == 31 && d->is_sp) || (n->reg == 31 && n->is_sp) ||
+                  (nops > 1 && ops[1].kind == A_SHIFT && ops[1].shift >= UXTB);
+  if (extended) {
+    int opt = d->size == 8 ? UXTX : UXTW, amount = 0;
+    if (nops > 1) {
+      if (ops[1].kind != A_SHIFT)
+        fail("expected an extend");
+      opt = ops[1].shift == LSL ? opt : ops[1].shift;
+      amount = MAX(ops[1].amount, 0);
+      if (opt < UXTB || amount > 4)
+        fail("bad extend");
+    }
+    a64_out(base | 0x0b200000 | gpreg(m, false) << 16 | (opt - UXTB) << 13 | amount << 10 |
+            gpreg(n, true) << 5 | gpreg(d, !flags));
+    return;
+  }
+  same_size(d, m);
+  a64_out(base | 0x0b000000 | opt_shift(ops, nops, 1, d->size, false) |
+          gpreg(m, false) << 16 | gpreg(n, false) << 5 | gpreg(d, false));
+}
+
+// and, orr, eor, ands (opc 0-3), and bic, orn, eon, bics (which invert
+// the second operand). With an immediate, it's a bitmask.
+static void a64_logic(int opc, bool invert, AOp *d, AOp *n, AOp *ops, int nops) {
+  AOp *m = &ops[0];
+  same_size(d, n);
+  if (m->kind == A_IMM) {
+    uint64_t v = imm(m, INT64_MIN, INT64_MAX);
+    if (invert)
+      v = ~v;
+    int64_t bits = a64_bitmask(v, d->size);
+    if (bits < 0)
+      fail("immediate can't be encoded");
+    a64_out(sf(d) | opc << 29 | 0x12000000 | bits << 10 | gpreg(n, false) << 5 |
+            gpreg(d, opc != 3));
+    return;
+  }
+  same_size(d, m);
+  a64_out(sf(d) | opc << 29 | 0x0a000000 | invert << 21 | opt_shift(ops, nops, 1, d->size, true) |
+          gpreg(m, false) << 16 | gpreg(n, false) << 5 | gpreg(d, false));
+}
+
+// mov: a register to another (orr, or an add for sp), or a number (movz,
+// movn, or a bitmask's orr).
+static void a64_mov(AOp *d, AOp *s) {
+  if (s->kind == A_GP) {
+    same_size(d, s);
+    if ((d->reg == 31 && d->is_sp) || (s->reg == 31 && s->is_sp))
+      a64_out(sf(d) | 0x11000000 | gpreg(s, true) << 5 | gpreg(d, true));
+    else
+      a64_out(sf(d) | 0x2a0003e0 | gpreg(s, false) << 16 | gpreg(d, false));
+    return;
+  }
+  if (s->kind != A_IMM || s->mod || s->sym)
+    fail("unsupported operands");
+
+  int bits = d->size * 8;
+  uint64_t v = d->size == 4 ? (uint32_t)s->val : (uint64_t)s->val;
+  uint64_t inv = d->size == 4 ? (uint32_t)~v : ~v;
+  for (int hw = 0; hw < bits / 16; hw++) {
+    if (!(v & ~(0xffffULL << (hw * 16)))) {
+      a64_out(sf(d) | 0x52800000 | hw << 21 | ((v >> (hw * 16)) & 0xffff) << 5 | gpreg(d, false));
+      return;
+    }
+  }
+  for (int hw = 0; hw < bits / 16; hw++) {
+    if (!(inv & ~(0xffffULL << (hw * 16)))) {
+      a64_out(sf(d) | 0x12800000 | hw << 21 | ((inv >> (hw * 16)) & 0xffff) << 5 |
+              gpreg(d, false));
+      return;
+    }
+  }
+  int64_t mask = a64_bitmask(v, d->size);
+  if (mask < 0)
+    fail("immediate can't be encoded");
+  a64_out(sf(d) | 0x320003e0 | mask << 10 | gpreg(d, true));
+}
+
+// movz, movn, movk: `op` 0, 2 or 3 (as opc), with `lsl N`
+static void a64_movw(int op, AOp *ops, int n) {
+  AOp *d = &ops[0];
+  int hw = 0;
+  if (n > 2) {
+    if (ops[2].kind != A_SHIFT || ops[2].shift != LSL || ops[2].amount % 16 ||
+        ops[2].amount >= d->size * 8)
+      fail("bad shift");
+    hw = ops[2].amount / 16;
+  }
+  int64_t v = 0;
+  if (ops[1].mod) {
+    // :abs_g1: and the like name their 16 bits, as hw.
+    int type = ops[1].mod->reloc;
+    if (type >= R_AARCH64_MOVW_UABS_G0 && type <= R_AARCH64_MOVW_UABS_G3)
+      hw = (type - R_AARCH64_MOVW_UABS_G0) / 2; // G0, G0_NC, G1, G1_NC, ...
+    a64_hole(type, ops[1].sym, ops[1].val);
+  } else {
+    v = imm(&ops[1], 0, 0xffff);
+  }
+  a64_out(sf(d) | op << 29 | 0x12800000 | hw << 21 | v << 5 | gpreg(d, false));
+}
+
+// sbfm, bfm, ubfm (opc 0-2): d, n, immr, imms
+static void a64_bfm(int opc, AOp *d, AOp *n, int immr, int imms) {
+  int bits = d->size * 8;
+  if (immr < 0 || immr >= bits || imms < 0 || imms >= bits)
+    fail("bad bit-field");
+  uint32_t s = sf(d);
+  a64_out(s | opc << 29 | 0x13000000 | (s ? 1 << 22 : 0) | immr << 16 | imms << 10 |
+          gpreg(n, false) << 5 | gpreg(d, false));
+}
+
+// A load or store of the register `t` (whose kind and size, with `insn`'s
+// signed and unsigned variants, give its size and opc fields) at memory
+// operand `m`, with a post-index `post` if there is one.
+static void a64_ldst(char *name, AOp *t, AOp *m, AOp *post, bool unscaled) {
+  if (m->kind != A_MEM)
+    fail("expected a memory operand");
+
+  // size: log2 of the bytes accessed; opc: 0 store, 1 load, 2 load
+  // sign-extending to 64 bits, 3 to 32; V: an FP/SIMD register
+  bool load = name[0] == 'l';
+  char *rest = name + (unscaled ? 4 : 3); // after ldr/str or ldur/stur
+  bool sign = *rest == 's';
+  if (sign)
+    rest++;
+  int size, opc = load, v = 0;
+  if (*rest == 'b' || *rest == 'h' || *rest == 'w') {
+    size = *rest == 'b' ? 0 : *rest == 'h' ? 1 : 2;
+    if (rest[1])
+      fail("unknown instruction '%s'", name);
+    if (sign && (!load || (size == 2 && !is_x(t))))
+      fail("bad operands");
+    if (t->kind != A_GP || (!sign && t->size != 4))
+      fail("expected a w register");
+    if (sign)
+      opc = is_x(t) ? 2 : 3;
+  } else if (*rest || sign) {
+    fail("unknown instruction '%s'", name);
+  } else if (t->kind == A_GP) {
+    size = t->size == 8 ? 3 : 2;
+  } else if (t->kind == A_FP) {
+    v = 1;
+    size = t->size == 1 ? 0 : t->size == 2 ? 1 : t->size == 4 ? 2 : t->size == 8 ? 3 : 0;
+    if (t->size == 16)
+      opc |= 2;
+  } else {
+    fail("bad operands");
+  }
+  int bytes = t->kind == A_FP ? t->size : 1 << size;
+  uint32_t base = (uint32_t)size << 30 | 0x38000000 | v << 26 | opc << 22 |
+                  (t->kind == A_GP ? gpreg(t, false) : t->reg) | m->reg << 5;
+
+  // [base, index{, extend amount}]: the index shifted by 0, or by the
+  // access's size (S), as lsl (uxtx) for an x, uxtw or sxtw for a w
+  if (m->index >= 0) {
+    int lg = __builtin_ctz(bytes);
+    if (m->amount > 0 && m->amount != lg)
+      fail("bad index shift");
+    if (unscaled || post || m->mode)
+      fail("bad operands");
+    int opt = m->shift == LSL ? UXTX : m->shift;
+    if ((m->index_size == 8) != (opt == UXTX || opt == SXTX))
+      fail("bad index extend");
+    bool s = m->amount > 0 || (m->amount == 0 && bytes == 1);
+    a64_out(base | 0x00200800 | m->index << 16 | (opt - UXTB) << 13 | s << 12);
+    return;
+  }
+
+  int64_t off = m->val;
+  if (post) {
+    if (m->sym || m->mod || m->val || m->mode)
+      fail("bad post-index");
+    off = imm(post, -256, 255);
+    a64_out(base | (off & 0x1ff) << 12 | 1 << 10);
+    return;
+  }
+  if (m->mode) {
+    if (m->sym || m->mod || off < -256 || off > 255)
+      fail("bad pre-index");
+    a64_out(base | (off & 0x1ff) << 12 | 3 << 10);
+    return;
+  }
+  if (m->mod || m->sym) {
+    if (!m->mod)
+      fail("a symbol needs a relocation operator, as in :lo12:");
+    int type = m->mod->reloc;
+    if (type == R_AARCH64_ADD_ABS_LO12_NC) {
+      static int lo12[] = {R_AARCH64_LDST8_ABS_LO12_NC, R_AARCH64_LDST16_ABS_LO12_NC,
+                           R_AARCH64_LDST32_ABS_LO12_NC, R_AARCH64_LDST64_ABS_LO12_NC,
+                           R_AARCH64_LDST128_ABS_LO12_NC};
+      type = lo12[__builtin_ctz(bytes)];
+    } else if (type == R_AARCH64_TLSDESC_ADD_LO12) {
+      type = R_AARCH64_TLSDESC_LD64_LO12;
+    }
+    a64_hole(type, m->sym, off);
+    a64_out(base | 0x01000000);
+    return;
+  }
+
+  // Scaled and unsigned, if it can be; else unscaled (ldur), as GNU as
+  // picks it.
+  if (!unscaled && off >= 0 && !(off % bytes) && off / bytes <= 0xfff) {
+    a64_out(base | 0x01000000 | (off / bytes) << 10);
+    return;
+  }
+  if (off < -256 || off > 255)
+    fail("offset out of range");
+  a64_out(base | (off & 0x1ff) << 12);
+}
+
+// ldp, stp, ldpsw: two registers at [base, offset], pre- or post-indexed
+static void a64_ldstp(char *name, AOp *ops, int n) {
+  AOp *t1 = &ops[0], *t2 = &ops[1], *m = &ops[2];
+  if (n < 3 || m->kind != A_MEM || m->index >= 0 || m->sym || m->mod || t1->kind != t2->kind)
+    fail("bad operands");
+  same_size(t1, t2);
+  bool load = name[0] == 'l';
+  bool sw = !strcmp(name, "ldpsw");
+  int opc, v = t1->kind == A_FP, bytes = t1->size;
+  if (v)
+    opc = bytes == 4 ? 0 : bytes == 8 ? 1 : bytes == 16 ? 2 : -1;
+  else
+    opc = sw ? 1 : bytes == 8 ? 2 : 0;
+  if (opc < 0 || (sw && t1->size != 8))
+    fail("bad operands");
+  if (sw)
+    bytes = 4;
+
+  int mode = 2; // signed offset
+  int64_t off = m->val;
+  if (n > 3) {
+    if (m->val || m->mode)
+      fail("bad post-index");
+    off = imm(&ops[3], INT64_MIN, INT64_MAX);
+    mode = 1;
+  } else if (m->mode) {
+    mode = 3;
+  }
+  if (off % bytes || off / bytes < -64 || off / bytes > 63)
+    fail("offset out of range");
+  int r1 = v ? t1->reg : gpreg(t1, false), r2 = v ? t2->reg : gpreg(t2, false);
+  a64_out((uint32_t)opc << 30 | 0x28000000 | v << 26 | mode << 23 | load << 22 |
+          ((off / bytes) & 0x7f) << 15 | r2 << 10 | m->reg << 5 | r1);
+}
+
+// The load-exclusive and store-exclusive family, and load-acquire and
+// store-release: ldxr, ldaxr, stxr, stlxr, ldar, stlr (with b and h for
+// bytes and halves), ldxp, ldaxp, stxp, stlxp.
+static void a64_excl(char *name, AOp *ops, int n) {
+  bool load = name[0] == 'l';
+  bool acq_rel = strchr(name + 2, 'a') || name[2] == 'l'; // ldaxr, stlxr, ldar, stlr
+  bool excl = strchr(name, 'x') != NULL;
+  bool pair = excl && name[strlen(name) - 1] == 'p';
+  char last = name[strlen(name) - 1];
+  int status = !load && excl; // stxr's first operand is the status
+  if (n != 1 + status + pair + 1)
+    fail("bad operands");
+  AOp *t = &ops[status], *m = &ops[n - 1];
+  if (m->kind != A_MEM || m->index >= 0 || m->val || m->mode || m->sym)
+    fail("expected [register]");
+  int size = last == 'b' ? 0 : last == 'h' ? 1 : t->size == 8 ? 3 : 2;
+  if ((last == 'b' || last == 'h') && t->size != 4)
+    fail("expected a w register");
+  uint32_t insn = (uint32_t)(pair ? (2 | (t->size == 8)) : size) << 30 | 0x08000000 | !excl << 23 |
+                  load << 22 | pair << 21 | acq_rel << 15 | m->reg << 5 | gpreg(t, false);
+  insn |= (status ? gpreg(&ops[0], false) : 31) << 16;
+  insn |= (pair ? gpreg(&ops[status + 1], false) : 31) << 10;
+  a64_out(insn);
+}
+
+// A branch to a label: b.cond, cbz, cbnz, tbz and tbnz may be too short
+// to reach it, so they are jumps, which layout() makes long if they
+// must be (see a64_place_jump()); b and bl reach 128 MiB, as far as the
+// linker can put things.
+static void a64_branch(uint32_t insn, int type, AOp *target) {
+  a64_label(target);
+  if (target->kind != A_IMM || !target->sym || target->mod)
+    fail("expected a label");
+  target->sym->is_used = true;
+  if (type == R_AARCH64_JUMP26 || type == R_AARCH64_CALL26) {
+    a64_hole(type, target->sym, target->val);
+    a64_out(insn);
+    return;
+  }
+  if (target->val)
+    fail("a conditional branch can't take an offset from a label");
+  cur->align = MAX(cur->align, 4);
+  cur->jumps = grow(cur->jumps, cur->njumps, &cur->capjumps, sizeof(Jump));
+  cur->jumps[cur->njumps++] = (Jump){cur->bytes.len, type, target->sym, .insn = insn};
+}
+
+// An FP data-processing instruction on registers of one size: fadd d0,
+// d1, d2, fneg s0, s1 and so on
+static void a64_fp(uint32_t op, AOp *ops, int n, int nregs) {
+  if (n != nregs)
+    fail("bad operands");
+  uint32_t t = ftype(&ops[0]);
+  for (int i = 1; i < n; i++)
+    same_size(&ops[0], &ops[i]);
+  uint32_t insn = op | t | ops[0].reg;
+  if (nregs >= 2)
+    insn |= ops[1].reg << 5;
+  if (nregs >= 3)
+    insn |= ops[2].reg << 16;
+  if (nregs == 4)
+    insn |= ops[3].reg << 10;
+  a64_out(insn);
+}
+
+// The ARM64 instructions, by mnemonic: a kind, which says how its
+// operands are read and encoded, and an opcode for it
+typedef enum {
+  I_ADDSUB, I_CMP, I_NEG, I_LOGIC, I_TST, I_MOV, I_MVN, I_MOVW, I_SHIFT, I_BFM,
+  I_BFX, I_BFIZ, I_EXT, I_EXTR, I_DP1, I_DP2, I_DP3, I_MUL, I_MULH, I_ADC, I_NGC,
+  I_CSEL, I_CSET, I_CINC, I_CCMP, I_LDST, I_LDSTU, I_LDSTP, I_EXCL, I_B, I_BCOND,
+  I_CBZ, I_TBZ, I_BR, I_RET, I_ADR, I_EXCEPT, I_FIXED, I_BARRIER, I_MRS, I_MSR,
+  I_FMOV, I_FP1, I_FP2, I_FP3, I_FCMP, I_FCVT, I_FCVTI, I_ICVTF, I_FCSEL, I_INS,
+  I_UMOV,
+} AInsnKind;
+
+typedef struct {
+  char *name;
+  AInsnKind kind;
+  uint32_t op;
+} AInsn;
+
+static AInsn a64_insns[] = {
+  {"add", I_ADDSUB, 0}, {"adds", I_ADDSUB, 1}, {"sub", I_ADDSUB, 2}, {"subs", I_ADDSUB, 3},
+  {"cmn", I_CMP, 1}, {"cmp", I_CMP, 3}, {"neg", I_NEG, 2}, {"negs", I_NEG, 3},
+  {"and", I_LOGIC, 0}, {"orr", I_LOGIC, 1}, {"eor", I_LOGIC, 2}, {"ands", I_LOGIC, 3},
+  {"bic", I_LOGIC, 4}, {"orn", I_LOGIC, 5}, {"eon", I_LOGIC, 6}, {"bics", I_LOGIC, 7},
+  {"tst", I_TST, 3}, {"mov", I_MOV}, {"mvn", I_MVN},
+  {"movn", I_MOVW, 0}, {"movz", I_MOVW, 2}, {"movk", I_MOVW, 3},
+  {"lsl", I_SHIFT, LSL}, {"lsr", I_SHIFT, LSR}, {"asr", I_SHIFT, ASR}, {"ror", I_SHIFT, ROR},
+  {"sbfm", I_BFM, 0}, {"bfm", I_BFM, 1}, {"ubfm", I_BFM, 2},
+  {"sbfx", I_BFX, 0}, {"bfxil", I_BFX, 1}, {"ubfx", I_BFX, 2},
+  {"sbfiz", I_BFIZ, 0}, {"bfi", I_BFIZ, 1}, {"ubfiz", I_BFIZ, 2},
+  {"sxtb", I_EXT, SXTB}, {"sxth", I_EXT, SXTH}, {"sxtw", I_EXT, SXTW},
+  {"uxtb", I_EXT, UXTB}, {"uxth", I_EXT, UXTH}, {"uxtw", I_EXT, UXTW},
+  {"extr", I_EXTR},
+  {"rbit", I_DP1, 0}, {"rev16", I_DP1, 1}, {"rev32", I_DP1, 2}, {"rev", I_DP1, 3},
+  {"clz", I_DP1, 4}, {"cls", I_DP1, 5},
+  {"udiv", I_DP2, 2}, {"sdiv", I_DP2, 3}, {"lslv", I_DP2, 8}, {"lsrv", I_DP2, 9},
+  {"asrv", I_DP2, 10}, {"rorv", I_DP2, 11},
+  {"madd", I_DP3, 0x1b000000}, {"msub", I_DP3, 0x1b008000},
+  {"smaddl", I_DP3, 0x9b200000}, {"smsubl", I_DP3, 0x9b208000},
+  {"umaddl", I_DP3, 0x9ba00000}, {"umsubl", I_DP3, 0x9ba08000},
+  {"mul", I_MUL, 0x1b000000}, {"mneg", I_MUL, 0x1b008000},
+  {"smull", I_MUL, 0x9b200000}, {"umull", I_MUL, 0x9ba00000},
+  {"smulh", I_MULH, 0x9b407c00}, {"umulh", I_MULH, 0x9bc07c00},
+  {"adc", I_ADC, 0}, {"adcs", I_ADC, 1}, {"sbc", I_ADC, 2}, {"sbcs", I_ADC, 3},
+  {"ngc", I_NGC, 2}, {"ngcs", I_NGC, 3},
+  {"csel", I_CSEL, 0}, {"csinc", I_CSEL, 1}, {"csinv", I_CSEL, 2}, {"csneg", I_CSEL, 3},
+  {"cset", I_CSET, 1}, {"csetm", I_CSET, 2},
+  {"cinc", I_CINC, 1}, {"cinv", I_CINC, 2}, {"cneg", I_CINC, 3},
+  {"ccmn", I_CCMP, 0}, {"ccmp", I_CCMP, 1},
+  {"ldr", I_LDST}, {"str", I_LDST}, {"ldrb", I_LDST}, {"strb", I_LDST},
+  {"ldrh", I_LDST}, {"strh", I_LDST}, {"ldrsb", I_LDST}, {"ldrsh", I_LDST},
+  {"ldrsw", I_LDST},
+  {"ldur", I_LDSTU}, {"stur", I_LDSTU}, {"ldurb", I_LDSTU}, {"sturb", I_LDSTU},
+  {"ldurh", I_LDSTU}, {"sturh", I_LDSTU}, {"ldursb", I_LDSTU}, {"ldursh", I_LDSTU},
+  {"ldursw", I_LDSTU},
+  {"ldp", I_LDSTP}, {"stp", I_LDSTP}, {"ldpsw", I_LDSTP},
+  {"ldxr", I_EXCL}, {"ldxrb", I_EXCL}, {"ldxrh", I_EXCL}, {"ldaxr", I_EXCL},
+  {"ldaxrb", I_EXCL}, {"ldaxrh", I_EXCL}, {"stxr", I_EXCL}, {"stxrb", I_EXCL},
+  {"stxrh", I_EXCL}, {"stlxr", I_EXCL}, {"stlxrb", I_EXCL}, {"stlxrh", I_EXCL},
+  {"ldar", I_EXCL}, {"ldarb", I_EXCL}, {"ldarh", I_EXCL}, {"stlr", I_EXCL},
+  {"stlrb", I_EXCL}, {"stlrh", I_EXCL}, {"ldxp", I_EXCL}, {"ldaxp", I_EXCL},
+  {"stxp", I_EXCL}, {"stlxp", I_EXCL},
+  {"b", I_B, 0x14000000}, {"bl", I_B, 0x94000000},
+  {"cbz", I_CBZ, 0x34000000}, {"cbnz", I_CBZ, 0x35000000},
+  {"tbz", I_TBZ, 0x36000000}, {"tbnz", I_TBZ, 0x37000000},
+  {"br", I_BR, 0xd61f0000}, {"blr", I_BR, 0xd63f0000}, {"ret", I_RET, 0xd65f0000},
+  {"adr", I_ADR, 0x10000000}, {"adrp", I_ADR, 0x90000000},
+  {"svc", I_EXCEPT, 0xd4000001}, {"hvc", I_EXCEPT, 0xd4000002},
+  {"brk", I_EXCEPT, 0xd4200000}, {"hlt", I_EXCEPT, 0xd4400000},
+  {"nop", I_FIXED, 0xd503201f}, {"yield", I_FIXED, 0xd503203f},
+  {"wfe", I_FIXED, 0xd503205f}, {"wfi", I_FIXED, 0xd503207f},
+  {"sev", I_FIXED, 0xd503209f}, {"sevl", I_FIXED, 0xd50320bf},
+  {"clrex", I_FIXED, 0xd5033f5f},
+  {"dmb", I_BARRIER, 0xd50330bf}, {"dsb", I_BARRIER, 0xd503309f},
+  {"isb", I_BARRIER, 0xd50330df},
+  {"mrs", I_MRS, 0xd5300000}, {"msr", I_MSR, 0xd5100000},
+  {"fmov", I_FMOV},
+  {"fabs", I_FP1, 0x1e20c000}, {"fneg", I_FP1, 0x1e214000}, {"fsqrt", I_FP1, 0x1e21c000},
+  {"frintn", I_FP1, 0x1e244000}, {"frintp", I_FP1, 0x1e24c000},
+  {"frintm", I_FP1, 0x1e254000}, {"frintz", I_FP1, 0x1e25c000},
+  {"frinta", I_FP1, 0x1e264000}, {"frintx", I_FP1, 0x1e274000},
+  {"frinti", I_FP1, 0x1e27c000},
+  {"fmul", I_FP2, 0x1e200800}, {"fdiv", I_FP2, 0x1e201800}, {"fadd", I_FP2, 0x1e202800},
+  {"fsub", I_FP2, 0x1e203800}, {"fmax", I_FP2, 0x1e204800}, {"fmin", I_FP2, 0x1e205800},
+  {"fmaxnm", I_FP2, 0x1e206800}, {"fminnm", I_FP2, 0x1e207800},
+  {"fnmul", I_FP2, 0x1e208800},
+  {"fmadd", I_FP3, 0x1f000000}, {"fmsub", I_FP3, 0x1f008000},
+  {"fnmadd", I_FP3, 0x1f200000}, {"fnmsub", I_FP3, 0x1f208000},
+  {"fcmp", I_FCMP, 0x00}, {"fcmpe", I_FCMP, 0x10},
+  {"fcvt", I_FCVT},
+  {"fcvtns", I_FCVTI, 0x00}, {"fcvtnu", I_FCVTI, 0x01}, {"fcvtas", I_FCVTI, 0x04},
+  {"fcvtau", I_FCVTI, 0x05}, {"fcvtps", I_FCVTI, 0x08}, {"fcvtpu", I_FCVTI, 0x09},
+  {"fcvtms", I_FCVTI, 0x10}, {"fcvtmu", I_FCVTI, 0x11}, {"fcvtzs", I_FCVTI, 0x18},
+  {"fcvtzu", I_FCVTI, 0x19},
+  {"scvtf", I_ICVTF, 0x02}, {"ucvtf", I_ICVTF, 0x03},
+  {"fcsel", I_FCSEL, 0x1e200c00},
+  {"ins", I_INS}, {"umov", I_UMOV},
+};
+
+static HashMap a64_insn_map;
+
+// Vector (Advanced SIMD) instructions on arrangements, as in add v0.4s,
+// v1.4s, v2.4s: the integer add, sub, mul, and, bic, orr and eor, and
+// the floating-point fadd, fsub, fmul, fdiv, fmax, fmin, fabs, fneg and
+// fsqrt. Returns false if `name` isn't one of them.
+static bool a64_simd(char *name, AOp *ops, int n) {
+  static struct {
+    char *name;
+    uint32_t op;
+    int kind; // 0 integer (size bits 22-23), 1 bytes only, 2 FP (sz bit 22)
+    int nregs;
+  } insns[] = {
+    {"add", 0x0e208400, 0, 3}, {"sub", 0x2e208400, 0, 3}, {"mul", 0x0e209c00, 0, 3},
+    {"and", 0x0e201c00, 1, 3}, {"bic", 0x0e601c00, 1, 3}, {"orr", 0x0ea01c00, 1, 3},
+    {"eor", 0x2e201c00, 1, 3},
+    {"fadd", 0x0e20d400, 2, 3}, {"fsub", 0x0ea0d400, 2, 3}, {"fmul", 0x2e20dc00, 2, 3},
+    {"fdiv", 0x2e20fc00, 2, 3}, {"fmax", 0x0e20f400, 2, 3}, {"fmin", 0x0ea0f400, 2, 3},
+    {"fabs", 0x0ea0f800, 2, 2}, {"fneg", 0x2ea0f800, 2, 2}, {"fsqrt", 0x2ea1f800, 2, 2},
+  };
+  int i = 0;
+  while (i < sizeof(insns) / sizeof(*insns) && strcmp(insns[i].name, name))
+    i++;
+  if (i == sizeof(insns) / sizeof(*insns))
+    return false;
+
+  AOp *d = &ops[0];
+  if (n != insns[i].nregs)
+    fail("bad operands");
+  for (int k = 0; k < n; k++)
+    if (ops[k].kind != A_VEC || ops[k].size != d->size || ops[k].lanes != d->lanes)
+      fail("bad operands");
+  int bytes = d->size * d->lanes;
+  int lg = __builtin_ctz(d->size);
+  if ((bytes != 8 && bytes != 16) || (insns[i].kind == 1 && d->size != 1) ||
+      (insns[i].kind == 2 && d->size != 4 && d->size != 8) ||
+      (insns[i].kind == 0 && lg == 3 && (bytes == 8 || !strcmp(name, "mul"))))
+    fail("bad arrangement");
+  uint32_t insn = insns[i].op | (bytes == 16) << 30 | d->reg | ops[1].reg << 5;
+  if (insns[i].kind == 0)
+    insn |= lg << 22;
+  if (insns[i].kind == 2)
+    insn |= (d->size == 8) << 22;
+  if (n == 3)
+    insn |= ops[2].reg << 16;
+  a64_out(insn);
+  return true;
+}
+
+// An FP number that fmov can take, as its 8-bit immediate abcdefgh, or
+// -1: (16 + efgh) / 16 times 2 to the power cd + 1, or cd - 3 if b is
+// set, negated if a is.
+static int a64_fimm8(double f) {
+  for (int i = 0; i < 256; i++) {
+    int cd = (i >> 4) & 3;
+    int e = (i & 0x40) ? cd - 3 : cd + 1;
+    double v = (16 + (i & 15)) / 16.0 * (e >= 0 ? (double)(1 << e) : 1.0 / (1 << -e));
+    if ((i & 0x80 ? -v : v) == f)
+      return i;
+  }
+  return -1;
+}
+
+// Encodes one ARM64 instruction: mnemonic `name` (`len` chars), operands
+// at p.
+static void a64_instruction(char *name, int len) {
+  if (!a64_insn_map.capacity)
+    for (int i = 0; i < sizeof(a64_insns) / sizeof(*a64_insns); i++)
+      hashmap_put(&a64_insn_map, a64_insns[i].name, &a64_insns[i]);
+
+  char *mnem = strndup(name, len);
+  for (char *c = mnem; *c; c++)
+    *c = tolower((unsigned char)*c);
+
+  AOp ops[5];
+  int n;
+
+  // b.eq, b.ne, ...
+  if (len > 2 && !strncmp(mnem, "b.", 2)) {
+    int cc = a64_cond(mnem + 2, len - 2);
+    if (cc < 0)
+      fail("unknown instruction '%s'", mnem);
+    n = a64_operands(ops, 1);
+    if (n != 1)
+      fail("bad operands");
+    a64_branch(0x54000000 | cc, R_AARCH64_CONDBR19, &ops[0]);
+    return;
+  }
+
+  AInsn *insn = hashmap_get(&a64_insn_map, mnem);
+  if (!insn)
+    fail("unknown instruction '%s'", mnem);
+
+  // The barriers take a name (dmb ish), which isn't an operand elsewhere.
+  if (insn->kind == I_BARRIER) {
+    static struct { char *name; int crm; } opts[] = {
+      {"sy", 15}, {"ish", 11}, {"ishld", 9}, {"ishst", 10}, {"ld", 13}, {"st", 14},
+      {"osh", 3}, {"oshld", 1}, {"oshst", 2}, {"nsh", 7}, {"nshld", 5}, {"nshst", 6},
+    };
+    skip_space();
+    if (*p == '#')
+      p++;
+    int crm = 15;
+    if (*p) {
+      char *w;
+      int wlen = a64_word(&w);
+      crm = -1;
+      for (int i = 0; i < sizeof(opts) / sizeof(*opts); i++)
+        if (word_is(w, wlen, opts[i].name))
+          crm = opts[i].crm;
+      if (crm < 0) {
+        p = w;
+        crm = read_int();
+      }
+      if (crm < 0 || crm > 15)
+        fail("bad barrier option");
+    }
+    a64_out(insn->op | crm << 8);
+    return;
+  }
+
+  n = a64_operands(ops, 5);
+  AOp *d = &ops[0];
+  if (n && d->kind == A_VEC && d->lanes && a64_simd(mnem, ops, n))
+    return;
+
+  // These take general registers all of one size.
+  switch (insn->kind) {
+  case I_SHIFT: case I_EXTR: case I_DP1: case I_DP2: case I_ADC: case I_NGC:
+  case I_CSEL: case I_CSET: case I_CINC: case I_CCMP: case I_MULH:
+    for (int i = 0; i < n; i++)
+      if (ops[i].kind == A_GP && (ops[i].size != d->size || d->kind != A_GP))
+        fail("operands of different sizes");
+  }
+
+  switch (insn->kind) {
+  case I_ADDSUB:
+    if (n < 3)
+      fail("bad operands");
+    a64_addsub(insn->op, d, &ops[1], &ops[2], n - 2);
+    return;
+  case I_CMP: {
+    if (n < 2)
+      fail("bad operands");
+    AOp zr = {A_GP, 31, d->size};
+    a64_addsub(insn->op, &zr, d, &ops[1], n - 1);
+    return;
+  }
+  case I_NEG: {
+    if (n < 2)
+      fail("bad operands");
+    AOp zr = {A_GP, 31, d->size};
+    a64_addsub(insn->op, d, &zr, &ops[1], n - 1);
+    return;
+  }
+  case I_LOGIC:
+    if (n < 3)
+      fail("bad operands");
+    a64_logic(insn->op & 3, insn->op > 3, d, &ops[1], &ops[2], n - 2);
+    return;
+  case I_TST: {
+    if (n < 2)
+      fail("bad operands");
+    AOp zr = {A_GP, 31, d->size};
+    a64_logic(3, false, &zr, d, &ops[1], n - 1);
+    return;
+  }
+  case I_MOV:
+    if (n != 2)
+      fail("bad operands");
+    if (d->kind == A_GP) {
+      if (ops[1].kind == A_VEC) { // mov x0, v0.d[1]
+        insn = hashmap_get(&a64_insn_map, "umov");
+        break;
+      }
+      a64_mov(d, &ops[1]);
+      return;
+    }
+    if (d->kind == A_VEC && d->elem >= 0) { // mov v0.d[1], x0
+      insn = hashmap_get(&a64_insn_map, "ins");
+      break;
+    }
+    fail("unsupported operands");
+  case I_MVN: {
+    if (n < 2)
+      fail("bad operands");
+    // mvn is orn from the zero register.
+    AOp zr = {A_GP, 31, d->size};
+    a64_logic(1, true, d, &zr, &ops[1], n - 1);
+    return;
+  }
+  case I_MOVW:
+    if (n < 2 || n > 3)
+      fail("bad operands");
+    a64_movw(insn->op, ops, n);
+    return;
+  case I_SHIFT: {
+    if (n != 3)
+      fail("bad operands");
+    int bits = d->size * 8;
+    if (ops[2].kind == A_GP) {
+      static int dp2[] = {8, 9, 10, 11};
+      a64_out(sf(d) | 0x1ac00000 | gpreg(&ops[2], false) << 16 | dp2[insn->op] << 10 |
+              gpreg(&ops[1], false) << 5 | gpreg(d, false));
+      return;
+    }
+    int s = imm(&ops[2], 0, bits - 1);
+    switch (insn->op) {
+    case LSL: a64_bfm(2, d, &ops[1], (bits - s) % bits, bits - 1 - s); return;
+    case LSR: a64_bfm(2, d, &ops[1], s, bits - 1); return;
+    case ASR: a64_bfm(0, d, &ops[1], s, bits - 1); return;
+    }
+    // ror is extr of a register with itself.
+    a64_out(sf(d) | 0x13800000 | (d->size == 8) << 22 | gpreg(&ops[1], false) << 16 |
+            s << 10 | gpreg(&ops[1], false) << 5 | gpreg(d, false));
+    return;
+  }
+  case I_BFM:
+    if (n != 4)
+      fail("bad operands");
+    a64_bfm(insn->op, d, &ops[1], imm(&ops[2], 0, 63), imm(&ops[3], 0, 63));
+    return;
+  case I_BFX: {
+    if (n != 4)
+      fail("bad operands");
+    int lsb = imm(&ops[2], 0, 63), w = imm(&ops[3], 1, 64);
+    a64_bfm(insn->op, d, &ops[1], lsb, lsb + w - 1);
+    return;
+  }
+  case I_BFIZ: {
+    if (n != 4)
+      fail("bad operands");
+    int bits = d->size * 8;
+    int lsb = imm(&ops[2], 0, bits - 1), w = imm(&ops[3], 1, bits);
+    a64_bfm(insn->op, d, &ops[1], (bits - lsb) % bits, w - 1);
+    return;
+  }
+  case I_EXT: {
+    // sxtb x0, w1 and the like: the source is a w register
+    if (n != 2 || ops[1].kind != A_GP || ops[1].size != 4)
+      fail("bad operands");
+    int bits = insn->op == SXTB || insn->op == UXTB ? 8 : insn->op == SXTH || insn->op == UXTH ? 16 : 32;
+    bool sign = insn->op >= SXTB;
+    if ((!sign && bits < 32 && d->size == 8) || (bits == 32 && d->size == 4))
+      fail("bad operands");
+    // uxtw x0, w1 is mov w0, w1 (which zeroes the upper half), as GNU as
+    // makes it.
+    if (insn->op == UXTW) {
+      a64_out(0x2a0003e0 | gpreg(&ops[1], false) << 16 | gpreg(d, false));
+      return;
+    }
+    AOp src = ops[1];
+    src.size = d->size;
+    a64_bfm(sign ? 0 : 2, d, &src, 0, bits - 1);
+    return;
+  }
+  case I_EXTR:
+    if (n != 4)
+      fail("bad operands");
+    a64_out(sf(d) | 0x13800000 | (d->size == 8) << 22 | gpreg(&ops[2], false) << 16 |
+            imm(&ops[3], 0, d->size * 8 - 1) << 10 | gpreg(&ops[1], false) << 5 |
+            gpreg(d, false));
+    return;
+  case I_DP1: {
+    // rbit, rev16, rev32 (64 bits only), rev, clz, cls. rev of 32 bits
+    // is rev32's opcode.
+    if (n != 2)
+      fail("bad operands");
+    int opc = insn->op;
+    if (opc == 3 && d->size == 4)
+      opc = 2;
+    else if (opc == 2 && d->size != 8)
+      fail("bad operands");
+    a64_out(sf(d) | 0x5ac00000 | opc << 10 | gpreg(&ops[1], false) << 5 | gpreg(d, false));
+    return;
+  }
+  case I_DP2:
+    if (n != 3)
+      fail("bad operands");
+    a64_out(sf(d) | 0x1ac00000 | gpreg(&ops[2], false) << 16 | insn->op << 10 |
+            gpreg(&ops[1], false) << 5 | gpreg(d, false));
+    return;
+  case I_DP3:
+  case I_MUL: {
+    // madd d, n, m, a; mul d, n, m is madd with a the zero register. The
+    // long ones (smaddl, smull...) take w registers and make an x.
+    bool is_long = insn->op & 0x80000000;
+    if (n != (insn->kind == I_MUL ? 3 : 4))
+      fail("bad operands");
+    if (is_long ? d->size != 8 || ops[1].size != 4 || ops[2].size != 4
+                : ops[1].size != d->size || ops[2].size != d->size)
+      fail("bad operands");
+    int ra = insn->kind == I_MUL ? 31 : gpreg(&ops[3], false);
+    a64_out((is_long ? 0 : sf(d)) | insn->op | gpreg(&ops[2], false) << 16 | ra << 10 |
+            gpreg(&ops[1], false) << 5 | gpreg(d, false));
+    return;
+  }
+  case I_MULH:
+    if (n != 3 || d->size != 8)
+      fail("bad operands");
+    a64_out(insn->op | gpreg(&ops[2], false) << 16 | gpreg(&ops[1], false) << 5 |
+            gpreg(d, false));
+    return;
+  case I_ADC:
+    if (n != 3)
+      fail("bad operands");
+    a64_out(sf(d) | insn->op << 29 | 0x1a000000 | gpreg(&ops[2], false) << 16 |
+            gpreg(&ops[1], false) << 5 | gpreg(d, false));
+    return;
+  case I_NGC:
+    if (n != 2)
+      fail("bad operands");
+    a64_out(sf(d) | insn->op << 29 | 0x1a000000 | gpreg(&ops[1], false) << 16 | 31 << 5 |
+            gpreg(d, false));
+    return;
+  case I_CSEL: {
+    // csel, csinc, csinv, csneg: op2 in bit 10, op in bit 30
+    if (n != 4 || ops[3].kind != A_COND)
+      fail("bad operands");
+    a64_out(sf(d) | (insn->op >> 1) << 30 | 0x1a800000 | gpreg(&ops[2], false) << 16 |
+            ops[3].val << 12 | (insn->op & 1) << 10 | gpreg(&ops[1], false) << 5 |
+            gpreg(d, false));
+    return;
+  }
+  case I_CSET: {
+    // cset d, cond is csinc d, zr, zr, !cond; csetm is csinv.
+    if (n != 2 || ops[1].kind != A_COND || ops[1].val >= 14)
+      fail("bad operands");
+    a64_out(sf(d) | (insn->op >> 1) << 30 | 0x1a800000 | 31 << 16 | (ops[1].val ^ 1) << 12 |
+            (insn->op & 1) << 10 | 31 << 5 | gpreg(d, false));
+    return;
+  }
+  case I_CINC: {
+    // cinc d, n, cond is csinc d, n, n, !cond; cinv csinv, cneg csneg.
+    if (n != 3 || ops[2].kind != A_COND || ops[2].val >= 14)
+      fail("bad operands");
+    int rn = gpreg(&ops[1], false);
+    a64_out(sf(d) | (insn->op >> 1) << 30 | 0x1a800000 | rn << 16 | (ops[2].val ^ 1) << 12 |
+            (insn->op & 1) << 10 | rn << 5 | gpreg(d, false));
+    return;
+  }
+  case I_CCMP: {
+    // ccmp n, m|imm5, nzcv, cond
+    if (n != 4 || ops[3].kind != A_COND)
+      fail("bad operands");
+    bool is_imm = ops[1].kind == A_IMM;
+    int m = is_imm ? imm(&ops[1], 0, 31) : gpreg(&ops[1], false);
+    a64_out(sf(d) | insn->op << 30 | 0x3a400000 | m << 16 | ops[3].val << 12 | is_imm << 11 |
+            gpreg(d, false) << 5 | imm(&ops[2], 0, 15));
+    return;
+  }
+  case I_LDST:
+  case I_LDSTU:
+    if (n < 2 || n > 3)
+      fail("bad operands");
+    if (n == 2 && insn->kind == I_LDST)
+      a64_label(&ops[1]);
+    if (ops[1].kind == A_IMM && insn->kind == I_LDST && ops[1].sym && !ops[1].mod) {
+      // ldr x0, label: pc-relative, within 1 MiB
+      uint32_t lit = d->kind == A_FP ? (d->size == 4 ? 0x1c000000 : d->size == 8 ? 0x5c000000 :
+                                        0x9c000000) | d->reg :
+                     !strcmp(mnem, "ldrsw") ? 0x98000000 | gpreg(d, false) :
+                     !strcmp(mnem, "ldr") ? (d->size == 8 ? 0x58000000 : 0x18000000) |
+                                             gpreg(d, false) : 0;
+      if (!lit)
+        fail("bad operands");
+      a64_hole(R_AARCH64_LD_PREL_LO19, ops[1].sym, ops[1].val);
+      a64_out(lit);
+      return;
+    }
+    a64_ldst(mnem, d, &ops[1], n == 3 ? &ops[2] : NULL, insn->kind == I_LDSTU);
+    return;
+  case I_LDSTP:
+    a64_ldstp(mnem, ops, n);
+    return;
+  case I_EXCL:
+    a64_excl(mnem, ops, n);
+    return;
+  case I_B:
+    if (n != 1)
+      fail("bad operands");
+    a64_branch(insn->op, insn->op & 0x80000000 ? R_AARCH64_CALL26 : R_AARCH64_JUMP26, d);
+    return;
+  case I_CBZ:
+    if (n != 2)
+      fail("bad operands");
+    a64_branch(sf(d) | insn->op | gpreg(d, false), R_AARCH64_CONDBR19, &ops[1]);
+    return;
+  case I_TBZ: {
+    if (n != 3)
+      fail("bad operands");
+    int bit = imm(&ops[1], 0, d->size * 8 - 1);
+    a64_branch((bit >> 5) << 31 | insn->op | (bit & 31) << 19 | gpreg(d, false),
+               R_AARCH64_TSTBR14, &ops[2]);
+    return;
+  }
+  case I_BR:
+    if (n != 1 || !is_x(d))
+      fail("bad operands");
+    a64_out(insn->op | gpreg(d, false) << 5);
+    return;
+  case I_RET:
+    if (n > 1 || (n && !is_x(d)))
+      fail("bad operands");
+    a64_out(insn->op | (n ? gpreg(d, false) : 30) << 5);
+    return;
+  case I_ADR: {
+    // adr: pc-relative, within 1 MiB; adrp: the page, within 4 GiB
+    if (n == 2)
+      a64_label(&ops[1]);
+    if (n != 2 || !is_x(d) || ops[1].kind != A_IMM || !ops[1].sym)
+      fail("bad operands");
+    bool page = insn->op & 0x80000000;
+    int type = !page ? R_AARCH64_ADR_PREL_LO21 :
+               ops[1].mod ? ops[1].mod->reloc : R_AARCH64_ADR_PREL_PG_HI21;
+    if (ops[1].mod && (!page || type == R_AARCH64_ADD_ABS_LO12_NC))
+      fail("bad relocation operator");
+    a64_hole(type, ops[1].sym, ops[1].val);
+    a64_out(insn->op | gpreg(d, false));
+    return;
+  }
+  case I_EXCEPT:
+    a64_out(insn->op | (n ? imm(d, 0, 0xffff) : 0) << 5);
+    return;
+  case I_FIXED:
+    if (n)
+      fail("bad operands");
+    a64_out(insn->op);
+    return;
+  case I_MRS:
+    if (n != 2 || !is_x(d) || ops[1].kind != A_SYSREG)
+      fail("bad operands");
+    a64_out(insn->op | ops[1].val << 5 | gpreg(d, false));
+    return;
+  case I_MSR:
+    if (n != 2 || d->kind != A_SYSREG || !is_x(&ops[1]))
+      fail("bad operands");
+    a64_out(insn->op | d->val << 5 | gpreg(&ops[1], false));
+    return;
+  case I_FMOV: {
+    if (n != 2)
+      fail("bad operands");
+    AOp *s = &ops[1];
+    if (d->kind == A_FP && s->kind == A_FP) {
+      a64_fp(0x1e204000, ops, n, 2);
+      return;
+    }
+    if (d->kind == A_FP && s->kind == A_FLOAT) {
+      int imm8 = a64_fimm8(s->fval);
+      if (imm8 < 0)
+        fail("immediate can't be encoded");
+      a64_out(0x1e201000 | ftype(d) | imm8 << 13 | d->reg);
+      return;
+    }
+    // Between general and FP registers: the sizes must match, but for
+    // the high half of a vector, v0.d[1].
+    bool to_fp = d->kind != A_GP;
+    AOp *g = to_fp ? s : d, *f = to_fp ? d : s;
+    if (g->kind != A_GP)
+      fail("bad operands");
+    uint32_t insn32;
+    if (f->kind == A_VEC && f->size == 8 && f->elem == 1 && g->size == 8)
+      insn32 = 0x9eae0000;
+    else if (f->kind == A_FP && f->size == g->size)
+      insn32 = g->size == 8 ? 0x9e660000 : 0x1e260000;
+    else
+      fail("bad operands");
+    a64_out(insn32 | to_fp << 16 | (to_fp ? f->reg : gpreg(g, false)) |
+            (to_fp ? gpreg(g, false) : f->reg) << 5);
+    return;
+  }
+  case I_FP1:
+    a64_fp(insn->op, ops, n, 2);
+    return;
+  case I_FP2:
+    a64_fp(insn->op, ops, n, 3);
+    return;
+  case I_FP3:
+    a64_fp(insn->op, ops, n, 4);
+    return;
+  case I_FCMP:
+    if (n != 2)
+      fail("bad operands");
+    if (ops[1].kind == A_FLOAT || ops[1].kind == A_IMM) {
+      if ((ops[1].kind == A_FLOAT && ops[1].fval != 0) ||
+          (ops[1].kind == A_IMM && (ops[1].val || ops[1].sym)))
+        fail("fcmp compares with 0.0 only");
+      a64_out(0x1e202000 | ftype(d) | d->reg << 5 | insn->op | 8);
+      return;
+    }
+    same_size(d, &ops[1]);
+    a64_out(0x1e202000 | ftype(d) | ops[1].reg << 16 | d->reg << 5 | insn->op);
+    return;
+  case I_FCVT: {
+    // Between half, single and double precision
+    if (n != 2 || d->kind != A_FP || ops[1].kind != A_FP || d->size == ops[1].size)
+      fail("bad operands");
+    int opc = d->size == 4 ? 0 : d->size == 8 ? 1 : 3;
+    a64_out(0x1e224000 | ftype(&ops[1]) | opc << 15 | ops[1].reg << 5 | d->reg);
+    return;
+  }
+  case I_FCVTI:
+    // To an integer: rmode and opcode fields from the table
+    if (n != 2 || d->kind != A_GP)
+      fail("bad operands");
+    a64_out(sf(d) | 0x1e200000 | ftype(&ops[1]) | (insn->op >> 3) << 19 |
+            (insn->op & 7) << 16 | ops[1].reg << 5 | gpreg(d, false));
+    return;
+  case I_ICVTF:
+    if (n != 2 || ops[1].kind != A_GP)
+      fail("bad operands");
+    a64_out(sf(&ops[1]) | 0x1e200000 | ftype(d) | insn->op << 16 | gpreg(&ops[1], false) << 5 |
+            d->reg);
+    return;
+  case I_FCSEL:
+    if (n != 4 || ops[3].kind != A_COND)
+      fail("bad operands");
+    same_size(d, &ops[1]);
+    same_size(d, &ops[2]);
+    a64_out(insn->op | ftype(d) | ops[2].reg << 16 | ops[3].val << 12 | ops[1].reg << 5 |
+            d->reg);
+    return;
+  default:
+    break;
+  }
+
+  // ins v0.d[1], x0 and umov x0, v0.d[1] (and mov, their alias): an
+  // element of 1, 2, 4 or 8 bytes, as imm5 has it
+  AOp *v = insn->kind == I_INS ? &ops[0] : &ops[1];
+  AOp *g = insn->kind == I_INS ? &ops[1] : &ops[0];
+  if (n != 2 || v->kind != A_VEC || v->elem < 0 || g->kind != A_GP)
+    fail("bad operands");
+  int lg = __builtin_ctz(v->size);
+  if (lg > 3 || v->elem << lg >= 16 || (insn->kind == I_UMOV && (g->size == 8) != (lg == 3)))
+    fail("bad operands");
+  uint32_t imm5 = (v->elem << (lg + 1)) | (1 << lg);
+  if (insn->kind == I_INS)
+    a64_out(0x4e001c00 | imm5 << 16 | gpreg(g, false) << 5 | v->reg);
+  else
+    a64_out((lg == 3) << 30 | 0x0e003c00 | imm5 << 16 | v->reg << 5 | gpreg(g, false));
+}
+
 //---------- Directives ------------------------------------------------------
 
 static void expect_comma(void) {
@@ -2035,13 +3613,18 @@ static void pad_to(int64_t n, int fill, int64_t max) {
   int64_t pad = (n - cur->bytes.len % n) % n;
   if (!pad || (max && pad > max))
     return;
-  // A jump before it may still change size (see layout()), and move it.
-  if (cur->njumps)
+  // A jump before it may still change size (see layout()), and move it,
+  // but for ARM64's, which keep everything 4-byte aligned.
+  if (cur->njumps && !(target_arm64 && n <= 4))
     fail("alignment after a jump");
-  if (fill < 0 && (cur->flags & SHF_EXECINSTR))
+  if (fill < 0 && (cur->flags & SHF_EXECINSTR) && target_arm64 && pad % 4 == 0) {
+    for (int64_t i = 0; i < pad; i += 4)
+      out_n(4, 0xd503201f); // nop
+  } else if (fill < 0 && (cur->flags & SHF_EXECINSTR) && !target_arm64) {
     out_nops(pad);
-  else
+  } else {
     out_fill(pad, fill < 0 ? 0 : fill);
+  }
 }
 
 static void align_to_n(int n) {
@@ -2138,10 +3721,13 @@ static void directive(char *name, int len) {
   if (IS(".ascii") || IS(".asciz") || IS(".string")) {
     string_directive(!IS(".ascii"));
   } else if (IS(".byte") || IS(".quad") || IS(".long") || IS(".int") ||
-             IS(".value") || IS(".short") || IS(".word")) {
+             IS(".value") || IS(".short") || IS(".word") || IS(".hword") ||
+             IS(".xword") || IS(".dword") || IS(".inst")) {
     // A list of values: numbers, symbols (in a .quad) or differences of
-    // labels, as in `.long end - start`
-    int size = IS(".byte") ? 1 : IS(".quad") ? 8 : IS(".long") || IS(".int") ? 4 : 2;
+    // labels, as in `.long end - start`. (.word is 4 bytes on ARM64, as
+    // .inst, an instruction's.)
+    int size = IS(".byte") ? 1 : IS(".quad") || IS(".xword") || IS(".dword") ? 8 :
+               IS(".long") || IS(".int") || IS(".inst") || (IS(".word") && target_arm64) ? 4 : 2;
     for (;;) {
       Operand op = {0};
       skip_space();
@@ -2151,11 +3737,11 @@ static void directive(char *name, int len) {
       if (op.minus)
         diff_hole(op.sym, op.minus, op.val, size);
       else if (op.sym && size == 8)
-        hole(R_X86_64_64, op.sym, op.val, 8);
+        hole(abs_reloc(8), op.sym, op.val, 8);
       else if (op.sym && size == 4)
         // A 32-bit address, as -g's .debug_info has for the offsets of
         // .debug_abbrev and .debug_line
-        hole(R_X86_64_32, op.sym, op.val, 4);
+        hole(abs_reloc(4), op.sym, op.val, 4);
       else if (op.sym)
         fail("symbol in a data directive smaller than .long");
       else if (size == 1 && (op.val < -128 || op.val > 255))
@@ -2259,9 +3845,9 @@ static void directive(char *name, int len) {
     sym->value = val;
   } else if (IS(".align") || IS(".balign") || IS(".p2align")) {
     // .balign N[, fill[, max]] (.align is the same on x86-64) and
-    // .p2align log2(N)[, fill[, max]]
+    // .p2align log2(N)[, fill[, max]] (.align on ARM64)
     int64_t n = read_int();
-    if (IS(".p2align")) {
+    if (IS(".p2align") || (IS(".align") && target_arm64)) {
       if (n < 0 || n > 30)
         fail("bad alignment");
       n = (int64_t)1 << n;
@@ -2320,6 +3906,15 @@ static void directive(char *name, int len) {
       out(*s);
     } while (*s++);
     cur = sec;
+  } else if (IS(".tlsdesccall")) {
+    // The blr of a TLS descriptor call (see cgen_arm64.c), which the
+    // linker may change: a relocation at the instruction that follows
+    Sym *sym = read_sym();
+    a64_hole(R_AARCH64_TLSDESC_CALL, sym, 0);
+  } else if (IS(".arch") || IS(".cpu") || IS(".arch_extension")) {
+    // ARM64's CPU and extensions: every instruction here is ARMv8-A's.
+    while (*p)
+      p++;
   } else if (len > 5 && !strncmp(name, ".cfi_", 5)) {
     // Call frame information, for unwinding through the code: mucc makes
     // none for C (no .eh_frame), so none for assembly either.
@@ -2429,8 +4024,9 @@ static int first_word(char *s, char **start) {
   return s - *start;
 }
 
+// (As equal() in mucc.h: first characters differ, mostly.)
 static bool word_is(char *w, int len, char *name) {
-  return len == strlen(name) && !strncmp(w, name, len);
+  return w[0] == name[0] && !strncmp(w, name, len) && name[len] == '\0';
 }
 
 // Reads `name a, b=1, c:vararg` after .macro.
@@ -2487,7 +4083,9 @@ static StringArray macro_args(char *s) {
   int depth = 0;
   bool in_string = false;
   for (char *q = s; *q; q++) {
-    if (*q == '"')
+    if (in_string && *q == '\\' && q[1])
+      q++;
+    else if (*q == '"')
       in_string = !in_string;
     else if (!in_string && *q == '(')
       depth++;
@@ -2506,6 +4104,10 @@ static StringArray macro_args(char *s) {
     depth = 0;
     in_string = false;
     for (; *s; s++) {
+      if (in_string && *s == '\\' && s[1]) {
+        s++;
+        continue;
+      }
       if (*s == '"')
         in_string = !in_string;
       if (in_string)
@@ -2709,12 +4311,40 @@ static void line(char *s) {
 }
 
 // Splits the text into statements: one per line, or several separated
-// by ';'. Comments (# and /* */) are dropped. Works in place.
+// by ';'. Comments (# and /* */, or on ARM64 // and a # that starts a
+// line) are dropped. Works in place.
 static void read_input(char *text) {
   char *s = text;       // start of the current statement
+  char *bol = text;     // start of the current line
   bool in_string = false;
 
+  // The characters the loop acts on. It skips the rest at once: they are
+  // most of the text.
+  static bool special[256] = {
+    ['\0'] = 1, ['\n'] = 1, [';'] = 1, ['"'] = 1, ['#'] = 1, ['/'] = 1, ['\\'] = 1,
+  };
+
   for (char *q = text;; q++) {
+    if (!special[(unsigned char)*q])
+      continue;
+
+    // On ARM64, # marks an immediate, unless it starts the line, and //
+    // starts a comment, as # does below.
+    if (target_arm64 && !in_string && *q == '#') {
+      char *c = q;
+      while (c > bol && (c[-1] == ' ' || c[-1] == '\t'))
+        c--;
+      if (c != bol)
+        continue;
+    }
+    if (target_arm64 && !in_string && q[0] == '/' && q[1] == '/')
+      *q = '#';
+
+    // In a string, \" and \\ are escapes, not its end.
+    if (in_string && *q == '\\' && q[1]) {
+      q++;
+      continue;
+    }
     if (*q == '"')
       in_string = !in_string;
 
@@ -2738,6 +4368,8 @@ static void read_input(char *text) {
 
     if (*q == '\0' || *q == '\n' || (!in_string && *q == ';')) {
       bool at_end = *q == '\0';
+      if (*q == '\n')
+        bol = q + 1;
       *q = '\0';
       line(s);
       if (at_end)
@@ -2756,17 +4388,30 @@ static void read_input(char *text) {
 //---------- Layout: jump sizes and addresses --------------------------------
 
 static int jump_size(Jump *j) {
+  if (target_arm64)
+    return j->is_long ? 8 : 4;
   if (!j->is_long)
     return 2;
   return j->cc < 0 ? 5 : 6;
 }
 
+// Does a short jump at `from` reach `dist` bytes away? On ARM64, a
+// conditional branch reaches 1 MiB, and tbz and tbnz 32 KiB.
+static bool in_short_range(Jump *j, int64_t dist) {
+  if (!target_arm64)
+    return is_int8(dist);
+  int64_t range = j->cc == R_AARCH64_TSTBR14 ? 1 << 15 : 1 << 20;
+  return -range <= dist && dist < range;
+}
+
 // Can `j` be a short jump? Only to a label in the same section, where the
 // distance is known now, that is local or hidden (so no other definition
 // can take its place).
+// (On ARM64, as with GNU as there, only a local one.)
 static bool is_near(Jump *j, Section *sec) {
   Sym *t = j->target;
-  return t->sec == sec && (!t->is_global || t->visibility != STV_DEFAULT);
+  return t->sec == sec &&
+         (!t->is_global || (!target_arm64 && t->visibility != STV_DEFAULT));
 }
 
 static uint64_t sym_addr(Sym *sym) {
@@ -2776,9 +4421,10 @@ static uint64_t sym_addr(Sym *sym) {
 // Starts with every near jump short and makes long the ones whose target
 // is too far, until nothing changes, as GNU as does.
 static void layout(Section *sec) {
+  // (An ARM64 branch elsewhere stays short, a relocation, as GNU as has it.)
   sec->jumps_before = calloc(sec->njumps + 1, sizeof(int));
   for (int i = 0; i < sec->njumps; i++)
-    if (!is_near(&sec->jumps[i], sec))
+    if (!is_near(&sec->jumps[i], sec) && !target_arm64)
       sec->jumps[i].is_long = true;
 
   for (;;) {
@@ -2788,11 +4434,12 @@ static void layout(Section *sec) {
     bool changed = false;
     for (int i = 0; i < sec->njumps; i++) {
       Jump *j = &sec->jumps[i];
-      if (j->is_long)
+      if (j->is_long || !is_near(j, sec))
         continue;
-      int64_t from = j->pos + sec->jumps_before[i] + 2;
+      // (from the jump's end on x86-64, and its start on ARM64)
+      int64_t from = j->pos + sec->jumps_before[i] + (target_arm64 ? 0 : 2);
       int64_t dist = (int64_t)sym_addr(j->target) - from;
-      if (!is_int8(dist)) {
+      if (!in_short_range(j, dist)) {
         j->is_long = true;
         changed = true;
       }
@@ -2821,12 +4468,48 @@ static void patch(Bytes *b, uint64_t offset, int size, uint64_t val) {
     b->data[offset + i] = (val >> (i * 8)) & 0xff;
 }
 
+// ARM64's: a branch or an adr to a label in the same section (that only
+// this file defines) is known now, and other pc-relative ones (adrp's
+// page) are relocations, as are all the rest. Those of a local symbol are
+// against its section, but GOT and TLS ones, which need the symbol.
+static void a64_fill_hole(Section *sec, uint64_t offset, int type, Sym *sym, int64_t addend) {
+  bool is_local = sym->sec && !sym->is_global;
+  bool pcrel = type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26 ||
+               type == R_AARCH64_CONDBR19 || type == R_AARCH64_TSTBR14 ||
+               type == R_AARCH64_ADR_PREL_LO21 || type == R_AARCH64_LD_PREL_LO19;
+
+  if (is_local && pcrel && sym->sec == sec) {
+    int64_t val = (int64_t)sym->value + addend - (int64_t)offset;
+    if (!arm64_put_field(sec->bytes.data + offset, type, val))
+      fail("branch or address out of range");
+    return;
+  }
+
+  // (These are the data and address relocations, from ABS64 to
+  // LDST128_ABS_LO12_NC. As GNU as does on ARM64, one to a function
+  // keeps its symbol.)
+  bool adjustable = type >= R_AARCH64_ABS64 && type <= R_AARCH64_LDST128_ABS_LO12_NC &&
+                    sym->type != STT_FUNC;
+  if (is_local && adjustable) {
+    add_reloc(sec, offset, type, NULL, sym->sec, sym->value + addend);
+    return;
+  }
+
+  if (!sym->sec && !sym->common_align && is_dot_l(sym->name))
+    fail("undefined label '%s'", sym->name);
+  add_reloc(sec, offset, type, sym, NULL, addend);
+}
+
 // Fills the hole at `offset` in `sec` (whose bytes are final) for `sym`
 // + `addend`. It's done here if the value is known now: a pc-relative
 // reference to a local symbol in the same section. Otherwise it becomes a
 // relocation: against the symbol's section for local symbols, which the
 // linker can do without the symbol, else against the symbol.
 static void fill_hole(Section *sec, uint64_t offset, int type, Sym *sym, int64_t addend) {
+  if (target_arm64) {
+    a64_fill_hole(sec, offset, type, sym, addend);
+    return;
+  }
   bool pcrel = type == R_X86_64_PC32 || type == R_X86_64_PLT32;
   bool is_local = sym->sec && !sym->is_global;
 
@@ -2886,9 +4569,61 @@ static void finish_section(Section *sec) {
   }
 }
 
+// ARM64's: a short jump is its branch; a long one is the opposite branch
+// over the next instruction, then a b to the target. (b.cond's opposite
+// has the condition's low bit flipped; cbz and cbnz, and tbz and tbnz,
+// differ in bit 24.)
+static void a64_place_jumps(Section *sec) {
+  Bytes out = {calloc(1, sec->size + 1), sec->size, sec->size + 1};
+  if (!out.data)
+    fail("out of memory");
+  uint64_t dst = 0;
+  int src = 0;
+
+  for (int i = 0; i < sec->njumps; i++) {
+    Jump *j = &sec->jumps[i];
+    memcpy(out.data + dst, sec->bytes.data + src, j->pos - src);
+    dst += j->pos - src;
+    src = j->pos;
+    uint32_t insn = j->insn;
+    if (j->is_long) {
+      bool is_bcond = (insn & 0xff000000) == 0x54000000;
+      insn ^= is_bcond ? 1 : 1 << 24;
+      arm64_put_field((unsigned char *)&insn, j->cc, 8);
+      memcpy(out.data + dst, &insn, 4);
+      dst += 4;
+      insn = 0x14000000;
+    }
+    memcpy(out.data + dst, &insn, 4);
+    j->field = dst;
+    dst += 4;
+  }
+  memcpy(out.data + dst, sec->bytes.data + src, sec->bytes.len - src);
+  free(sec->bytes.data);
+  sec->bytes = out;
+
+  // The offsets: a branch to another section, or to a global symbol, is
+  // a relocation.
+  for (int i = 0; i < sec->njumps; i++) {
+    Jump *j = &sec->jumps[i];
+    int type = j->is_long ? R_AARCH64_JUMP26 : j->cc;
+    if (is_near(j, sec)) {
+      int64_t val = (int64_t)sym_addr(j->target) - (int64_t)j->field;
+      if (!arm64_put_field(sec->bytes.data + j->field, type, val))
+        fail("branch out of range");
+      continue;
+    }
+    fill_hole(sec, j->field, type, j->target, 0);
+  }
+}
+
 // Copies `sec`'s bytes with its jumps, now that their sizes are known,
 // in place. (Without jumps, as in data, its bytes are already final.)
 static void place_jumps(Section *sec) {
+  if (target_arm64) {
+    a64_place_jumps(sec);
+    return;
+  }
   Bytes out = {calloc(1, sec->size + 1), sec->size, sec->size + 1};
   if (!out.data)
     fail("out of memory");
@@ -3001,7 +4736,7 @@ static void add_line_sequence(Section *line, Section *sec) {
   put(b, 0);
   put_uleb(b, 9);
   put(b, DW_LNE_set_address);
-  add_reloc(line, b->len, R_X86_64_64, NULL, sec, 0);
+  add_reloc(line, b->len, abs_reloc(8), NULL, sec, 0);
   put_n(b, 8, 0);
 
   uint64_t addr = 0;
@@ -3085,13 +4820,13 @@ static void add_debug_info(void) {
   Bytes *b = &info->bytes;
   put_n(b, 4, 0); // unit_length, patched below
   put_n(b, 2, 4); // version
-  add_reloc(info, b->len, R_X86_64_32, NULL, abbrev, 0);
+  add_reloc(info, b->len, abs_reloc(4), NULL, abbrev, 0);
   put_n(b, 4, 0); // debug_abbrev_offset
   put(b, 8);      // address_size
   put_uleb(b, 1);
-  add_reloc(info, b->len, R_X86_64_32, NULL, line, 0);
+  add_reloc(info, b->len, abs_reloc(4), NULL, line, 0);
   put_n(b, 4, 0); // DW_AT_stmt_list
-  add_reloc(info, b->len, R_X86_64_64, NULL, text, 0);
+  add_reloc(info, b->len, abs_reloc(8), NULL, text, 0);
   put_n(b, 8, 0); // DW_AT_low_pc
   put_n(b, 8, text->size);
   put_str(b, file_name ? file_name : "");
@@ -3290,7 +5025,7 @@ static void write_elf(char *path) {
   eh.e_ident[EI_DATA] = ELFDATA2LSB;
   eh.e_ident[EI_VERSION] = EV_CURRENT;
   eh.e_type = ET_REL;
-  eh.e_machine = EM_X86_64;
+  eh.e_machine = target_arm64 ? EM_AARCH64 : EM_X86_64;
   eh.e_version = EV_CURRENT;
   eh.e_shoff = shoff;
   eh.e_ehsize = sizeof(Elf64_Ehdr);

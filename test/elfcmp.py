@@ -44,6 +44,9 @@ def read(path):
         s = syms[i]
         return '[section %s]' % secname(s['shndx']) if s['type'] == 3 else s['name']
 
+    # A relocation against a local symbol is the same as one against its
+    # section, at its offset: GNU as's versions differ in which they use
+    # for a local function on ARM64.
     relocs = {}
     for s in secs.values():
         if s['type'] != 4:   # SHT_RELA
@@ -52,12 +55,21 @@ def read(path):
         rows = []
         for k in range(len(s['data']) // 24):
             off, info, addend = struct.unpack_from('<QQq', s['data'], k * 24)
-            rows.append((off, info & 0xffffffff, symdesc(info >> 32), addend))
+            sym = syms[info >> 32]
+            if sym['bind'] == 0 and sym['type'] != 3 and 0 < sym['shndx'] < 0xff00:
+                rows.append((off, info & 0xffffffff, '[section %s]' % secname(sym['shndx']),
+                             sym['value'] + addend))
+            else:
+                rows.append((off, info & 0xffffffff, symdesc(info >> 32), addend))
         relocs[target] = sorted(rows)
 
     symset = set()
     for s in syms[1:]:
         if s['type'] in (3, 4):   # section, file
+            continue
+        # GNU as's ARM64 mapping symbols, which mark code ($x) and data
+        # ($d) for disassemblers
+        if s['name'].split('.')[0] in ('$x', '$d'):
             continue
         symset.add((s['name'], s['bind'], s['type'], secname(s['shndx']), s['value'], s['size']))
 

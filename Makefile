@@ -45,7 +45,9 @@ test_flags=$(shell sed -n 's|^// flags: ||p' test/$(1).c)
 
 # `make install` puts mucc in $(PREFIX)/bin and its headers in
 # $(PREFIX)/lib/mucc/include, where mucc looks for them, and musl, if
-# `make libc` built it, in $(PREFIX)/lib/mucc/musl.
+# `make libc` built it, in $(PREFIX)/lib/mucc/musl (and the other CPU's,
+# if `make libc-aarch64` or `make libc-x86_64` did, in musl-aarch64 or
+# musl-x86_64).
 PREFIX=/usr/local
 
 # Stage 1 (mucc compiled by $(CC), normally gcc)
@@ -86,7 +88,15 @@ test: $(TESTS)
 # and test-programs build from too, so they wait for it: with `make -j`,
 # two builds of musl in one directory would break each other.
 test-all: test test-stage2 selfhost test-libc
-	$(MAKE) test-single test-programs
+	$(MAKE) test-single test-programs test-cross
+
+# The other CPU (see test/cross.sh): mucc for it, and the tests there,
+# run by qemu-user if this machine has it set up. (ARCH, the CPU mucc runs
+# on, is set first: a rule's prerequisites are expanded when it's read.)
+ARCH=$(shell uname -m | sed 's/arm64/aarch64/')
+OTHER_ARCH=$(if $(filter aarch64,$(ARCH)),x86_64,aarch64)
+test-cross: mucc build/musl-$(OTHER_ARCH)/lib/libc.a
+	test/cross.sh $(OTHER_ARCH)
 
 # Differential testing: random programs compiled by mucc and gcc must print
 # the same thing. `make difftest N=2000` for more. See test/difftest.sh.
@@ -132,39 +142,64 @@ selfhost: $(OBJNAMES:%=$(S3)/%) $(OBJNAMES:%=$(S2)/%)
 # The bundled C library
 #
 # musl, from thirdparty/musl, built by mucc with musl's own configure and
-# Makefile in build/musl, archived by `mucc -ar`, and with no `as`
-# (-fno-as-fallback). Left out: musl's x86-64 math overrides (x87
-# assembly and SSE asm operands, which mucc doesn't have); musl's
-# portable C math is built instead. It's built from scratch
-# whenever mucc changes, since musl's Makefile doesn't know its objects
-# depend on the compiler. MUSL_BUILD is set at the top. Its headers go in
-# $(MUSL_BUILD)/include and the rest in $(MUSL_BUILD)/lib, where
-# --libc=mucc finds them, with musl's empty libm.a, libpthread.a, ... so
-# -lm and -lpthread work as with glibc. Linux's own headers (<linux/*.h>,
-# <asm/*.h>, ..., from thirdparty/linux-headers) go in with musl's, as a
-# distribution's linux-headers package does, for programs that talk to
-# the kernel directly.
+# Makefile in build/musl, for the CPU mucc runs on (ARCH), archived by
+# `mucc -ar`, and with no `as` (-fno-as-fallback). Left out: musl's x86-64
+# math overrides (x87 assembly and SSE asm operands, which mucc doesn't
+# have) and ARM64 string functions (NEON assembly); musl's portable C is
+# built instead. It's built from scratch whenever mucc changes, since
+# musl's Makefile doesn't know its objects depend on the compiler.
+# MUSL_BUILD is set at the top. Its headers go in $(MUSL_BUILD)/include
+# and the rest in $(MUSL_BUILD)/lib, where --libc=mucc finds them, with
+# musl's empty libm.a, libpthread.a, ... so -lm and -lpthread work as with
+# glibc. Linux's own headers (<linux/*.h>, <asm/*.h>, ..., from
+# thirdparty/linux-headers) go in with musl's, as a distribution's
+# linux-headers package does, for programs that talk to the kernel
+# directly. On ARM64, mucc's runtime library (runtime/arm64.c, which musl
+# needs as code gcc builds needs libgcc) goes in libmucc.a.
+#
+# `make libc-aarch64` (on x86-64) or `make libc-x86_64` (on ARM64) builds
+# a musl for the other CPU, in build/musl-aarch64 or build/musl-x86_64,
+# for --target= to cross-compile with.
+
+MUSL_SKIP_x86_64=$$(srcdir)/src/math/x86_64/%
+MUSL_SKIP_aarch64=$$(srcdir)/src/string/aarch64/%
+
+# $(call build_musl,DIR,ARCH): musl for ARCH (x86_64 or aarch64) in DIR
+define build_musl
+	rm -rf $(1)
+	mkdir -p $(1)
+	cd $(1) && $(CURDIR)/thirdparty/musl/configure --target=$(2) \
+	  --disable-shared CC="$(CURDIR)/mucc --target=$(2)-linux" > configure.log
+	printf '%s\n' \
+	  'ARCH_SRCS = $$(filter-out $(MUSL_SKIP_$(2)),$$(sort $$(wildcard $$(ARCH_GLOBS))))' \
+	  >> $(1)/config.mak
+	$(MAKE) -C $(1) CFLAGS=-fno-as-fallback AR="$(CURDIR)/mucc -ar" \
+	  RANLIB="$(CURDIR)/mucc -ranlib" lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o \
+	  $(patsubst %,lib/lib%.a,m rt pthread crypt util xnet resolv dl)
+	$(MAKE) -C $(1) install-headers DESTDIR= includedir=$(CURDIR)/$(1)/include > /dev/null
+	cp -R thirdparty/linux-headers/include/. thirdparty/linux-headers/case/. $(1)/include/
+	if [ $(2) = aarch64 ]; then \
+	  rm -rf $(1)/include/asm $(1)/include/linux/a.out.h && \
+	  cp -R thirdparty/linux-headers/arm64/asm $(1)/include/ && \
+	  ./mucc --target=aarch64-linux -fno-as-fallback -nostdinc -Iinclude \
+	    -c -o $(1)/lib/arm64.o runtime/arm64.c && \
+	  ./mucc -ar rcs $(1)/lib/libmucc.a $(1)/lib/arm64.o && rm $(1)/lib/arm64.o; \
+	fi
+endef
 
 libc: $(MUSL_BUILD)/lib/libc.a
 
 test-libc: mucc
 	test/libc.sh
 
-$(MUSL_BUILD)/lib/libc.a: mucc
-	rm -rf $(MUSL_BUILD)
-	mkdir -p $(MUSL_BUILD)
-	cd $(MUSL_BUILD) && $(CURDIR)/thirdparty/musl/configure --target=x86_64 \
-	  --disable-shared CC=$(CURDIR)/mucc > configure.log
-	printf '%s\n' \
-	  'ARCH_SRCS = $$(filter-out $$(srcdir)/src/math/x86_64/%,$$(sort $$(wildcard $$(ARCH_GLOBS))))' \
-	  >> $(MUSL_BUILD)/config.mak
-	$(MAKE) -C $(MUSL_BUILD) CFLAGS=-fno-as-fallback AR="$(CURDIR)/mucc -ar" \
-	  RANLIB="$(CURDIR)/mucc -ranlib" lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o \
-	  $(patsubst %,lib/lib%.a,m rt pthread crypt util xnet resolv dl)
-	$(MAKE) -C $(MUSL_BUILD) install-headers DESTDIR= \
-	  includedir=$(CURDIR)/$(MUSL_BUILD)/include > /dev/null
-	cp -R thirdparty/linux-headers/include/. thirdparty/linux-headers/case/. \
-	  $(MUSL_BUILD)/include/
+$(MUSL_BUILD)/lib/libc.a: mucc runtime/arm64.c
+	$(call build_musl,$(MUSL_BUILD),$(ARCH))
+
+libc-aarch64: build/musl-aarch64/lib/libc.a
+libc-x86_64: build/musl-x86_64/lib/libc.a
+
+build/musl-%/lib/libc.a: mucc runtime/arm64.c
+	$(call build_musl,build/musl-$*,$*)
 
 # The single binary
 #
@@ -173,13 +208,18 @@ $(MUSL_BUILD)/lib/libc.a: mucc
 # files next to it. build/files.s lists them for mucc_files[] in
 # src/main.c: a {path, data, size} entry each, with the bytes put in by
 # .incbin (see src/asm.c), under the path "<mucc>/include/..." or
-# "<mucc>/musl/...".
+# "<mucc>/musl/...", sorted by that path, which mucc binary-searches.
 
-build/files.s: $(MUSL_BUILD)/lib/libc.a $(wildcard include/*.h include/sys/*.h)
+#
+# build/mucc-aarch64 (or -x86_64) is the same for the other CPU, with its
+# musl (build/musl-aarch64), cross-compiled.
+
+# $(call files_s,MUSL_DIR): build/files.s, with musl from MUSL_DIR
+define files_s
 	( find include -type f -name '*.h' -printf '%p %s\n' | \
 	    sed 's|^\([^ ]*\) .*|& <mucc>/\1|'; \
-	  find $(MUSL_BUILD)/include $(MUSL_BUILD)/lib -type f -printf '%p %s\n' | \
-	    sed 's|^$(MUSL_BUILD)/\([^ ]*\) .*|& <mucc>/musl/\1|' ) | LC_ALL=C sort | awk '\
+	  find $(1)/include $(1)/lib -type f -printf '%p %s\n' | \
+	    sed 's|^$(1)/\([^ ]*\) .*|& <mucc>/musl/\1|' ) | LC_ALL=C sort -k3 | awk '\
 	  BEGIN { for (c = 1; c < 128; c++) ord[sprintf("%c", c)] = c } \
 	  { src[NR] = $$1; size[NR] = $$2; path[NR] = $$3 } \
 	  END { \
@@ -195,19 +235,38 @@ build/files.s: $(MUSL_BUILD)/lib/libc.a $(wildcard include/*.h include/sys/*.h)
 	      printf "  .byte 0\n.Ldata%d:\n  .incbin \"%s\"\n", i, src[i]; \
 	    } \
 	  }' > $@
+endef
+
+build/files.s: $(MUSL_BUILD)/lib/libc.a $(wildcard include/*.h include/sys/*.h)
+	$(call files_s,$(MUSL_BUILD))
 
 build/files.o: mucc build/files.s
 	./mucc -c -o $@ build/files.s
 
 # It's compiled by mucc and linked against musl too, a static program
-# that runs on any x86-64 Linux. Releases link it with LDFLAGS_SINGLE=-s,
-# which strips it.
+# that runs on any Linux for its CPU. Releases link it with
+# LDFLAGS_SINGLE=-s, which strips it.
 build/mucc: $(OBJNAMES:%=build/obj/%) build/files.o
 	./mucc --libc=mucc $(LDFLAGS_SINGLE) -o $@ $^
 
 build/obj/%.o: mucc src/%.c src/mucc.h $(MUSL_BUILD)/lib/libc.a
 	mkdir -p build/obj
 	./mucc --libc=mucc -Iinclude -c -o $@ src/$*.c
+
+# The single binary for the other CPU
+build/files-%.s: build/musl-%/lib/libc.a $(wildcard include/*.h include/sys/*.h)
+	$(call files_s,build/musl-$*)
+
+build/files-%.o: mucc build/files-%.s
+	./mucc --target=$*-linux -c -o $@ build/files-$*.s
+
+build/mucc-%: mucc build/musl-%/lib/libc.a build/files-%.o $(SRCS) src/mucc.h
+	mkdir -p build/obj-$*
+	for f in $(OBJNAMES:.o=); do \
+	  ./mucc --target=$*-linux --libc=mucc -Iinclude -c -o build/obj-$*/$$f.o src/$$f.c || exit 1; \
+	done
+	./mucc --target=$*-linux --libc=mucc $(LDFLAGS_SINGLE) -o $@ \
+	  $(OBJNAMES:%=build/obj-$*/%) build/files-$*.o
 
 test-single: build/mucc
 	test/single.sh build/mucc
@@ -230,12 +289,14 @@ install: mucc
 	install -m 644 include/*.h $(DESTDIR)$(PREFIX)/lib/mucc/include
 	install -d $(DESTDIR)$(PREFIX)/lib/mucc/include/sys
 	install -m 644 include/sys/*.h $(DESTDIR)$(PREFIX)/lib/mucc/include/sys
-	if [ -f $(MUSL_BUILD)/lib/libc.a ]; then \
-	  install -d $(DESTDIR)$(PREFIX)/lib/mucc/musl/lib && \
-	  install -m 644 $(MUSL_BUILD)/lib/*.a $(MUSL_BUILD)/lib/*.o \
-	    $(DESTDIR)$(PREFIX)/lib/mucc/musl/lib && \
-	  cp -R $(MUSL_BUILD)/include $(DESTDIR)$(PREFIX)/lib/mucc/musl/; \
-	fi
+	for m in $(MUSL_BUILD):musl build/musl-$(OTHER_ARCH):musl-$(OTHER_ARCH); do \
+	  dir=$${m%%:*}; name=$${m##*:}; \
+	  if [ -f $$dir/lib/libc.a ]; then \
+	    install -d $(DESTDIR)$(PREFIX)/lib/mucc/$$name/lib && \
+	    install -m 644 $$dir/lib/*.a $$dir/lib/*.o $(DESTDIR)$(PREFIX)/lib/mucc/$$name/lib && \
+	    cp -R $$dir/include $(DESTDIR)$(PREFIX)/lib/mucc/$$name/; \
+	  fi; \
+	done
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/mucc
@@ -243,12 +304,14 @@ uninstall:
 
 # Misc.
 
-# test/asm-forms.s is a source file (see test/asm.sh); other .s files in
-# test/ are build output.
+# test/asm-forms.s, asm-forms-arm64.s and asm-directives.s are source
+# files (see test/asm.sh); other .s files in test/ are build output.
+ASM_SOURCES=test/asm-forms.s test/asm-forms-arm64.s test/asm-directives.s
 clean:
 	rm -rf mucc tmp* $(TESTS) test/*.exe stage2 stage3 stage2-musl stage3-musl \
-	  difftest-failures build
-	rm -f $(filter-out test/asm-forms.s,$(wildcard test/*.s))
+	  stage2-aarch64 stage2-x86_64 difftest-failures build
+	rm -f $(filter-out $(ASM_SOURCES),$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
-.PHONY: test clean test-stage2 selfhost install uninstall difftest libc test-libc test-single test-programs test-bootstrap
+.PHONY: test clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
+  test-libc test-single test-programs test-bootstrap test-cross

@@ -1,7 +1,8 @@
 // Linux's own headers, for programs that talk to the kernel directly:
 // USB through usbfs, input devices, netlink, block devices. The ioctl
-// numbers and struct sizes are the x86-64 kernel ABI, so they're the same
-// with the bundled headers and with a distribution's.
+// numbers and struct sizes are the kernel's ABI (the same on x86-64 and
+// ARM64, but for the system call numbers), so they're the same with the
+// bundled headers and with a distribution's.
 #include "test.h"
 #include <linux/fs.h>
 #include <linux/if_ether.h>
@@ -27,8 +28,13 @@ int main() {
   ASSERT(0x800, ETH_P_IP);
   ASSERT(1, BLKGETSIZE64 == 0x80081272u);
 
+#ifdef __aarch64__
+  ASSERT(64, __NR_write);
+  ASSERT(93, __NR_exit);
+#else
   ASSERT(1, __NR_write);
   ASSERT(60, __NR_exit);
+#endif
   ASSERT(1, LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0));
 
   printf("OK\n");

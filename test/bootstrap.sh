@@ -5,11 +5,17 @@
 # so nothing else can take part. Works on a copy, so the tree's own
 # build is left alone.
 #
-#   test/bootstrap.sh MUCC OUT [LDFLAGS]   builds OUT (LDFLAGS=-s strips)
-#   test/bootstrap.sh MUCC                 checks it is MUCC, byte for byte
+#   test/bootstrap.sh MUCC OUT [LDFLAGS [ARCH]]  builds OUT (LDFLAGS=-s
+#                                                strips), for ARCH, the
+#                                                other CPU, if given
+#   test/bootstrap.sh MUCC                       checks it is MUCC, byte
+#                                                for byte
 mucc=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 out=${2:+$(cd "$(dirname "$2")" && pwd)/$(basename "$2")}
 src=$(cd "$(dirname "$0")/.." && pwd)
+single=build/mucc
+libc=libc
+[ -n "$4" ] && single=build/mucc-$4 && libc=libc-$4
 
 tmp=`mktemp -d /tmp/mucc-bootstrap-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
@@ -19,13 +25,13 @@ for t in gcc cc c99 as ld ar ranlib strip objcopy; do
     printf '#!/bin/sh\necho "%s $*" >> %s/calls\nexit 1\n' $t $tmp > $tmp/bin/$t
     chmod +x $tmp/bin/$t
 done
-cp -R $src/src $src/include $src/thirdparty $src/Makefile $tmp/tree/
+cp -R $src/src $src/include $src/runtime $src/thirdparty $src/Makefile $tmp/tree/
 rm -f $tmp/tree/src/*.o
 
 j=$(nproc 2> /dev/null || echo 4)
 (cd $tmp/tree && export PATH=$tmp/bin:$PATH &&
-    make -j$j CC="$mucc" mucc && make libc &&
-    make -j$j build/mucc LDFLAGS_SINGLE="$3") > $tmp/log 2>&1
+    make -j$j CC="$mucc" mucc && make $libc &&
+    make -j$j $single LDFLAGS_SINGLE="$3") > $tmp/log 2>&1
 if [ $? -ne 0 ]; then
     echo "testing bootstrap ... failed to build"
     tail -20 $tmp/log
@@ -40,9 +46,9 @@ if grep -v -E '^ld -o /dev/null .* -shared( |$)' $tmp/calls 2> /dev/null; then
 fi
 
 if [ -n "$out" ]; then
-    cp $tmp/tree/build/mucc "$out"
+    cp $tmp/tree/$single "$out"
     echo "testing bootstrap ... built $2 with $1 only"
-elif cmp -s $tmp/tree/build/mucc "$mucc"; then
+elif cmp -s $tmp/tree/$single "$mucc"; then
     echo "testing bootstrap ... passed (built by itself, the same bytes)"
 else
     echo "testing bootstrap ... failed (built by itself, different bytes)"

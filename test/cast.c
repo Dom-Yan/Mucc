@@ -21,7 +21,11 @@ int main() {
 
   (void)1;
 
+#ifdef __CHAR_UNSIGNED__
+  ASSERT(255, (char)255); // plain char is unsigned on ARM64
+#else
   ASSERT(-1, (char)255);
+#endif
   ASSERT(-1, (signed char)255);
   ASSERT(255, (unsigned char)255);
   ASSERT(-1, (short)65535);
@@ -69,7 +73,13 @@ int main() {
   ASSERT(1, vd19 == 10000000000000000000UL && vf19 == 9999999980506447872UL);
   ASSERT(1, vld19 == 10000000000000000000UL && g_u19 == 10000000000000000000UL);
   ASSERT(1, (unsigned long)(vld19 * 1.5L) == 15000000000000000000UL);
+  // Out of range, as gcc has it: x86-64's conversion wraps, ARM64's
+  // saturates.
+#ifdef __aarch64__
+  ASSERT(1, (unsigned long)vdm1 == 0);
+#else
   ASSERT(1, (unsigned long)vdm1 == 0xffffffffffffffffUL);
+#endif
   ASSERT(1, (float)vu18 == 18000000404716257280.0f);
   ASSERT(1, (float)0xffffffffffffffffUL == 18446744073709551616.0f);
   ASSERT(-300, (short)vldm300);

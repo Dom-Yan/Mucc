@@ -64,6 +64,10 @@ static void read_members(char *path) {
       error("%s: truncated archive", path);
     char name[17] = {0};
     memcpy(name, hdr, 16);
+    // A member is only 2-aligned in the archive, and its ELF headers are
+    // read in place (see member_symbols()), so it gets a copy.
+    bool is_member = name[0] != '/' || isdigit(name[1]);
+    unsigned char *copy = is_member ? memcpy(malloc(len + 1), hdr + 60, len) : NULL;
 
     if (!strcmp(name, "//              ")) {
       longnames = (char *)hdr + 60;
@@ -71,9 +75,9 @@ static void read_members(char *path) {
       if (!longnames)
         error("%s: long member name without a name table", path);
       char *s = longnames + atoi(name + 1);
-      add_member(strndup(s, strcspn(s, "/\n")), hdr + 60, len);
+      add_member(strndup(s, strcspn(s, "/\n")), copy, len);
     } else if (name[0] != '/') {
-      add_member(strndup(name, strcspn(name, "/ ")), hdr + 60, len);
+      add_member(strndup(name, strcspn(name, "/ ")), copy, len);
     }
     off += 60 + len + (len & 1);
   }

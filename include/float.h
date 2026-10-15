@@ -1,7 +1,7 @@
 #ifndef __STDFLOAT_H
 #define __STDFLOAT_H
 
-#define DECIMAL_DIG 21
+#define DECIMAL_DIG __DECIMAL_DIG__
 #define FLT_EVAL_METHOD 0 // C11 5.2.4.2.2p9
 #define FLT_RADIX 2
 #define FLT_ROUNDS 1      // C11 5.2.4.2.2p8: to nearest
@@ -28,16 +28,25 @@
 #define DBL_MIN_EXP -1021
 #define DBL_TRUE_MIN 0x0.0000000000001p-1022
 
+#ifdef __aarch64__
+// long double is IEEE quadruple precision: a 113-bit mantissa.
+#define LDBL_DIG 33
+#define LDBL_EPSILON 0x1p-112L
+#define LDBL_MANT_DIG 113
+#define LDBL_MAX 0x1.ffffffffffffffffffffffffffffp+16383L
+#define LDBL_TRUE_MIN 0x1p-16494L
+#else
 // long double is x87 extended precision: a 64-bit mantissa.
 #define LDBL_DIG 18
 #define LDBL_EPSILON 0x1p-63L
 #define LDBL_MANT_DIG 64
 #define LDBL_MAX 0x1.fffffffffffffffep+16383L
+#define LDBL_TRUE_MIN 0x1p-16445L
+#endif
 #define LDBL_MAX_10_EXP 4932
 #define LDBL_MAX_EXP 16384
 #define LDBL_MIN 0x1p-16382L
 #define LDBL_MIN_10_EXP -4931
 #define LDBL_MIN_EXP -16381
-#define LDBL_TRUE_MIN 0x1p-16445L
 
 #endif

@@ -13,11 +13,12 @@
 // Initial hash bucket size
 #define INIT_SIZE 16
 
-// Rehash if the usage exceeds 70%.
-#define HIGH_WATERMARK 70
+// Rehash if the usage exceeds 50%: most lookups are for keys that aren't
+// there (is this name a macro?), which probe until an empty bucket.
+#define HIGH_WATERMARK 50
 
-// We'll keep the usage below 50% after rehashing.
-#define LOW_WATERMARK 50
+// We'll keep the usage below 25% after rehashing.
+#define LOW_WATERMARK 25
 
 // Represents a deleted hash entry
 #define TOMBSTONE ((void *)-1)
@@ -47,25 +48,34 @@ static void rehash(HashMap *map) {
     cap = cap * 2;
   assert(cap > 0);
 
-  // Create a new hashmap and copy all key-values.
+  // Create a new hashmap and copy all key-values. The keys are all
+  // different, and their hashes are known, so each goes in the first
+  // empty bucket from its hash.
   HashMap map2 = {};
   map2.buckets = calloc(cap, sizeof(HashEntry));
   map2.capacity = cap;
+  map2.used = nkeys;
 
   for (int i = 0; i < map->capacity; i++) {
     HashEntry *ent = &map->buckets[i];
-    if (ent->key && ent->key != TOMBSTONE)
-      hashmap_put2(&map2, ent->key, ent->keylen, ent->val);
+    if (!ent->key || ent->key == TOMBSTONE)
+      continue;
+    uint32_t j = ent->hash;
+    while (map2.buckets[j & (cap - 1)].key)
+      j++;
+    map2.buckets[j & (cap - 1)] = *ent;
   }
 
-  assert(map2.used == nkeys);
+  free(map->buckets);
   *map = map2;
 }
 
 //---------- Finding entries -------------------------------------------------
 
-static bool match(HashEntry *ent, char *key, int keylen) {
-  return ent->key && ent->key != TOMBSTONE &&
+// (Another key nearly always has another hash, so the bytes are rarely
+// compared but for the key itself.)
+static bool match(HashEntry *ent, char *key, int keylen, uint32_t hash) {
+  return ent->hash == hash && ent->key && ent->key != TOMBSTONE &&
          ent->keylen == keylen && memcmp(ent->key, key, keylen) == 0;
 }
 
@@ -73,13 +83,13 @@ static HashEntry *get_entry(HashMap *map, char *key, int keylen) {
   if (!map->buckets)
     return NULL;
 
-  uint64_t hash = fnv_hash(key, keylen);
+  uint32_t hash = fnv_hash(key, keylen);
 
   // capacity is always a power of two, so `& (capacity - 1)` is `% capacity`
   // without a slow division.
   for (int i = 0; i < map->capacity; i++) {
     HashEntry *ent = &map->buckets[(hash + i) & (map->capacity - 1)];
-    if (match(ent, key, keylen))
+    if (match(ent, key, keylen, hash))
       return ent;
     if (ent->key == NULL)
       return NULL;
@@ -95,7 +105,7 @@ static HashEntry *get_or_insert_entry(HashMap *map, char *key, int keylen) {
     rehash(map);
   }
 
-  uint64_t hash = fnv_hash(key, keylen);
+  uint32_t hash = fnv_hash(key, keylen);
 
   // A new key goes in the first tombstone on its way, if any, but only
   // once it's known not to be further on: else, after an #undef of
@@ -104,7 +114,7 @@ static HashEntry *get_or_insert_entry(HashMap *map, char *key, int keylen) {
   for (int i = 0; i < map->capacity; i++) {
     HashEntry *ent = &map->buckets[(hash + i) & (map->capacity - 1)];
 
-    if (match(ent, key, keylen))
+    if (match(ent, key, keylen, hash))
       return ent;
 
     if (ent->key == TOMBSTONE && !tombstone)
@@ -117,6 +127,7 @@ static HashEntry *get_or_insert_entry(HashMap *map, char *key, int keylen) {
         map->used++;
       ent->key = key;
       ent->keylen = keylen;
+      ent->hash = hash;
       return ent;
     }
   }
@@ -151,6 +162,13 @@ void hashmap_delete2(HashMap *map, char *key, int keylen) {
   HashEntry *ent = get_entry(map, key, keylen);
   if (ent)
     ent->key = TOMBSTONE;
+}
+
+// Frees a map's table, leaving it empty. (Its keys and values are the
+// caller's.)
+void hashmap_free(HashMap *map) {
+  free(map->buckets);
+  *map = (HashMap){};
 }
 
 //---------- Self test (mucc -hashmap-test) ----------------------------------
@@ -197,6 +215,12 @@ void hashmap_test(void) {
     hashmap_delete(map2, format("key %d", i));
   for (int i = 0; i < 100; i++)
     assert(hashmap_get(map2, format("key %d", i)) == NULL);
+
+  // A freed map is empty, and can be used again.
+  hashmap_free(map);
+  assert(hashmap_get(map, "key 1") == NULL);
+  hashmap_put(map, "key 1", (void *)1);
+  assert(hashmap_get(map, "key 1") == (void *)1);
 
   printf("OK\n");
 }

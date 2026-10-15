@@ -14,7 +14,7 @@ typedef long long v2di __attribute__((vector_size(16)));
 typedef unsigned long long v2du __attribute__((vector_size(16)));
 typedef int v2si __attribute__((vector_size(8)));
 typedef float v2sf __attribute__((vector_size(8)));
-typedef char v4qi __attribute__((vector_size(4)));
+typedef signed char v4qi __attribute__((vector_size(4)));
 int __attribute__((vector_size(16))) declared, *pointer;
 
 v4si g1 = {1, 2, 3, 4};
@@ -365,14 +365,22 @@ int main() {
     ASSERT(166, (int)r[3]);
   }
 
-  // An asm operand in an SSE register
+  // An asm operand in an SSE (or ARM64's FP/SIMD) register
   {
     v4si a = {1, 2, 3, 4}, b = {10, 20, 30, 40};
+#ifdef __aarch64__
+    __asm__("add %0.4s, %0.4s, %1.4s" : "+w"(a) : "w"(b));
+#else
     __asm__("paddd %1, %0" : "+x"(a) : "x"(b));
+#endif
     ASSERT(44, a[3]);
     v4sf f = {4, 9, 16, 25};
     v4sf r;
+#ifdef __aarch64__
+    __asm__("fsqrt %0.4s, %1.4s" : "=w"(r) : "w"(f));
+#else
     __asm__("sqrtps %1, %0" : "=x"(r) : "x"(f));
+#endif
     ASSERT(5, (int)r[3]);
   }
 

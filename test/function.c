@@ -79,11 +79,22 @@ short short_fn();
 unsigned char uchar_fn();
 unsigned short ushort_fn();
 
-char schar_fn();
+signed char schar_fn();
 short sshort_fn();
 
 int add_all(int n, ...);
 
+// The va_list that mucc's __va_area__ starts with, as the ABI lays it out
+#ifdef __aarch64__
+typedef struct {
+  void *stack;
+  void *gr_top;
+  void *vr_top;
+  int gr_offs;
+  int vr_offs;
+} va_list;
+#define VA_START(ap) ap = *(va_list *)__va_area__
+#else
 typedef struct {
   int gp_offset;
   int fp_offset;
@@ -92,6 +103,8 @@ typedef struct {
 } __va_elem;
 
 typedef __va_elem va_list[1];
+#define VA_START(ap) *ap = *(__va_elem *)__va_area__
+#endif
 
 int add_all(int n, ...);
 
@@ -101,7 +114,7 @@ double proto_after_oldstyle(double x) { return x; }
 
 char *fmt(char *buf, char *fmt, ...) {
   va_list ap;
-  *ap = *(__va_elem *)__va_area__;
+  VA_START(ap);
   vsprintf(buf, fmt, ap);
 }
 

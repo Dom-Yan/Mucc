@@ -1,12 +1,22 @@
-// Low level: inline asm (cpuid, rdtsc, extended asm with constraints), a
-// function written in a .S file, raw system calls in asm, and bit
-// builtins.
+// Low level: inline asm (cpuid and rdtsc, or ARM64's timer registers;
+// extended asm with constraints), a function written in a .S file, raw
+// system calls in asm, and bit builtins.
 #include "check.h"
 #include <stdint.h>
 
 long asm_add(long a, long b);       // in lowlevel_asm.S
 long asm_strlen(const char *s);     // in lowlevel_asm.S
 
+#ifdef __aarch64__
+static long raw_write(int fd, const void *buf, long len) {
+  register long x8 __asm__("x8") = 64;
+  register long x0 __asm__("x0") = fd;
+  register long x1 __asm__("x1") = (long)buf;
+  register long x2 __asm__("x2") = len;
+  __asm__ volatile("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory");
+  return x0;
+}
+#else
 static long raw_write(int fd, const void *buf, long len) {
   long ret;
   __asm__ volatile("syscall"
@@ -15,8 +25,22 @@ static long raw_write(int fd, const void *buf, long len) {
                    : "rcx", "r11", "memory");
   return ret;
 }
+#endif
 
 int main(void) {
+#ifdef __aarch64__
+  // The generic timer: its frequency, and a count that only goes up
+  uint64_t freq, t1, t2;
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+  CHECK(freq > 0);
+  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(t1));
+  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(t2));
+  CHECK(t2 >= t1);
+
+  long x = 40;
+  __asm__("add %0, %0, %1" : "+r"(x) : "ri"(2L));
+  CHECK(x == 42);
+#else
   uint32_t a, b, c, d;
   __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0));
   char vendor[13] = {0};
@@ -33,6 +57,7 @@ int main(void) {
   long x = 40;
   __asm__("addq %1, %0" : "+r"(x) : "ri"(2L));
   CHECK(x == 42);
+#endif
 
   CHECK(asm_add(40, 2) == 42);
   CHECK(asm_strlen("assembly") == 8);

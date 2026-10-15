@@ -339,15 +339,6 @@ void error_expected(Token *tok, char *what) {
 
 //---------- Token matching helpers ------------------------------------------
 
-// Returns true if the current token is `op`. The parser calls this
-// constantly and nearly every call fails, usually on the first character,
-// so check that before comparing the rest. strncmp, not memcmp, stops at
-// the end of an `op` shorter than the token instead of reading past it.
-bool equal(Token *tok, char *op) {
-  return tok->loc[0] == op[0] && strncmp(tok->loc, op, tok->len) == 0 &&
-         op[tok->len] == '\0';
-}
-
 // Ensure that the current token is `op`.
 Token *skip(Token *tok, char *op) {
   if (!equal(tok, op))
@@ -412,18 +403,28 @@ static bool startswith(char *p, char *q) {
   return true;
 }
 
+// Tests for ASCII characters. <ctype.h>'s find their table through a
+// function call each time, which the tokenizer's loops feel.
+static bool is_digit(char c) {
+  return '0' <= c && c <= '9';
+}
+
+static bool is_alnum(char c) {
+  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || is_digit(c);
+}
+
 // Read an identifier and returns the length of it.
 // If p does not point to a valid identifier, 0 is returned.
 static int read_ident(char *start) {
   char *p = start;
-  uint32_t c = decode_utf8(&p, p);
+  uint32_t c = (unsigned char)*p < 128 ? *p++ : decode_utf8(&p, p);
   if (!is_ident1(c) || (opt_asm_cpp && c == '$'))
     return 0;
 
   for (;;) {
     // Fast path: plain ASCII letters, digits, _ and $. In assembly, $ is
     // the immediate prefix, as in `$SYS_write`, so it ends a name.
-    if (isalnum((unsigned char)*p) || *p == '_' || (*p == '$' && !opt_asm_cpp)) {
+    if (is_alnum(*p) || *p == '_' || (*p == '$' && !opt_asm_cpp)) {
       p++;
       continue;
     }
@@ -453,6 +454,11 @@ static int read_punct(char *p) {
     "-=", "*=", "/=", "++", "--", "%=", "&=", "|=", "^=", "&&",
     "||", "<<", ">>", "##",
   };
+
+  // Most punctuators are one character. These are the second characters
+  // of the longer ones.
+  if (!p[1] || !strchr("=<>.+-&|#", p[1]))
+    return ispunct(*p) ? 1 : 0;
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
     if (p[0] == kw[i][0] && startswith(p, kw[i]))
@@ -510,7 +516,7 @@ static int read_escaped_char(char **new_pos, char *p) {
     if (!isxdigit(*p))
       error_at(p, "invalid hex escape sequence");
 
-    int c = 0;
+    unsigned c = 0;
     for (; isxdigit(*p); p++)
       c = (c << 4) + from_hex(*p);
     *new_pos = p;
@@ -829,7 +835,7 @@ static void convert_pp_number(Token *tok) {
 
 void convert_pp_tokens(Token *tok) {
   for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
-    if (is_keyword(t))
+    if (t->kind == TK_IDENT && is_keyword(t))
       t->kind = TK_KEYWORD;
     else if (t->kind == TK_PP_NUM)
       convert_pp_number(t);
@@ -880,23 +886,23 @@ Token *tokenize(File *file) {
   line_no = 1;
 
   while (*p) {
-    // Skip line comments.
-    if (startswith(p, "//")) {
+    // Skip line comments. (Text that isn't a file, like a -D value or
+    // a ## paste, may end without a newline.)
+    if (p[0] == '/' && p[1] == '/') {
       p += 2;
-      while (*p != '\n')
+      while (*p && *p != '\n')
         p++;
       has_space = true;
       continue;
     }
 
     // Skip block comments.
-    if (startswith(p, "/*")) {
+    if (p[0] == '/' && p[1] == '*') {
       char *q = strstr(p + 2, "*/");
       if (!q)
         error_at(p, "unclosed block comment");
-      for (; p < q; p++)
-        if (*p == '\n')
-          line_no++;
+      for (char *nl = memchr(p, '\n', q - p); nl; nl = memchr(nl + 1, '\n', q - nl - 1))
+        line_no++;
       p = q + 2;
       has_space = true;
       continue;
@@ -912,21 +918,21 @@ Token *tokenize(File *file) {
     }
 
     // Skip whitespace characters.
-    if (isspace(*p)) {
+    if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\v' || *p == '\f') {
       p++;
       has_space = true;
       continue;
     }
 
     // Numeric literal
-    if (isdigit(*p) || (*p == '.' && isdigit(p[1]))) {
+    if (is_digit(*p) || (*p == '.' && is_digit(p[1]))) {
       char *q = p++;
       for (;;) {
         if (p[0] && p[1] && strchr("eEpP", p[0]) && strchr("+-", p[1]))
           p += 2;
-        else if (isalnum(*p) || *p == '.' || *p == '_')
+        else if (is_alnum(*p) || *p == '.' || *p == '_')
           p++; // `802_2` is one token, as ETH_P_##802_2 needs
-        else if (*p == '\'' && isalnum(p[-1]) && isalnum(p[1]))
+        else if (*p == '\'' && is_alnum(p[-1]) && is_alnum(p[1]))
           p++; // C23 digit separator, as in 1'000'000
         else
           break;
@@ -968,7 +974,7 @@ Token *tokenize(File *file) {
 
     // Wide string literal
     if (startswith(p, "L\"")) {
-      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_int);
+      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_wchar());
       p += cur->len;
       continue;
     }
@@ -1006,7 +1012,7 @@ Token *tokenize(File *file) {
 
     // Wide character literal
     if (startswith(p, "L'")) {
-      cur = cur->next = read_char_literal(p, p + 1, ty_int);
+      cur = cur->next = read_char_literal(p, p + 1, ty_wchar());
       p += cur->len;
       continue;
     }
@@ -1046,7 +1052,9 @@ Token *tokenize(File *file) {
     error_at(p, "invalid token");
   }
 
+  // (It starts a line even after text with no newline: see new_eof().)
   cur = cur->next = new_token(TK_EOF, p, p);
+  cur->at_bol = true;
   return head.next;
 }
 
@@ -1200,17 +1208,28 @@ Token *tokenize_file(char *path) {
   // If exists, just skip them because they are useless bytes.
   // (It is actually not recommended to add BOM markers to UTF-8
   // texts, but it's not uncommon particularly on Windows.)
-  if (!memcmp(p, "\xef\xbb\xbf", 3))
+  // (strncmp, not memcmp: an empty file's text is shorter than 3 bytes.)
+  if (!strncmp(p, "\xef\xbb\xbf", 3))
     p += 3;
 
   // Most files need none of these rewrites, and each is a full pass over
-  // the file, so first do a fast search for anything to rewrite.
+  // the file, so first do a fast search for anything to rewrite. Splices
+  // and \u escapes both start with a backslash, which few lines have.
   if (strchr(p, '\r'))
     canonicalize_newline(p);
-  char *splice = strstr(p, "\\\n");
-  if (splice)
+  char *splice = NULL;
+  bool ucn = false;
+  for (char *q = strchr(p, '\\'); q; q = strchr(q + 1, '\\')) {
+    if (q[1] == '\n' && !splice)
+      splice = q;
+    ucn |= q[1] == 'u' || q[1] == 'U';
+  }
+  // (A splice can make a \u escape, as in "\\\nu0041".)
+  if (splice) {
     remove_backslash_newline(splice);
-  if (strstr(p, "\\u") || strstr(p, "\\U"))
+    ucn = strstr(p, "\\u") || strstr(p, "\\U");
+  }
+  if (ucn)
     convert_universal_chars(p);
 
   return tokenize(add_input_file(path, p));

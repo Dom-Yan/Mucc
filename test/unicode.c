@@ -17,7 +17,11 @@ int main() {
   ASSERT(0, strcmp("日本語", "\U000065E5\U0000672C\U00008A9E"));
   ASSERT(0, strcmp("🌮", "\U0001F32E"));
 
+#ifdef __aarch64__
+  ASSERT(1, L'\xffffffff'>>31); // wchar_t is unsigned on ARM64
+#else
   ASSERT(-1, L'\xffffffff'>>31);
+#endif
   ASSERT(946, L'β');
   ASSERT(12354, L'あ');
   ASSERT(127843, L'🍣');
@@ -79,7 +83,11 @@ int main() {
   ASSERT(u'β', L"βb"[0]);
   ASSERT(u'b', L"βb"[1]);
   ASSERT(0, L"βb"[2]);
+#ifdef __aarch64__
+  ASSERT(1, L"\xffffffff"[0] >> 31);
+#else
   ASSERT(-1, L"\xffffffff"[0] >> 31);
+#endif
 
   ASSERT(0, strcmp(STR(L"a"), "L\"a\""));
 

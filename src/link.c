@@ -28,6 +28,15 @@
 #define SHT_X86_64_UNWIND 0x70000001
 #endif
 
+// ARM64's build attributes (.ARM.attributes), which glibc's startup
+// files have and nothing at run time needs
+#define SHT_AARCH64_ATTRIBUTES 0x70000003
+
+// glibc's <elf.h> has this and musl's doesn't.
+#ifndef R_AARCH64_IRELATIVE
+#define R_AARCH64_IRELATIVE 1032
+#endif
+
 //---------- Input files, sections and symbols -------------------------------
 
 typedef struct ObjFile ObjFile;
@@ -114,14 +123,6 @@ static noreturn void fail(char *fmt, ...) {
   fail_msg = vformat(fmt, ap);
   va_end(ap);
   longjmp(*fail_jmp, 1);
-}
-
-// Makes room for one more element in a growing array.
-static void *grow(void *arr, int n, int *cap, int elem_size) {
-  if (n < *cap)
-    return arr;
-  *cap = *cap ? *cap * 2 : 64;
-  return realloc(arr, (size_t)*cap * elem_size);
 }
 
 static bool startswith(char *s, char *prefix) {
@@ -300,10 +301,14 @@ static void add_symbols(ObjFile *f) {
 }
 
 static void read_object(char *name, unsigned char *data, size_t size) {
+  // Its headers are read in place, so a member of an archive, which is
+  // only 2-aligned there, gets an aligned copy.
+  if ((uintptr_t)data % 8)
+    data = memcpy(malloc(size), data, size);
   Elf64_Ehdr *eh = (Elf64_Ehdr *)data;
   if (!is_elf_object(data, size) || eh->e_ident[EI_CLASS] != ELFCLASS64 ||
-      eh->e_machine != EM_X86_64)
-    fail("%s: not an x86-64 ELF object", name);
+      eh->e_machine != (target_arm64 ? EM_AARCH64 : EM_X86_64))
+    fail("%s: not an %s ELF object", name, target_arm64 ? "ARM64" : "x86-64");
   if (eh->e_type != ET_REL)
     fail("%s: not a relocatable object", name);
   if (eh->e_shnum == 0 || eh->e_shstrndx >= SHN_LORESERVE)
@@ -345,7 +350,7 @@ static void read_object(char *name, unsigned char *data, size_t size) {
     case SHT_FINI_ARRAY: case SHT_PREINIT_ARRAY: case SHT_X86_64_UNWIND:
       break;
     case SHT_RELA: case SHT_SYMTAB: case SHT_STRTAB: case SHT_GROUP:
-    case SHT_NULL:
+    case SHT_NULL: case SHT_AARCH64_ATTRIBUTES:
       continue;
     default:
       fail("%s: unsupported section type 0x%x (%s)", name, sh->sh_type, secname);
@@ -718,6 +723,14 @@ static void scan_relocations(void) {
           }
         }
 
+        if (target_arm64) {
+          if (type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC)
+            got_index(f, s, GOT_ADDR);
+          if (type == R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21 ||
+              type == R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC)
+            got_index(f, s, GOT_TPOFF);
+          continue;
+        }
         switch (type) {
         case R_X86_64_GOTPCREL:
         case R_X86_64_GOTPCRELX:
@@ -736,7 +749,14 @@ static void scan_relocations(void) {
 //---------- Layout ----------------------------------------------------------
 
 #define BASE 0x400000
-#define PAGE 0x1000
+
+// Segments start on a new page, of 4 KiB on x86-64. Some ARM64 kernels
+// use pages of 16 or 64 KiB (the Raspberry Pi 5's, Asahi Linux, some
+// servers'), so there they're aligned to 64 KiB, as GNU ld does, and the
+// program runs on all of them.
+static uint64_t page_size(void) {
+  return target_arm64 ? 0x10000 : 0x1000;
+}
 
 static uint64_t align_up(uint64_t n, uint64_t align) {
   return align ? (n + align - 1) / align * align : n;
@@ -866,7 +886,7 @@ static void sort_sections(void) {
 }
 
 static int nphdrs;
-static uint64_t tls_start, tls_filesz, tls_memsz, tls_align;
+static uint64_t tls_start, tls_offset, tls_filesz, tls_memsz, tls_align;
 static uint64_t file_end; // end of the allocated sections in the file
 
 static bool has_out(char *name) {
@@ -875,8 +895,12 @@ static bool has_out(char *name) {
 }
 
 // Gives each output section its address and file offset. Each segment
-// starts on a new page, and addresses are BASE + file offset, so
-// everything maps with one mmap per segment.
+// starts on a new page, so everything maps with one mmap per segment. On
+// x86-64, its file offset is aligned to a page too, and addresses are
+// BASE + file offset. ARM64's 64 KiB would waste that much of the file:
+// there the file is laid out without gaps, and a segment's addresses are
+// moved up by pages until it starts on a page of its own, so an address
+// and its file offset are still the same modulo the page size.
 static void layout(void) {
   // Program headers: one PT_LOAD per segment in use, then PT_TLS, PT_NOTE
   // and PT_GNU_STACK.
@@ -890,7 +914,10 @@ static void layout(void) {
   nphdrs += has_out(".tdata") || has_out(".tbss");
   nphdrs += has_out(".note.ABI-tag");
 
+  uint64_t page = page_size();
   uint64_t off = sizeof(Elf64_Ehdr) + nphdrs * sizeof(Elf64_Phdr);
+  uint64_t delta = BASE; // address - file offset
+  uint64_t end = BASE + off; // the end of the segment before, in memory
   int seg = SEG_R;
   uint64_t tdata_end = 0;
 
@@ -900,20 +927,27 @@ static void layout(void) {
       continue;
     if (out->seg != seg) {
       seg = out->seg;
-      off = align_up(off, PAGE);
+      if (target_arm64) {
+        off = align_up(off, out->align);
+        while ((delta + off) / page <= (end - 1) / page)
+          delta += page;
+      } else {
+        off = align_up(off, page);
+      }
     }
 
     // .tbss is only the TLS template's tail: it takes no space here.
     if (!strcmp(out->name, ".tbss")) {
-      out->addr = align_up(BASE + off, out->align);
-      out->offset = out->addr - BASE;
+      out->addr = align_up(delta + off, out->align);
+      out->offset = out->addr - delta;
       tdata_end = out->addr + out->size;
       continue;
     }
 
     off = align_up(off, out->align);
     out->offset = off;
-    out->addr = BASE + off;
+    out->addr = delta + off;
+    end = MAX(end, out->addr + out->size);
     if (out->type != SHT_NOBITS)
       off += out->size;
   }
@@ -924,6 +958,7 @@ static void layout(void) {
   if ((tdata && tdata->size) || (tbss && tbss->size)) {
     OutSec *first = (tdata && tdata->size) ? tdata : tbss;
     tls_start = first->addr;
+    tls_offset = first->offset;
     tls_filesz = (tdata && tdata->size) ? tdata->size : 0;
     uint64_t end = tbss && tbss->size ? tdata_end : tls_start + tls_filesz;
     tls_memsz = end - tls_start;
@@ -1038,8 +1073,11 @@ static uint64_t sym_value(ObjFile *f, int i) {
 }
 
 // A thread-local variable's offset from the thread pointer, which on
-// x86-64 points just past the (aligned) TLS block.
+// x86-64 points just past the (aligned) TLS block. On ARM64, it points to
+// 16 bytes for the C library, then the block, aligned.
 static int64_t tpoff(uint64_t addr) {
+  if (target_arm64)
+    return align_up(16, tls_align) + (addr - tls_start);
   return (int64_t)(addr - tls_start) - (int64_t)align_up(tls_memsz, tls_align);
 }
 
@@ -1062,6 +1100,108 @@ static void put64(unsigned char *p, uint64_t val) {
   memcpy(p, &val, 8);
 }
 
+// An address's page, as adrp finds it: its low 12 bits cleared
+static uint64_t page_of(uint64_t addr) {
+  return addr & ~(uint64_t)0xfff;
+}
+
+// Is symbol i of f undefined and weak, so 0?
+static bool is_undef_weak(ObjFile *f, int i) {
+  return i >= f->first_global && !f->gsyms[i]->is_defined;
+}
+
+// Applies ARM64 relocation `type` at `loc`, address P, for symbol s of
+// f, at S, + A. Each computes a value (S + A, S + A - P, or a page's
+// distance for adrp), which arm64_put_field() puts in its field.
+static void apply_arm64(InSec *sec, int type, int s, unsigned char *loc, uint64_t S,
+                        int64_t A, uint64_t P) {
+  ObjFile *f = sec->file;
+  int64_t val;
+
+  switch (type) {
+  case R_AARCH64_TLSDESC_ADR_PAGE21:
+  case R_AARCH64_TLSDESC_LD64_LO12:
+  case R_AARCH64_TLSDESC_ADD_LO12:
+  case R_AARCH64_TLSDESC_CALL: {
+    // A TLS descriptor call (see cgen_arm64.c), in a static program,
+    // becomes the variable's offset from the thread pointer in x0, as GNU
+    // ld makes it: movz x0, offset >> 16, lsl 16; movk x0, offset & 0xffff;
+    // nop; nop.
+    int64_t off = tpoff(S + A);
+    if (off < 0 || off >> 32)
+      fail("%s: thread-local variable out of range in %s", f->name, sec->name);
+    uint32_t insn = type == R_AARCH64_TLSDESC_ADR_PAGE21 ? 0xd2a00000 | ((off >> 16) & 0xffff) << 5 :
+                    type == R_AARCH64_TLSDESC_LD64_LO12 ? 0xf2800000 | (off & 0xffff) << 5 :
+                    0xd503201f;
+    memcpy(loc, &insn, 4);
+    return;
+  }
+  case R_AARCH64_ADR_GOT_PAGE:
+    val = page_of(got_sec->addr + got_index(f, s, GOT_ADDR) * 8) - page_of(P);
+    break;
+  case R_AARCH64_LD64_GOT_LO12_NC:
+    val = got_sec->addr + got_index(f, s, GOT_ADDR) * 8;
+    break;
+  case R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21:
+    val = page_of(got_sec->addr + got_index(f, s, GOT_TPOFF) * 8) - page_of(P);
+    break;
+  case R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC:
+    val = got_sec->addr + got_index(f, s, GOT_TPOFF) * 8;
+    break;
+  case R_AARCH64_TLSLE_ADD_TPREL_HI12:
+  case R_AARCH64_TLSLE_ADD_TPREL_LO12:
+  case R_AARCH64_TLSLE_ADD_TPREL_LO12_NC:
+    val = tpoff(S + A);
+    break;
+  case R_AARCH64_ADR_PREL_PG_HI21:
+  case R_AARCH64_ADR_PREL_PG_HI21_NC:
+    val = page_of(S + A) - page_of(P);
+    break;
+  case R_AARCH64_CALL26:
+  case R_AARCH64_JUMP26:
+    // A call to an undefined weak function goes on to the next
+    // instruction, as with GNU ld.
+    val = is_undef_weak(f, s) ? 4 : S + A - P;
+    break;
+  case R_AARCH64_CONDBR19:
+  case R_AARCH64_TSTBR14:
+  case R_AARCH64_ADR_PREL_LO21:
+  case R_AARCH64_LD_PREL_LO19:
+  case R_AARCH64_PREL64:
+  case R_AARCH64_PREL32:
+  case R_AARCH64_PREL16:
+    val = S + A - P;
+    break;
+  case R_AARCH64_NONE:
+  case R_AARCH64_ABS64:
+  case R_AARCH64_ABS32:
+  case R_AARCH64_ABS16:
+  case R_AARCH64_ADD_ABS_LO12_NC:
+  case R_AARCH64_LDST8_ABS_LO12_NC:
+  case R_AARCH64_LDST16_ABS_LO12_NC:
+  case R_AARCH64_LDST32_ABS_LO12_NC:
+  case R_AARCH64_LDST64_ABS_LO12_NC:
+  case R_AARCH64_LDST128_ABS_LO12_NC:
+  case R_AARCH64_MOVW_UABS_G0:
+  case R_AARCH64_MOVW_UABS_G0_NC:
+  case R_AARCH64_MOVW_UABS_G1:
+  case R_AARCH64_MOVW_UABS_G1_NC:
+  case R_AARCH64_MOVW_UABS_G2:
+  case R_AARCH64_MOVW_UABS_G2_NC:
+  case R_AARCH64_MOVW_UABS_G3:
+    val = S + A;
+    break;
+  default:
+    fail("%s: unsupported relocation type %d in %s", f->name, type, sec->name);
+  }
+
+  // adrp reaches 4 GiB either way, so static data past 4 GiB is out of
+  // its reach.
+  if (!arm64_put_field(loc, type, val))
+    fail("%s: relocation type %d in %s out of range%s", f->name, type, sec->name,
+         type == R_AARCH64_ADR_PREL_PG_HI21 ? " (is static data over 4 GiB?)" : "");
+}
+
 static void apply_relocations(InSec *sec) {
   ObjFile *f = sec->file;
   unsigned char *base = image + sec->out->offset + sec->offset;
@@ -1075,6 +1215,11 @@ static void apply_relocations(InSec *sec) {
     uint64_t S = sym_value(f, s);
     int64_t A = rel->r_addend;
     uint64_t P = addr + rel->r_offset;
+
+    if (target_arm64) {
+      apply_arm64(sec, type, s, loc, S, A, P);
+      continue;
+    }
 
     switch (type) {
     case R_X86_64_NONE:
@@ -1137,7 +1282,8 @@ static void buf_add(Buf *b, void *data, int len) {
     b->cap = b->cap ? b->cap * 2 : 4096;
     b->data = realloc(b->data, b->cap);
   }
-  memcpy(b->data + b->len, data, len);
+  if (len) // (an empty section's data may be NULL)
+    memcpy(b->data + b->len, data, len);
   b->len += len;
 }
 
@@ -1279,13 +1425,16 @@ static void write_executable(char *path) {
   Elf64_Phdr *ph = (Elf64_Phdr *)(image + sizeof(Elf64_Ehdr));
   int n = 0;
   static int seg_flags[] = {PF_R, PF_R | PF_X, PF_R, PF_R | PF_W};
+  uint64_t page = page_size();
   for (int seg = 0; seg < SEG_NONE; seg++) {
-    uint64_t start = UINT64_MAX, fend = 0, mend = 0;
+    // (In a segment, every address is its file offset + delta.)
+    uint64_t start = UINT64_MAX, fend = 0, mend = 0, delta = BASE;
     for (int i = 0; i < nouts; i++) {
       OutSec *out = outs[i];
       if (out->seg != seg || !out->size || !strcmp(out->name, ".tbss"))
         continue;
       start = MIN(start, out->offset);
+      delta = out->addr - out->offset;
       if (out->type != SHT_NOBITS)
         fend = MAX(fend, out->offset + out->size);
       mend = MAX(mend, out->addr + out->size);
@@ -1299,17 +1448,17 @@ static void write_executable(char *path) {
     }
     if (start == UINT64_MAX)
       continue;
-    start = start / PAGE * PAGE;
+    start = start / page * page;
     ph[n++] = (Elf64_Phdr){
       .p_type = PT_LOAD, .p_flags = seg_flags[seg], .p_offset = start,
-      .p_vaddr = BASE + start, .p_paddr = BASE + start,
+      .p_vaddr = delta + start, .p_paddr = delta + start,
       .p_filesz = fend > start ? fend - start : 0,
-      .p_memsz = mend - (BASE + start), .p_align = PAGE,
+      .p_memsz = mend - (delta + start), .p_align = page,
     };
   }
   if (tls_memsz || tls_filesz) {
     ph[n++] = (Elf64_Phdr){
-      .p_type = PT_TLS, .p_flags = PF_R, .p_offset = tls_start - BASE,
+      .p_type = PT_TLS, .p_flags = PF_R, .p_offset = tls_offset,
       .p_vaddr = tls_start, .p_paddr = tls_start, .p_filesz = tls_filesz,
       .p_memsz = tls_memsz, .p_align = tls_align,
     };
@@ -1337,7 +1486,7 @@ static void write_executable(char *path) {
   eh->e_ident[EI_VERSION] = EV_CURRENT;
   eh->e_ident[EI_OSABI] = ELFOSABI_SYSV;
   eh->e_type = ET_EXEC;
-  eh->e_machine = EM_X86_64;
+  eh->e_machine = target_arm64 ? EM_AARCH64 : EM_X86_64;
   eh->e_version = EV_CURRENT;
   eh->e_entry = start->addr;
   eh->e_phoff = sizeof(Elf64_Ehdr);
@@ -1392,13 +1541,22 @@ static void fill_image(void) {
     uint64_t slot = gotplt_sec->addr + i * 8;
     unsigned char *stub = image + plt_sec->offset + i * 16;
     uint64_t stub_addr = plt_sec->addr + i * 16;
-    stub[0] = 0xff; // jmp *slot(%rip)
-    stub[1] = 0x25;
-    int32_t disp = slot - (stub_addr + 6);
-    memcpy(stub + 2, &disp, 4);
-    memset(stub + 6, 0xcc, 10);
-
     Elf64_Rela rela = {slot, ELF64_R_INFO(0, R_X86_64_IRELATIVE), g->addr};
+
+    if (target_arm64) {
+      // adrp x16, slot; ldr x17, [x16, :lo12:slot]; br x17; nop
+      uint32_t insns[] = {0x90000010, 0xf9400211, 0xd61f0220, 0xd503201f};
+      memcpy(stub, insns, 16);
+      arm64_put_field(stub, R_AARCH64_ADR_PREL_PG_HI21, page_of(slot) - page_of(stub_addr));
+      arm64_put_field(stub + 4, R_AARCH64_LDST64_ABS_LO12_NC, slot);
+      rela.r_info = ELF64_R_INFO(0, R_AARCH64_IRELATIVE);
+    } else {
+      stub[0] = 0xff; // jmp *slot(%rip)
+      stub[1] = 0x25;
+      int32_t disp = slot - (stub_addr + 6);
+      memcpy(stub + 2, &disp, 4);
+      memset(stub + 6, 0xcc, 10);
+    }
     memcpy(image + relaplt_sec->offset + i * sizeof(rela), &rela, sizeof(rela));
   }
 }
@@ -1462,7 +1620,7 @@ static void reset(void) {
   iplt = NULL;
   niplt = capiplt = 0;
   bss = got_sec = gotplt_sec = plt_sec = relaplt_sec = NULL;
-  tls_start = tls_filesz = tls_memsz = 0;
+  tls_start = tls_offset = tls_filesz = tls_memsz = 0;
   tls_align = 1;
   image = NULL;
 }
@@ -1628,8 +1786,8 @@ static int add_rglobal(char *name, Elf64_Sym *s) {
 static void read_relocatable(char *path, unsigned char *data, size_t size) {
   Elf64_Ehdr *eh = (Elf64_Ehdr *)data;
   if (!is_elf_object(data, size) || eh->e_ident[EI_CLASS] != ELFCLASS64 ||
-      eh->e_machine != EM_X86_64 || eh->e_type != ET_REL)
-    fail("%s: not an x86-64 object file", path);
+      eh->e_machine != (target_arm64 ? EM_AARCH64 : EM_X86_64) || eh->e_type != ET_REL)
+    fail("%s: not an %s object file", path, target_arm64 ? "ARM64" : "x86-64");
   if (eh->e_shnum == 0 || eh->e_shnum >= SHN_LORESERVE)
     fail("%s: unsupported number of sections", path);
 
@@ -1845,7 +2003,7 @@ static void write_relocatable(char *path) {
   e->e_ident[EI_VERSION] = EV_CURRENT;
   e->e_ident[EI_OSABI] = ELFOSABI_SYSV;
   e->e_type = ET_REL;
-  e->e_machine = EM_X86_64;
+  e->e_machine = target_arm64 ? EM_AARCH64 : EM_X86_64;
   e->e_version = EV_CURRENT;
   e->e_shoff = shoff;
   e->e_ehsize = sizeof(Elf64_Ehdr);

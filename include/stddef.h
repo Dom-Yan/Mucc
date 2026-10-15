@@ -5,7 +5,7 @@
 
 typedef unsigned long size_t;
 typedef long ptrdiff_t;
-typedef int wchar_t;
+typedef __WCHAR_TYPE__ wchar_t; // int, or unsigned int on ARM64
 // As gcc has it: 32 bytes, aligned to 16, like long double
 typedef struct {
   long long __max_align_ll __attribute__((__aligned__(__alignof__(long long))));

@@ -17,7 +17,7 @@ check() {
     fi
 }
 
-# It's a static program itself, so it runs on any x86-64 Linux.
+# It's a static program itself, so it runs on any Linux for its CPU.
 file $binary | grep -q 'statically linked'
 check 'is statically linked'
 
@@ -62,12 +62,16 @@ check '-lssl without --libc=system'
 
 # Its own headers are inside it too, with the system's C library, which
 # it links statically without ld.
+# (Only where the system's C library is for its CPU, unlike an ARM64
+# mucc run by qemu on x86-64.)
 echo '#include <stdbool.h>
 #include <stdio.h>
 int main(void) { return puts("sys") < 0; }' > $tmp/sys.c
-mucc --libc=system -static -o $tmp/sys $tmp/sys.c && [ "$($tmp/sys)" = sys ] &&
-    [ ! -s $tmp/calls ]
-check '--libc=system'
+if [ "$(mucc -dumpmachine)" = "$(uname -m | sed 's/arm64/aarch64/')-linux-gnu" ]; then
+    mucc --libc=system -static -o $tmp/sys $tmp/sys.c && [ "$($tmp/sys)" = sys ] &&
+        [ ! -s $tmp/calls ]
+    check '--libc=system'
+fi
 
 # Embedded headers are no files make could find, so -M leaves them out.
 [ "$(mucc -M $tmp/prog.c | grep -c '<mucc>')" = 0 ]

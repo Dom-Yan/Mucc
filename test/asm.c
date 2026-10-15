@@ -1,5 +1,6 @@
 #include "test.h"
 
+#ifdef __x86_64__
 // asm at file scope, as musl's crt1.c defines _start (both spellings)
 asm(".text\n"
     ".globl asm_toplevel1\n"
@@ -33,3 +34,39 @@ int main() {
   printf("OK\n");
   return 0;
 }
+
+#else // ARM64
+asm(".text\n"
+    ".globl asm_toplevel1\n"
+    "asm_toplevel1:\n"
+    "  mov w0, 42\n"
+    "  ret\n");
+__asm__(".globl asm_toplevel2; asm_toplevel2: mov w0, 43; ret");
+int asm_toplevel1(void);
+int asm_toplevel2(void);
+
+// A basic asm statement in a function, which sets a global
+int asm_value;
+
+void asm_fn1(void) {
+  asm("adrp x9, asm_value\n\t"
+      "mov w10, 50\n\t"
+      "str w10, [x9, :lo12:asm_value]");
+}
+
+void asm_fn2(void) {
+  asm inline volatile("adrp x9, asm_value\n\t"
+                      "mov w10, 55\n\t"
+                      "str w10, [x9, :lo12:asm_value]");
+}
+
+int main() {
+  ASSERT(42, asm_toplevel1());
+  ASSERT(43, asm_toplevel2());
+  ASSERT(50, ({ asm_fn1(); asm_value; }));
+  ASSERT(55, ({ asm_fn2(); asm_value; }));
+
+  printf("OK\n");
+  return 0;
+}
+#endif

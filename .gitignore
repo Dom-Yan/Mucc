@@ -3,6 +3,7 @@
 **/*.o
 **/*.s
 !/test/asm-forms.s
+!/test/asm-forms-arm64.s
 !/test/asm-directives.s
 !/test/programs/*.S
 !/thirdparty/**/*.s
@@ -12,6 +13,8 @@
 /mucc
 /test/*.exe
 /stage2
+/stage2-aarch64
+/stage2-x86_64
 hello.c
 /stage3
 /build

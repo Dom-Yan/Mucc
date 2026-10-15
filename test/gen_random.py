@@ -183,8 +183,9 @@ static long safe_neg_long(long a) { return a == LONG_MIN_ ? a : -a; }
 // double -> long is undefined when out of range, so clamp.
 static long d2l(double d) { return d > -1e15 && d < 1e15 ? (long)d : 0; }
 
-// NaN's sign bit can differ between constant folding and run time.
-static void pd(double d) { if (d != d) printf("nan\n"); else printf("%.17g\n", d); }
+// NaN's sign bit can differ between constant folding and run time, and
+// so can zero's: gcc folds `0.0 - x` to `-x`, which is -0 for x = 0.
+static void pd(double d) { if (d != d) printf("nan\n"); else printf("%.17g\n", d == 0 ? 0.0 : d); }
 static void pu(unsigned long x) { printf("%lu\n", x); }
 '''
 

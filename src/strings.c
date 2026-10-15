@@ -44,6 +44,14 @@ void *arena_alloc(size_t size) {
   return mem;
 }
 
+// Makes room for one more element in a growing array.
+void *grow(void *arr, int n, int *cap, int elem_size) {
+  if (n < *cap)
+    return arr;
+  *cap = *cap ? *cap * 2 : 64;
+  return realloc(arr, (size_t)*cap * elem_size);
+}
+
 //---------- String arrays ---------------------------------------------------
 
 void strarray_push(StringArray *arr, char *s) {
@@ -73,16 +81,22 @@ char *format(char *fmt, ...) {
   return buf;
 }
 
-// Like format(), but takes a va_list. Measures the result first, then
-// prints it into arena memory. (open_memstream was simpler to write, but
-// set up and zeroed an 8 KB buffer per call: a fifth of all compile time.)
+// Like format(), but takes a va_list. Prints into a buffer on the stack,
+// which nearly every result fits, then copies it into arena memory; a
+// longer one is printed again, into memory of its size. (open_memstream
+// was simpler to write, but set up and zeroed an 8 KB buffer per call: a
+// fifth of all compile time.)
 char *vformat(char *fmt, va_list ap) {
+  char tmp[256];
   va_list ap2;
   va_copy(ap2, ap);
-  int len = vsnprintf(NULL, 0, fmt, ap2);
+  int len = vsnprintf(tmp, sizeof(tmp), fmt, ap2);
   va_end(ap2);
 
   char *buf = arena_alloc(len + 1);
-  vsnprintf(buf, len + 1, fmt, ap);
+  if (len < sizeof(tmp))
+    memcpy(buf, tmp, len + 1);
+  else
+    vsnprintf(buf, len + 1, fmt, ap);
   return buf;
 }

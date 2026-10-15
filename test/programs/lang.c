@@ -160,7 +160,10 @@ int main(void) {
   CHECK(fabsl(expl(1.0L) - 2.718281828459045235L) < 1e-15L);
   CHECK(isnan(nan("")) && isinf(1.0 / 0.0));
   CHECK(lround(2.5) == 3 && fmod(10, 3) == 1);
-  CHECK(LDBL_MANT_DIG == 64);
+  // x87's 64-bit mantissa, or ARM64's quadruple precision, which keeps
+  // 2^-100 next to 1
+  CHECK(LDBL_MANT_DIG == 64 || LDBL_MANT_DIG == 113);
+  CHECK((1.0L + 0x1p-100L != 1.0L) == (LDBL_MANT_DIG == 113));
 
   // strtod and printf round trips
   char buf[128];

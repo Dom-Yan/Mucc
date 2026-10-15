@@ -1,9 +1,9 @@
 name: Release
 
 # Pushing a version tag (git tag -a v1.0.0 -m "mucc 1.0.0" && git push
-# origin v1.0.0) builds the single binary from the tagged commit, checks
-# the exact file that is published, and attaches it to a GitHub Release
-# with its size and SHA-256 checksum. It only goes ahead if CI (every
+# origin v1.0.0) builds the single binaries for x86-64 and ARM64 from the
+# tagged commit, checks the exact files that are published, and attaches
+# them to a GitHub Release with their sizes and SHA-256 checksums. It only goes ahead if CI (every
 # test, on every distribution) passed on that commit. It is built by the
 # previous release (see below), so no gcc or binutils take part.
 
@@ -56,32 +56,45 @@ jobs:
             echo "BOOT=mucc $prev, with no gcc or binutils" >> "$GITHUB_ENV"
           fi
 
-      # With gcc, as, ld, ar and strip made to fail, so only mucc takes part
-      - name: Build the single binary with mucc only, stripped
+      # With gcc, as, ld, ar and strip made to fail, so only mucc takes part.
+      # The ARM64 one is cross-compiled by the x86-64 one just built.
+      - name: Build the single binaries with mucc only, stripped
         run: |
           test/bootstrap.sh boot/mucc mucc-x86_64-linux -s
+          test/bootstrap.sh mucc-x86_64-linux mucc-aarch64-linux -s aarch64
           sha256sum mucc-x86_64-linux > mucc-x86_64-linux.sha256
+          sha256sum mucc-aarch64-linux > mucc-aarch64-linux.sha256
 
-      # Every check runs on mucc-x86_64-linux itself, the file published.
-      - name: Test the file to be published, alone and on other distributions
-        run: test/single.sh mucc-x86_64-linux && test/distros.sh mucc-x86_64-linux
+      # Every check runs on the files published: the ARM64 one by qemu.
+      - name: Install qemu
+        run: sudo apt-get install -y qemu-user-binfmt
+
+      - name: Test the files to be published, alone and on other distributions
+        run: |
+          test/single.sh mucc-x86_64-linux && test/distros.sh mucc-x86_64-linux
+          test/single.sh mucc-aarch64-linux && test/programs.sh mucc-aarch64-linux
 
       - name: Make the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha256sum -c mucc-x86_64-linux.sha256
+          sha256sum -c mucc-x86_64-linux.sha256 mucc-aarch64-linux.sha256
           size=$(stat -c %s mucc-x86_64-linux)
           sum=$(cut -d' ' -f1 mucc-x86_64-linux.sha256)
+          size_a64=$(stat -c %s mucc-aarch64-linux)
+          sum_a64=$(cut -d' ' -f1 mucc-aarch64-linux.sha256)
           notes="mucc $GITHUB_REF_NAME as one static binary for x86-64 Linux,
-          with its headers and C library (musl) inside it. Download it,
-          \`chmod +x\` it, and \`./mucc-x86_64-linux -o hello hello.c\`.
+          and one for ARM64 (AArch64) Linux, each with its headers and C
+          library (musl) inside it. Download yours, \`chmod +x\` it, and
+          \`./mucc-x86_64-linux -o hello hello.c\`.
 
-          Built from commit $GITHUB_SHA by $BOOT.
-          Size: $size bytes. SHA-256: \`$sum\`"
+          Built from commit $GITHUB_SHA by $BOOT (the ARM64 one by the
+          x86-64 one).
+          mucc-x86_64-linux: $size bytes. SHA-256: \`$sum\`
+          mucc-aarch64-linux: $size_a64 bytes. SHA-256: \`$sum_a64\`"
           gh release create "$GITHUB_REF_NAME" mucc-x86_64-linux \
-            mucc-x86_64-linux.sha256 --title "mucc $GITHUB_REF_NAME" \
-            --notes "$notes"
+            mucc-x86_64-linux.sha256 mucc-aarch64-linux mucc-aarch64-linux.sha256 \
+            --title "mucc $GITHUB_REF_NAME" --notes "$notes"
 
       # What anyone downloads must be, byte for byte, the file tested.
       - name: The published file is the one tested
@@ -91,4 +104,5 @@ jobs:
           mkdir published
           gh release download "$GITHUB_REF_NAME" --dir published
           cmp published/mucc-x86_64-linux mucc-x86_64-linux
-          (cd published && sha256sum -c mucc-x86_64-linux.sha256)
+          cmp published/mucc-aarch64-linux mucc-aarch64-linux
+          (cd published && sha256sum -c mucc-x86_64-linux.sha256 mucc-aarch64-linux.sha256)

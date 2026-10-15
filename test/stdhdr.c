@@ -20,8 +20,13 @@
 #include <tgmath.h>
 
 int main() {
+#ifdef __x86_64__
   ASSERT(12, sizeof(struct epoll_event));
   ASSERT(4, offsetof(struct epoll_event, data));
+#else
+  ASSERT(16, sizeof(struct epoll_event)); // packed only on x86-64
+  ASSERT(8, offsetof(struct epoll_event, data));
+#endif
 #ifdef __GLIBC__
   ASSERT(16, _Alignof(__pthread_unwind_buf_t));
 #endif

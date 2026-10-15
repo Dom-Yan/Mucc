@@ -13,7 +13,11 @@ It's skipped
 int main() {
   ASSERT(97, 'a');
   ASSERT(10, '\n');
+#ifdef __CHAR_UNSIGNED__
+  ASSERT(128, '\x80'); // plain char is unsigned on ARM64
+#else
   ASSERT(-128, '\x80');
+#endif
 
   ASSERT(511, 0777);
   ASSERT(0, 0x0);
@@ -108,8 +112,13 @@ of(char), \
   ASSERT(4, sizeof(L'\0'));
   ASSERT(97, L'a');
 
-  // wchar_t is int on x86-64 Linux, as with gcc and musl: L'a' has its type.
+  // wchar_t is int on x86-64 Linux, and unsigned int on ARM64, as with gcc
+  // and musl: L'a' has its type.
+#ifdef __aarch64__
+  ASSERT(0, (wchar_t)-1 < 0);
+#else
   ASSERT(1, (wchar_t)-1 < 0);
+#endif
   ASSERT(1, __builtin_types_compatible_p(wchar_t, typeof(L'a')));
 
   // Multi-character constants, one byte per character, as with gcc. One
@@ -118,14 +127,18 @@ of(char), \
   ASSERT(0x6162, 'ab');
   ASSERT(0x62636465, 'abcde');
   ASSERT(0xff01, '\377\1');
+#ifdef __CHAR_UNSIGNED__
+  ASSERT(255, '\xff');
+#else
   ASSERT(-1, '\xff');
+#endif
   ASSERT(39, '\'');
   ASSERT(0x6127, 'a\'');
   ASSERT(0xc3a9, 'é');
   ASSERT(0xe9, L'é');
   ASSERT(0x62, L'ab');
   ASSERT(1, ({ int r = 0;
-#if 'AB' == 0x4142 && '\377' < 0
+#if 'AB' == 0x4142 && ('\377' < 0) != defined(__CHAR_UNSIGNED__)
     r = 1;
 #endif
     r; }));

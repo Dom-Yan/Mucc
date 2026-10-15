@@ -11,7 +11,14 @@
 # valid programs.
 #
 # Programs that fail are kept in difftest-failures/SEED.c.
+#
+# GCC and MUCC name other compilers, as for mucc for the other CPU, run by
+# qemu-user:
+#   GCC='aarch64-linux-gnu-gcc -static' \
+#     MUCC='./mucc --target=aarch64-linux --libc=mucc' test/difftest.sh
 cd "$(dirname "$0")/.."
+gcc=${GCC:-gcc}
+mucc=${MUCC:-./mucc}
 
 check_ub=false
 if [ "$1" = --check-ub ]; then
@@ -42,8 +49,8 @@ for ((s = seed; s < seed + count; s++)); do
     continue
   fi
 
-  gcc -w -O0 -o $tmp/gcc $tmp/t.c || { fail "gcc can't compile it (generator bug)"; continue; }
-  ./mucc -o $tmp/mucc $tmp/t.c 2> $tmp/err || { fail "mucc can't compile it: $(head -1 $tmp/err)"; continue; }
+  $gcc -w -O0 -o $tmp/gcc $tmp/t.c || { fail "gcc can't compile it (generator bug)"; continue; }
+  $mucc -o $tmp/mucc $tmp/t.c 2> $tmp/err || { fail "mucc can't compile it: $(head -1 $tmp/err)"; continue; }
 
   timeout 10 $tmp/gcc > $tmp/gcc.out; gcc_rc=$?
   timeout 10 $tmp/mucc > $tmp/mucc.out; mucc_rc=$?

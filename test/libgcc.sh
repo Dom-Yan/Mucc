@@ -3,7 +3,10 @@
 # library, libgcc (like __udivti3 or __popcountdi2): mucc's bundled C
 # library (musl, see `make libc`) replaces glibc, not libgcc, so nothing may need
 # it. Every test program and mucc itself are compiled, and no object may
-# refer to a symbol libgcc defines. Needs gcc, to find libgcc.
+# refer to a symbol libgcc defines. Needs gcc, to find libgcc. On ARM64,
+# the helpers for long double and __int128 division are called, as gcc
+# calls them; mucc's runtime (runtime/arm64.c, libmucc.a) defines those,
+# and only those may be.
 mucc="$1 -Iinclude"
 
 tmp=`mktemp -d /tmp/mucc-libgcc-XXXXXX`
@@ -24,7 +27,15 @@ if [ ! -f "$libgcc" ]; then
     exit 0
 fi
 nm -g --defined-only $libgcc ${libgcc%.a}_eh.a 2> /dev/null |
-    awk 'NF == 3 { print $3 }' | sort -u > $tmp/libgcc
+    awk 'NF == 3 { print $3 }' | sort -u > $tmp/libgcc.all
+
+# On ARM64, less what mucc's runtime has
+: > $tmp/runtime
+if [ "$($mucc -dumpmachine)" = aarch64-linux-gnu ]; then
+    $mucc -c -o $tmp/runtime.o runtime/arm64.c || exit 1
+    nm -g --defined-only $tmp/runtime.o | awk '{ print $3 }' | sort -u > $tmp/runtime
+fi
+comm -23 $tmp/libgcc.all $tmp/runtime > $tmp/libgcc
 
 # Prints the symbols the objects given refer to that libgcc defines.
 libgcc_refs() {

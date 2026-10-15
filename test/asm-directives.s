@@ -68,6 +68,8 @@ func:
   .endr
   .byte 8
   .endr
+  # an escaped quote doesn't end a string, so ; and # in it stay
+  .ascii "a\";b#c\\"; .byte 1
 
   .pushsection .rodata.str1.1,"aMS",@progbits,1
 str:

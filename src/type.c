@@ -34,6 +34,80 @@ Type *ty_float = &(Type){TY_FLOAT, 4, 4};
 Type *ty_double = &(Type){TY_DOUBLE, 8, 8};
 Type *ty_ldouble = &(Type){TY_LDOUBLE, 16, 16};
 
+// wchar_t: int, but unsigned int on ARM64, as gcc has them
+Type *ty_wchar(void) {
+  return target_arm64 ? ty_uint : ty_int;
+}
+
+// Writes long double `v` into the 16 bytes at `buf` in the target's
+// format: x87's 80 bits (then zeros) on x86-64, IEEE quadruple precision
+// on ARM64. It's computed from the value, not copied, so it's right
+// whichever of the two mucc's own long double is. (Cross-compiling from
+// x86-64, values are only as precise as x87's; see README.md.)
+void write_ldouble(char *buf, long double v) {
+  memset(buf, 0, 16);
+  bool neg = v < 0 || (v == 0 && 1 / v < 0);
+  int exp; // biased: 0 for zero, 0x7fff for infinity and NaN
+  unsigned __int128 sig = 0; // the mantissa, its top bit the leading 1
+
+  if (v != v) {
+    exp = 0x7fff;
+    sig = (unsigned __int128)3 << 126; // a quiet NaN
+    neg = false;
+  } else if (v - v != 0) {
+    exp = 0x7fff;
+    sig = (unsigned __int128)1 << 127;
+  } else if (v == 0) {
+    exp = 0;
+  } else {
+    // v = m * 2^e, 1 <= m < 2, in exact steps
+    if (neg)
+      v = -v;
+    int e = 0;
+    while (v >= 0x1p64L) { v *= 0x1p-64L; e += 64; }
+    while (v >= 2) { v /= 2; e++; }
+    while (v < 0x1p-64L) { v *= 0x1p64L; e -= 64; }
+    while (v < 1) { v *= 2; e--; }
+    uint64_t hi = v * 0x1p63L;
+    uint64_t lo = (v * 0x1p63L - hi) * 0x1p64L;
+    sig = (unsigned __int128)hi << 64 | lo;
+    exp = e + 16383;
+  }
+
+  if (target_arm64) {
+    // 15 bits of exponent, 112 of mantissa after its implicit leading 1.
+    // A value too small for that exponent is subnormal: exponent 0, and
+    // the mantissa shifted down, its 1 shown.
+    unsigned __int128 frac = sig << 1 >> 16;
+    if (exp <= 0 && sig) {
+      int shift = 16 - exp;
+      frac = shift < 128 ? sig >> shift : 0;
+      exp = 0;
+    }
+    uint64_t lo = frac, hi = (uint64_t)(frac >> 64) | (uint64_t)exp << 48 |
+                             (uint64_t)neg << 63;
+    memcpy(buf, &lo, 8);
+    memcpy(buf + 8, &hi, 8);
+    return;
+  }
+
+  // x87: a 64-bit mantissa with its 1 shown, rounded to nearest (only a
+  // quadruple-precision value has bits past it; rounding up the largest
+  // one gives infinity's bits), then a 15-bit exponent.
+  uint64_t m = sig >> 64, rest = sig;
+  if ((rest > (1UL << 63) || (rest == (1UL << 63) && (m & 1))) && ++m == 0) {
+    m = 1UL << 63;
+    exp++;
+  }
+  if (exp <= 0 && m) {
+    m = 1 - exp < 64 ? m >> (1 - exp) : 0;
+    exp = 0;
+  }
+  uint16_t top = exp | neg << 15;
+  memcpy(buf, &m, 8);
+  memcpy(buf + 8, &top, 2);
+}
+
 //---------- Type predicates -------------------------------------------------
 
 static Type *new_type(TypeKind kind, int64_t size, int align) {
@@ -115,7 +189,14 @@ bool has_ldouble(Type *ty) {
 // 16 bytes is, and so is one holding a long double and anything else. One
 // holding only long doubles comes back in %st0, and a long double
 // _Complex in %st0 and %st1.
+//
+// On ARM64, the AAPCS64 returns one larger than 16 bytes through a
+// pointer (in x8), unless it's an HFA (see hfa_count()).
 bool is_ret_in_memory(Type *ty) {
+  if (target_arm64) {
+    Type *base;
+    return ty->size > 16 && !hfa_count(ty, &base);
+  }
   if (is_complex(ty))
     return false;
   if (ty->size > 16 || has_unaligned_member(ty))
@@ -123,6 +204,43 @@ bool is_ret_in_memory(Type *ty) {
   int nld = 0, nother = 0;
   count_ldouble(ty, &nld, &nother);
   return nld > 0 && nother > 0;
+}
+
+static int hfa_members(Type *ty, Type **base) {
+  if (is_flonum(ty) || (is_vector(ty) && (ty->size == 8 || ty->size == 16))) {
+    if (*base && ((*base)->kind != ty->kind || (*base)->size != ty->size))
+      return -1;
+    *base = ty;
+    return 1;
+  }
+  if (ty->kind == TY_ARRAY && ty->array_len >= 0) {
+    int n = ty->array_len ? hfa_members(ty->base, base) : 0;
+    return n < 0 ? -1 : n * ty->array_len;
+  }
+  if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
+    return -1;
+  int n = 0;
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    int k = mem->is_bitfield ? -1 : hfa_members(mem->ty, base);
+    if (k < 0)
+      return -1;
+    n = ty->kind == TY_STRUCT ? n + k : MAX(n, k);
+  }
+  return n;
+}
+
+// [ARM64] Is `ty` a homogeneous floating-point aggregate (an HFA, or of
+// short vectors, an HVA): a struct, union or array whose members, nested
+// ones too, are 1 to 4 of one float, double, long double or vector type
+// and nothing else? The AAPCS64 passes and returns one in that many
+// FP/SIMD registers. Returns the count, with the member type in `*base`,
+// or 0.
+int hfa_count(Type *ty, Type **base) {
+  *base = NULL;
+  int n = hfa_members(ty, base);
+  if (n < 1 || n > 4 || n * (*base)->size != ty->size)
+    return 0;
+  return n;
 }
 
 // Are t1 and t2 compatible, leaving aside their own qualifiers (not those
@@ -925,10 +1043,13 @@ bool is_assignable(Type *to, Node *from) {
 
 // Reports an error if `from` can't be converted to type `to` without a
 // cast, as in `=`, initializers, function arguments and `return` (the
-// rules are C11 6.5.16.1). `what` names the place, e.g. "assignment".
-void check_assign(Type *to, Node *from, char *what) {
+// rules are C11 6.5.16.1). The printf-style `fmt` names the place, e.g.
+// "assignment" or "argument %d of '%s'". It's only formatted for a
+// message, since this runs for every argument of every call.
+void check_assign(Type *to, Node *from, char *fmt, ...) {
   add_type(from);
   Type *ty = from->ty;
+  va_list ap;
 
   // Arrays and functions are used as pointers.
   if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
@@ -940,8 +1061,10 @@ void check_assign(Type *to, Node *from, char *what) {
   if (to->kind == TY_ARRAY || to->kind == TY_VLA)
     return;
 
-  if (ty->kind == TY_VOID)
-    error_tok(from->tok, "void value used in %s", what);
+  if (ty->kind == TY_VOID) {
+    va_start(ap, fmt);
+    error_tok(from->tok, "void value used in %s", vformat(fmt, ap));
+  }
 
   if ((is_numeric(to) || is_complex(to)) && (is_numeric(ty) || is_complex(ty)))
     return;
@@ -964,9 +1087,13 @@ void check_assign(Type *to, Node *from, char *what) {
       Type *t = to->base, *f = ty->base;
       char *q = f->is_const && !t->is_const ? "const"
                 : f->is_volatile && !t->is_volatile ? "volatile" : NULL;
-      if (q && !in_system_header(from->tok))
+      if (q && !in_system_header(from->tok)) {
+        va_start(ap, fmt);
+        char *what = vformat(fmt, ap);
+        va_end(ap);
         warn_opt("discarded-qualifiers", from->tok,
                  "%s discards the '%s' qualifier of '%s'", what, q, type_name(ty));
+      }
       return;
     }
     if (is_integer(ty) && is_null_const(from))
@@ -984,6 +1111,7 @@ void check_assign(Type *to, Node *from, char *what) {
       (ty->kind == TY_PTR || is_integer(ty)))
     hint = " (use a cast if this is intended)";
 
+  va_start(ap, fmt);
   error_tok(from->tok, "cannot convert '%s' to '%s' in %s%s",
-            type_name(ty), type_name(to), what, hint);
+            type_name(ty), type_name(to), vformat(fmt, ap), hint);
 }

@@ -33,7 +33,20 @@ static long double ld_balance(void) {
 }
 
 // Floating-point exception flags: "invalid" in MXCSR and the x87 status
-// word
+// word, or ARM64's FPSR (bit 0, which long double's routines set too)
+#ifdef __aarch64__
+static void clear_invalid(void) {
+  unsigned long sr;
+  asm volatile("mrs %0, fpsr" : "=r"(sr));
+  sr &= ~0x9fUL;
+  asm volatile("msr fpsr, %0" : : "r"(sr));
+}
+static int invalid_raised(void) {
+  unsigned long sr;
+  asm volatile("mrs %0, fpsr" : "=r"(sr));
+  return sr & 1;
+}
+#else
 static void clear_invalid(void) {
   unsigned csr;
   asm volatile("stmxcsr %0" : "=m"(csr));
@@ -48,6 +61,7 @@ static int invalid_raised(void) {
   asm volatile("fnstsw %0" : "=a"(sw));
   return (csr | sw) & 1;
 }
+#endif
 
 int main() {
   ASSERT(1, ld_deep(0.5L) == 0x1.fdp+0L);
@@ -66,8 +80,13 @@ int main() {
   ASSERT(0, ({ volatile long double x = 0.0L / 0.0L; clear_invalid(); (void)(x != x); invalid_raised(); }));
   ASSERT(1, ({ volatile long double x = 0.0L / 0.0L; clear_invalid(); (void)(x <= 0); invalid_raised(); }));
 
-  // <float.h>: long double is x87 extended precision
+  // <float.h>: long double is x87 extended precision, or on ARM64
+  // quadruple precision
+#ifdef __aarch64__
+  ASSERT(113, LDBL_MANT_DIG);
+#else
   ASSERT(64, LDBL_MANT_DIG);
+#endif
   ASSERT(16384, LDBL_MAX_EXP);
   ASSERT(1, ({ volatile long double one = 1; one + LDBL_EPSILON > one && one + LDBL_EPSILON / 2 == one; }));
   ASSERT(1, ({ volatile long double m = LDBL_MAX; m * 2 > m && LDBL_MAX > DBL_MAX; }));
@@ -121,7 +140,13 @@ int main() {
   ASSERT(35, (unsigned int)(double)35);
   ASSERT(35, (unsigned long)(double)35);
 
+  // Out of int's range, as ASSERT takes it: x86-64 gives INT_MIN, ARM64
+  // saturates.
+#ifdef __aarch64__
+  ASSERT(2147483647, (double)(unsigned long)(long)-1);
+#else
   ASSERT(-2147483648, (double)(unsigned long)(long)-1);
+#endif
 
   ASSERT(1, 2e3==2e3);
   ASSERT(0, 2e3==2e5);

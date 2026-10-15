@@ -100,6 +100,11 @@ kernel, so they don't affect a program's license.
 - `linux-headers/COPYING` and `linux-headers/LICENSES/` are the tarball's
   `COPYING`, `LICENSES/preferred/GPL-2.0` and
   `LICENSES/exceptions/Linux-syscall-note`.
+- `linux-headers/arm64/asm/` is the `include/asm/` of `make headers_install
+  ARCH=arm64` in the same tree, its comments taken out the same way: the
+  rest of that tree is the same as x86-64's, but that x86-64 also has
+  `linux/a.out.h`. `make libc` on (or for) ARM64 puts it in place of
+  x86-64's `asm/`.
 
 mucc compiles every header alone (with the bundled musl) except the 12 on
 the kernel's own list of headers that need others first
@@ -114,6 +119,9 @@ thirdparty/strip-comments.py hdr/include stripped
 mkdir merged
 cp -R thirdparty/linux-headers/include/. thirdparty/linux-headers/case/. merged/
 diff -r stripped merged
+make -C linux-6.18.54 ARCH=arm64 HOSTCC=mucc INSTALL_HDR_PATH=$PWD/hdr-arm64 headers_install
+thirdparty/strip-comments.py hdr-arm64/include stripped-arm64
+diff -r stripped-arm64/asm thirdparty/linux-headers/arm64/asm
 ```
 
 prints nothing.

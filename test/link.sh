@@ -106,9 +106,11 @@ printf 'int f(void) { return 2; }\nint main(void) { return f(); }\n' > $tmp/d2.c
     grep -q "multiple definition of 'f' (in $tmp/d1.c and $tmp/d2.c)" $tmp/err
 check 'multiple definition'
 
-printf 'char b1[3L << 30], b2[3L << 30];\nint main(void) { return b1[0] + b2[0]; }\n' > $tmp/big.c
-! $mucc -static -o $tmp/big $tmp/big.c 2> $tmp/err && grep -q "is static data over 2 GiB" $tmp/err
-check 'static data over 2 GiB'
+# (x86-64's code reaches 2 GiB, ARM64's adrp 4 GiB.)
+[ "$(uname -m)" = aarch64 ] && reach='4 GiB' || reach='2 GiB'
+printf 'char b1[3L << 30], b2[3L << 30], b3[3L << 30];\nint main(void) { return b1[0] + b2[0] + b3[0]; }\n' > $tmp/big.c
+! $mucc -static -o $tmp/big $tmp/big.c 2> $tmp/err && grep -q "is static data over $reach" $tmp/err
+check "static data over $reach"
 
 # mucc links itself statically, and the result works.
 for f in src/*.c; do $mucc -c -o $tmp/src_$(basename $f .c).o $f || exit 1; done

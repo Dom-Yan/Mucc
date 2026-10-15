@@ -46,8 +46,6 @@ static int loc_line;
 static void gen_expr(Node *node);
 static void gen_discard(Node *node);
 static void gen_stmt(Node *node);
-static bool block_begin(Node *node);
-static void block_end(Node *node);
 static void cast_int128(Type *from, Type *to);
 static void cast_vector(Type *from, Type *to);
 static char *high_half(char *addr);
@@ -57,8 +55,9 @@ static char *vec_move(int size);
 
 // Every line of assembly goes through println(). It used to call glibc's
 // vfprintf, which was about 30% of all compile time, so it has its own
-// small formatter that knows only what this file uses: %s, %d, %u, %ld,
-// %lu, %+ld, %Lf and %%. Anything else is an internal error.
+// small formatter that knows only what this file and cgen_arm64.c use:
+// %s, %c, %d, %u, %ld, %lu, %+ld, %Lf and %%. Anything else is an
+// internal error.
 
 static void out_bytes(char *s, size_t n) {
   if (out_len + n > out_cap) {
@@ -90,20 +89,20 @@ static void out_long(long v) {
   }
 }
 
-// A `push %rax` not written yet. If the next instruction is a pop, the
-// pair becomes one mov (see pop()); anything else writes the push first.
-static bool pending_push;
+// A push not written yet, as "  push %rax\n", or NULL. If the next
+// instruction is a pop, the pair becomes one mov (see pop()); anything
+// else writes the push first.
+char *pending_push;
 
-static void flush_push(void) {
+void flush_push(void) {
   if (pending_push) {
-    char *line = "  push %rax\n";
-    pending_push = false;
+    char *line = pending_push;
+    pending_push = NULL;
     out_bytes(line, strlen(line));
   }
 }
 
-__attribute__((format(printf, 1, 2)))
-static void println(char *fmt, ...) {
+void println(char *fmt, ...) {
   flush_push();
   va_list ap;
   va_start(ap, fmt);
@@ -124,6 +123,10 @@ static void println(char *fmt, ...) {
     } else if (*p == 's') {
       char *s = va_arg(ap, char *);
       out_bytes(s, strlen(s));
+      p++;
+    } else if (*p == 'c') {
+      char c = va_arg(ap, int);
+      out_bytes(&c, 1);
       p++;
     } else if (*p == 'd') {
       out_long(va_arg(ap, int));
@@ -156,21 +159,21 @@ static void println(char *fmt, ...) {
   out_bytes("\n", 1);
 }
 
-static int count(void) {
+int count(void) {
   static int i = 1;
   return i++;
 }
 
 static void push(void) {
   flush_push();
-  pending_push = true;
+  pending_push = "  push %rax\n";
   depth++;
 }
 
 static void pop(char *arg) {
   if (pending_push) {
     // `push %rax; pop %rdi` is `mov %rax, %rdi`.
-    pending_push = false;
+    pending_push = NULL;
     if (strcmp(arg, "%rax"))
       println("  mov %%rax, %s", arg);
   } else {
@@ -350,7 +353,7 @@ static void gen_addr(Node *node) {
 
 // True for types whose values live in memory and are handled by address
 // (arrays, structs, ...), as opposed to scalars that fit in a register.
-static bool is_aggregate(Type *ty) {
+bool is_aggregate(Type *ty) {
   switch (ty->kind) {
   case TY_ARRAY:
   case TY_STRUCT:
@@ -1447,7 +1450,7 @@ static void gen_vector_unary(Node *node) {
 // to the width of its type, and only operators that can't trap are
 // folded: no division (by zero traps), no shifts by the width or more.
 
-static bool is_foldable(Node *node) {
+bool is_foldable(Node *node) {
   // Integers, and integers cast to a pointer, like NULL: (void *)0.
   // (Some nodes, like ones that only zero memory, have no type.)
   if (!node->ty)
@@ -1483,7 +1486,7 @@ static int64_t wrap(uint64_t val, Type *ty) {
 }
 
 // The value of `node`, which is_foldable().
-static int64_t fold(Node *node) {
+int64_t fold(Node *node) {
   Type *ty = node->ty;
 
   switch (node->kind) {
@@ -1525,14 +1528,14 @@ static int64_t fold(Node *node) {
 //---------- Simple operands -------------------------------------------------
 
 // An integer or a pointer in %rax alone
-static bool is_int_or_ptr(Type *ty) {
+bool is_int_or_ptr(Type *ty) {
   return (is_integer(ty) && ty->kind != TY_BOOL && !is_int128(ty)) ||
          ty->kind == TY_PTR;
 }
 
 // A local scalar variable, whose value can be read straight from the
 // stack frame. Returns NULL for anything else.
-static Obj *local_scalar(Node *node) {
+Obj *local_scalar(Node *node) {
   if (node->kind == ND_VAR && node->var->is_local && !is_aggregate(node->ty) &&
       !node->var->is_overaligned)
     return node->var;
@@ -2250,7 +2253,7 @@ static int file_number(Token *tok) {
 // from a macro is on the line the macro is used on, as with gcc, not in
 // the header that defines it. Only with -g, as in gcc: without it an
 // object holds no paths, so it is the same built in any directory.
-static void emit_loc(Token *tok) {
+void emit_loc(Token *tok) {
   if (!opt_g)
     return;
   while (tok->origin)
@@ -2261,6 +2264,14 @@ static void emit_loc(Token *tok) {
   loc_file = file_no;
   loc_line = tok->line_no;
   println("  .loc %d %d", loc_file, loc_line);
+}
+
+// A function's prologue is on its line, so the line table covers its
+// first instruction, where gdb's `break f` looks.
+void emit_function_loc(Obj *fn) {
+  loc_line = 0;
+  if (fn->tok)
+    emit_loc(fn->tok);
 }
 
 // Generates code for expression `node`, which leaves its value in %rax
@@ -2296,12 +2307,11 @@ static void gen_expr(Node *node) {
       return;
     }
     case TY_LDOUBLE: {
-      union { long double f80; uint64_t u64[2]; } u;
-      memset(&u, 0, sizeof(u));
-      u.f80 = *node->fval;
-      println("  mov $%lu, %%rax  # long double %Lf", u.u64[0], *node->fval);
+      uint64_t u64[2];
+      write_ldouble((char *)u64, *node->fval);
+      println("  mov $%lu, %%rax  # long double %Lf", u64[0], *node->fval);
       println("  mov %%rax, -16(%%rsp)");
-      println("  mov $%lu, %%rax", u.u64[1]);
+      println("  mov $%lu, %%rax", u64[1]);
       println("  mov %%rax, -8(%%rsp)");
       println("  fldt -16(%%rsp)");
       return;
@@ -3201,9 +3211,11 @@ static int asm_label_index(Node *node, char **p) {
 
 // The template with its operands filled in: `%0` or `%[name]`, maybe
 // with a modifier (`%k0`), `%=` (a number unique to this asm), `%%`,
-// and asm goto's labels as `targets` says. `{att|intel}` picks the first
-// alternative, as for AT&T syntax.
-static char *asm_template(Node *node, char **targets) {
+// and asm goto's labels as `targets` says. Each operand's text comes from
+// `operand_text`. On x86-64, `{att|intel}` picks the first alternative,
+// as for AT&T syntax; ARM64 has none, and its braces are its own.
+char *asm_template(Node *node, char **targets,
+                   char *(*operand_text)(Node *, AsmOperand *, char)) {
   static int id;
   id++;
 
@@ -3213,7 +3225,7 @@ static char *asm_template(Node *node, char **targets) {
   int alt = 0; // 1 in {'s first alternative, 2 in the others
 
   for (char *p = node->asm_str; *p; p++) {
-    if (*p == '{') {
+    if (*p == '{' && !target_arm64) {
       alt = 1;
       continue;
     }
@@ -3274,7 +3286,7 @@ static char *asm_template(Node *node, char **targets) {
     } else {
       error_tok(node->tok, "invalid '%%' in asm template");
     }
-    fputs(asm_operand_text(node, op, mod), out);
+    fputs(operand_text(node, op, mod), out);
   }
 
   fclose(out);
@@ -3365,7 +3377,7 @@ static void gen_asm(Node *node) {
     }
   }
 
-  println("  %s", asm_template(node, targets));
+  println("  %s", asm_template(node, targets, asm_operand_text));
   store_asm_outputs(node);
   if (!stubs)
     return;
@@ -3400,7 +3412,7 @@ static char *case_operand(int64_t val, bool is64) {
 
 // -g: labels around the code of a block with variables (see LexBlock),
 // the first time it's written. True if the begin label was.
-static bool block_begin(Node *node) {
+bool block_begin(Node *node) {
   LexBlock *b = node->block;
   if (!opt_g || !b || !b->has_vars || b->emitted)
     return false;
@@ -3409,7 +3421,7 @@ static bool block_begin(Node *node) {
   return true;
 }
 
-static void block_end(Node *node) {
+void block_end(Node *node) {
   println(".L.block.%d.end:", node->block->id);
 }
 
@@ -3678,22 +3690,29 @@ static bool can_be_in_register(Obj *fn, Obj *var) {
          ((is_integer(ty) && !is_int128(ty)) || ty->kind == TY_PTR);
 }
 
+// The callee-saved registers variables can live in, by number, as asm
+// statements and DWARF both number them: %rbx and %r12-%r15 (regs64[]),
+// or on ARM64 x19-x28. Obj->reg is an index into these + 1.
+static int x86_saved_regs[] = {3, 12, 13, 14, 15};
+static int arm64_saved_regs[] = {19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
+static int *saved_regs;
+static int nsaved_regs;
+
 // Gives the most used eligible variables of `fn` a register each.
 static void assign_registers(Obj *fn) {
   no_register_vars = false;
   scan_uses(fn->body, 1);
 
   // With variables in memory, the prologue saves the callee-saved
-  // registers (regs64[]: %rbx, %r12-%r15) its asm statements use instead.
+  // registers its asm statements use instead.
   if (no_register_vars) {
-    static int nums[] = {3, 12, 13, 14, 15};
-    for (int i = 0; i < NREGS; i++)
-      if (fn->asm_regs & (1 << nums[i]))
+    for (int i = 0; i < nsaved_regs; i++)
+      if (fn->asm_regs & (1 << saved_regs[i]))
         fn->nregs = i + 1;
     return;
   }
 
-  while (fn->nregs < NREGS) {
+  while (fn->nregs < nsaved_regs) {
     // A variable used only once or twice isn't worth saving and
     // restoring a register for.
     Obj *best = NULL;
@@ -3709,7 +3728,7 @@ static void assign_registers(Obj *fn) {
 
 //---------- Stack frames and the data section -------------------------------
 
-static bool is_param(Obj *fn, Obj *var) {
+bool is_param(Obj *fn, Obj *var) {
   for (Obj *p = fn->params; p; p = p->next)
     if (p == var)
       return true;
@@ -3835,7 +3854,7 @@ static bool is_weak(Obj *prog, Obj *var) {
 
 // `.local`, `.globl` or `.weak`, and `.hidden` and so on: as the
 // visibility attribute says, or else -fvisibility.
-static void emit_binding(Obj *prog, Obj *var) {
+void emit_binding(Obj *prog, Obj *var) {
   if (var->is_static)
     println("  .local %s", var->name);
   else if (is_weak(prog, var))
@@ -3874,7 +3893,7 @@ static void emit_init_entry(char *kind, int prio, char *name) {
   char *sec = prio < 0 ? format(".%s_array", kind) :
                          format(".%s_array.%05d", kind, prio);
   println("  .section %s,\"aw\",@%s_array", sec, kind);
-  println("  .align 8");
+  println("  .balign 8");
   println("  .quad %s", name);
 }
 
@@ -3935,7 +3954,7 @@ static void emit_data(Obj *prog) {
       int64_t size = var->ty->size + var->flex_size;
       println("  .type %s, @object", var->name);
       println("  .size %s, %ld", var->name, size);
-      println("  .align %d", align);
+      println("  .balign %d", align);
       println("%s:", var->name);
 
       // Runs of zeros as .zero, other bytes 16 to a line: a big array
@@ -3960,10 +3979,24 @@ static void emit_data(Obj *prog) {
           continue;
         }
 
+        // (Written digit by digit: sprintf per byte was slow.)
         char buf[16 * 5 + 1], *p = buf;
         n = MIN(16, end - pos);
-        for (int i = 0; i < n; i++)
-          p += sprintf(p, i ? ",%d" : "%d", var->init_data[pos + i]);
+        for (int i = 0; i < n; i++) {
+          int v = var->init_data[pos + i];
+          if (i)
+            *p++ = ',';
+          if (v < 0) {
+            *p++ = '-';
+            v = -v;
+          }
+          if (v >= 100)
+            *p++ = '0' + v / 100;
+          if (v >= 10)
+            *p++ = '0' + v / 10 % 10;
+          *p++ = '0' + v % 10;
+        }
+        *p = '\0';
         println("  .byte %s", buf);
         pos += n;
       }
@@ -3980,7 +4013,7 @@ static void emit_data(Obj *prog) {
     else
       println(ro ? "  .section .rodata" : "  .bss");
 
-    println("  .align %d", align);
+    println("  .balign %d", align);
     println("%s:", var->name);
     println("  .zero %ld", var->ty->size);
   }
@@ -4041,12 +4074,7 @@ static void emit_text(Obj *prog) {
     println("  .type %s, @function", fn->name);
     println("%s:", fn->name);
     current_fn = fn;
-    loc_line = 0;
-
-    // The prologue is on the function's line, so the line table covers
-    // its first instruction, where gdb's `break f` looks.
-    if (fn->tok)
-      emit_loc(fn->tok);
+    emit_function_loc(fn);
 
     // Prologue
     println("  push %%rbp");
@@ -4168,9 +4196,9 @@ static void emit_text(Obj *prog) {
 // With -g, a DWARF 4 .debug_info compile unit, as gcc -gdwarf-4 writes,
 // so gdb can print variables: each function with its parameters and
 // locals, the global variables, and their types, with where each lives
-// (an offset from %rbp, a callee-saved register, an address). The line
-// table comes from the .loc directives: the assembler (asm.c, or GNU as)
-// writes it into the .debug_line named here. Numbers in LEB128 are
+// (an offset from %rbp or x29, a callee-saved register, an address). The
+// line table comes from the .loc directives: the assembler (asm.c, or GNU
+// as) writes it into the .debug_line named here. Numbers in LEB128 are
 // encoded here and written as .byte lists. A block's variables are in a
 // lexical block, which gdb shows them in only (see LexBlock). Typedef
 // names aren't recorded: gdb shows a size_t as unsigned long.
@@ -4186,8 +4214,6 @@ enum {
   AB_VOLATILE, AB_VOLATILE_VOID,
 };
 
-// The DWARF numbers of regs64[]'s registers: %rbx, %r12 to %r15
-static int dwarf_regs[] = {3, 12, 13, 14, 15};
 
 // `val` in LEB128, as a .byte list
 static char *leb128(int64_t val, bool is_signed) {
@@ -4326,7 +4352,7 @@ static char *base_type_name(Type *ty, int *encoding) {
 // local `var`: from its callee-saved register, or its place in the frame.
 static char *var_value_ops(Obj *var) {
   if (var->reg)
-    return format("%d,0", 0x70 + dwarf_regs[var->reg - 1]); // DW_OP_bregN 0
+    return format("%d,0", 0x70 + saved_regs[var->reg - 1]); // DW_OP_bregN 0
   return format("0x91,%s,6", leb128(var->offset, true)); // DW_OP_fbreg, DW_OP_deref
 }
 
@@ -4581,8 +4607,8 @@ static void emit_debug_abbrev(void) {
 }
 
 // A variable's location: a callee-saved register, or a place in the
-// frame, at an offset from %rbp (the frame base), which for a variable
-// aligned above 16 holds its address.
+// frame, at an offset from %rbp or x29 (the frame base), which for a
+// variable aligned above 16 holds its address.
 static void emit_var_location(Obj *var) {
   // A VLA's variable holds the array's address.
   if (var->ty->kind == TY_VLA) {
@@ -4591,7 +4617,7 @@ static void emit_var_location(Obj *var) {
     return;
   }
   if (var->reg) {
-    println("  .byte 1,%d", 0x50 + dwarf_regs[var->reg - 1]); // DW_OP_regN
+    println("  .byte 1,%d", 0x50 + saved_regs[var->reg - 1]); // DW_OP_regN
     return;
   }
   int len = 1 + leb128_len(var->offset, true) + var->is_overaligned;
@@ -4658,7 +4684,8 @@ static void emit_function_die(Obj *fn) {
     dw_ref(ret);
   println("  .quad %s", fn->name);
   println("  .quad .L.end.%s - %s", fn->name, fn->name);
-  println("  .byte 2,0x76,0"); // frame base: DW_OP_breg6 (%rbp) + 0
+  // frame base: DW_OP_breg6 (%rbp) + 0, or DW_OP_breg29 (x29) + 0
+  println("  .byte 2,%d,0", target_arm64 ? 0x8d : 0x76);
 
   // Parameters have no token of their own: they're shown at the
   // function's line.
@@ -4696,13 +4723,13 @@ static void emit_debug_info(Obj *prog) {
   println(".L.dbg.info:");
   println("  .long .L.dbg.info.end - .L.dbg.info.start");
   println(".L.dbg.info.start:");
-  println("  .value 4");
+  println("  .short 4");
   println("  .long .L.dbg.abbrev");
   println("  .byte 8");
 
   dw_udata(AB_CU);
   dw_string("mucc");
-  println("  .value 0x1d"); // DW_LANG_C11
+  println("  .short 0x1d"); // DW_LANG_C11
   dw_string(base_file);
   dw_string(cwd);
   println("  .quad .L.text.start");
@@ -4763,10 +4790,15 @@ void codegen(Obj *prog, FILE *out) {
   for (int i = 0; opt_g && files[i]; i++)
     println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
 
+  saved_regs = target_arm64 ? arm64_saved_regs : x86_saved_regs;
+  nsaved_regs = target_arm64 ? 10 : NREGS;
   for (Obj *fn = prog; fn; fn = fn->next)
     if (fn->is_function && fn->is_definition)
       assign_registers(fn);
-  assign_lvar_offsets(prog);
+  if (target_arm64)
+    assign_frames_arm64(prog);
+  else
+    assign_lvar_offsets(prog);
   for (Obj *var = prog; var; var = var->next)
     has_weak |= var->is_weak;
   emit_data(prog);
@@ -4774,8 +4806,12 @@ void codegen(Obj *prog, FILE *out) {
     println("  .text");
     println(".L.text.start:");
   }
-  emit_text(prog);
-  emit_int128_routines();
+  if (target_arm64) {
+    emit_text_arm64(prog);
+  } else {
+    emit_text(prog);
+    emit_int128_routines();
+  }
   if (opt_g) {
     println("  .text");
     println(".L.text.end:");

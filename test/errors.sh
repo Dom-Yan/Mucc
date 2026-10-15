@@ -8,12 +8,16 @@
 # also works for stage2/mucc, which has no include/ next to it.
 mucc="$1 -Iinclude"
 
+# Options for the target, for tests of one CPU's asm statements (see
+# "asm statements with operands"): none, the CPU mucc runs on.
+target=
+
 tmp=`mktemp -d /tmp/mucc-test-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
 
 expect_error() {
     cat > $tmp/t.c
-    if $mucc -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
+    if $mucc $target -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
         echo "testing error '$1' ... failed (compiled without error)"
         exit 1
     fi
@@ -28,7 +32,7 @@ expect_error() {
 
 expect_ok() {
     cat > $tmp/t.c
-    if ! $mucc -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
+    if ! $mucc $target -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
         echo "testing ok '$1' ... failed"
         cat $tmp/err
         exit 1
@@ -39,7 +43,7 @@ expect_ok() {
 # Fails, and the error lines must be exactly these (one argument each).
 expect_errors() {
     cat > $tmp/t.c
-    if $mucc -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
+    if $mucc $target -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
         echo "testing errors '$1' ... failed (compiled without error)"
         exit 1
     fi
@@ -56,7 +60,7 @@ expect_errors() {
 # Compiles with nothing at all on stderr: no errors and no warnings.
 expect_clean() {
     cat > $tmp/t.c
-    if ! $mucc -c -o $tmp/t.o $tmp/t.c 2> $tmp/err || [ -s $tmp/err ]; then
+    if ! $mucc $target -c -o $tmp/t.o $tmp/t.c 2> $tmp/err || [ -s $tmp/err ]; then
         echo "testing clean '$1' ... failed"
         cat $tmp/err
         exit 1
@@ -67,7 +71,7 @@ expect_clean() {
 # Compiles, but the first line of stderr must be this warning.
 expect_warning() {
     cat > $tmp/t.c
-    if ! $mucc -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
+    if ! $mucc $target -c -o $tmp/t.o $tmp/t.c 2> $tmp/err; then
         echo "testing warning '$1' ... failed (did not compile)"
         cat $tmp/err
         exit 1
@@ -402,12 +406,33 @@ expect_error "1:2: error: #error" <<'EOF'
 #error
 EOF
 
+# A directive in a macro's argument, as gcc allows, may end with it.
+expect_ok 'a #define ending a macro argument' <<'EOF'
+#define F(x) x
+int a = F(1
+#define Y 2);
+int b = Y;
+EOF
+
+# A file that includes itself forever
+expect_error "1:10: error: #include nested depth 200 exceeds maximum of 200" <<'EOF'
+#include __FILE__
+EOF
+
+# Pasting / and / makes a comment, which is no token.
+expect_error "2:13: error: pasting forms '//', an invalid token" <<'EOF'
+#define C(a, b) a ## b
+int x = 1 C(/, /) 2;
+EOF
+
 expect_error "1:17: error: unsupported non-standard concatenation of string literals" <<'EOF'
 char *s = u8"a" u"b";
 EOF
 
 # "a" is re-read as a wide string to join it with L"b"; it must keep its line.
-expect_error "3:11: error: cannot convert 'int *' to 'char *' in initialization (use a cast if this is intended)" <<'EOF'
+# (wchar_t is int, but unsigned int on ARM64.)
+[ "$(uname -m)" = aarch64 ] && wchar='unsigned int' || wchar=int
+expect_error "3:11: error: cannot convert '$wchar *' to 'char *' in initialization (use a cast if this is intended)" <<'EOF'
 int x;
 int y;
 char *p = "a" L"b";
@@ -510,6 +535,32 @@ EOF
 
 expect_error "1:8: error: size of array is too large" <<'EOF'
 char a[1L << 62][4];
+EOF
+
+# A global's size can't be computed at run time.
+expect_error "1:16: error: variably modified 'a' at file scope or with static storage" <<'EOF'
+int n = 3; int a[n];
+EOF
+
+expect_error "1:30: error: variably modified 'p' at file scope or with static storage" <<'EOF'
+void f(int n) { static int (*p)[n]; }
+EOF
+
+# Division by zero in a constant is an error; where a constant isn't
+# needed, it's code that may never run. INT64_MIN / -1 wraps.
+expect_errors "1:19: error: division by zero in a constant" <<'EOF'
+static long g = 1 % 0;
+EOF
+
+expect_errors "1:7: error: division by zero in a constant" <<'EOF'
+#if 1 / 0
+#endif
+EOF
+
+expect_ok 'division by zero that may not run, and INT64_MIN / -1' <<'EOF'
+int f(int x) { while (1 / 0) x++; return x; }
+_Static_assert((-9223372036854775807L - 1) / -1 == -9223372036854775807L - 1, "");
+_Static_assert((-9223372036854775807L - 1) % -1 == 0, "");
 EOF
 
 # Objects over 2 GiB are fine, but a stack frame's offsets are 32 bits.
@@ -1171,7 +1222,8 @@ expect_error "1:37: error: switch on '_Complex double', which is not an integer"
 void f(_Complex double z) { switch (z) {} }
 EOF
 
-# asm statements with operands
+# asm statements with operands: x86-64's, on any CPU, then ARM64's
+target=--target=x86_64-linux
 expect_error "1:29: error: labels in an asm statement need 'asm goto'" <<'EOF'
 void f(void) { asm("" : : : : out); out:; }
 EOF
@@ -1265,6 +1317,40 @@ expect_error "1:22: error: an asm label is only supported on a register variable
 void f(void) { int x asm("rax"); }
 EOF
 
+target=--target=aarch64-linux
+expect_error "1:37: error: an asm statement can't clobber sp" <<'EOF'
+void f(int x) { asm("" : : "r"(x) : "sp"); }
+EOF
+
+expect_error "1:37: error: an asm statement can't clobber x29" <<'EOF'
+void f(int x) { asm("" : : "r"(x) : "x29"); }
+EOF
+
+expect_error "1:84: error: register x8 is used twice in this asm statement" <<'EOF'
+void f(int x) { register long a asm("x8") = 1, b asm("x8") = 2; asm("" : : "r"(a), "r"(b)); }
+EOF
+
+expect_error "1:37: error: unknown register name 'rax' in asm" <<'EOF'
+void f(int x) { asm("" : : "r"(x) : "rax"); }
+EOF
+
+expect_error "1:26: error: asm constraint 'a' is not supported" <<'EOF'
+void f(int x) { asm("" : "=a"(x)); }
+EOF
+
+expect_ok 'ARM64 constraints, clobbers and register variables' <<'EOF'
+long f(long x, double d) {
+  register long x8 asm("x8") = x;
+  asm("" : "+r"(x8), "+w"(d) : "Q"(x), "i"(1) : "x0", "w1", "v2", "d3", "q4", "lr", "memory", "cc");
+  return x8;
+}
+EOF
+
+expect_error "1:32: error: invalid register name 'x29'" <<'EOF'
+void f(void) { register long x asm("x29"); }
+EOF
+target=
+
 expect_error "1:29: error: attribute 'common' is not supported on a function" <<'EOF'
 void f(void) __attribute__((common));
 EOF
@@ -1306,8 +1392,9 @@ expect_error "1:31: error: invalid register name 'foo'" <<'EOF'
 void f(void) { register int x asm("foo"); }
 EOF
 
-expect_error "1:34: error: only an integer or a pointer can be a register variable" <<'EOF'
-void f(void) { register double x asm("rax"); }
+[ "$(uname -m)" = aarch64 ] && reg=x9 || reg=rax
+expect_error "1:34: error: only an integer or a pointer can be a register variable" <<EOF
+void f(void) { register double x asm("$reg"); }
 EOF
 
 expect_warning "1:3: warning: unknown attribute 'bogus' ignored [-Wattributes]" <<'EOF'

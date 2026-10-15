@@ -15,7 +15,7 @@ int twice(x) { return x * 2; }
 
 // Passed as int and double, seen as their declared types
 int narrow(c, s, f, u)
-char c;
+signed char c;
 short s;
 float f;
 unsigned char u;

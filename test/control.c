@@ -139,7 +139,7 @@ int main() {
   ASSERT(1, ({ unsigned long x=-1; int i=0; switch(x) { case 0xffffffffffffffff: i=1; break; } i; }));
   ASSERT(1, ({ unsigned long x=-1; int i=0; switch(x) { case 1 ... 0xffffffffffffffff: i=1; break; } i; }));
   ASSERT(1, ({ unsigned x=-1; int i=0; switch(x) { case 1 ... 0xffffffff: i=1; break; } i; }));
-  ASSERT(1, ({ char x=-1; int i=0; switch(x) { case -1: i=1; break; } i; }));
+  ASSERT(1, ({ signed char x=-1; int i=0; switch(x) { case -1: i=1; break; } i; }));
 
   ASSERT(3, ({ void *p = &&v11; int i=0; goto *p; v11:i++; v12:i++; v13:i++; i; }));
   ASSERT(2, ({ void *p = &&v22; int i=0; goto *p; v21:i++; v22:i++; v23:i++; i; }));

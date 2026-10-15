@@ -230,6 +230,7 @@ static void initializer2(Token **rest, Token *tok, Initializer *init);
 static Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
 static Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
 static void gvar_initializer(Token **rest, Token *tok, Obj *var);
+static bool is_frame_reg(int r);
 static Node *compound_stmt(Token **rest, Token *tok, bool is_stmt_expr);
 static Node *block_item(Token **rest, Token *tok);
 static Node *label_body(Token **rest, Token *tok);
@@ -300,7 +301,10 @@ static void enter_scope(void) {
   scope = sc;
 }
 
+// Nothing refers to a scope once it's left, so its tables are freed.
 static void leave_scope(void) {
+  hashmap_free(&scope->vars);
+  hashmap_free(&scope->tags);
   scope = scope->next;
 }
 
@@ -1576,7 +1580,7 @@ static Token *asm_label(Token *tok, Attrs *attrs) {
 // is an ordinary variable.
 static void set_asm_register(Obj *var, Attrs *a) {
   int reg = gp_reg_number(a->asm_label);
-  if (reg < 0 || reg == 4 || reg == 5)
+  if (reg < 0 || is_frame_reg(reg))
     error_tok(a->asm_label_tok, "invalid register name '%s'", a->asm_label);
   if (!is_integer(var->ty) && var->ty->kind != TY_PTR)
     error_tok(a->asm_label_tok,
@@ -2106,7 +2110,7 @@ static void push_cleanup(Obj *var, Attrs *a) {
               fn->name);
   Node *arg = new_unary(ND_ADDR, new_var_node(var, a->cleanup_tok), a->cleanup_tok);
   add_type(arg);
-  check_assign(param, arg, format("the argument of cleanup function '%s'", fn->name));
+  check_assign(param, arg, "the argument of cleanup function '%s'", fn->name);
   if (fn->ty->return_ty->kind == TY_STRUCT || fn->ty->return_ty->kind == TY_UNION)
     error_tok(a->cleanup_tok, "a cleanup function returning a struct is not supported");
 
@@ -2127,6 +2131,14 @@ static bool is_variably_modified(Type *ty) {
     if (ty->kind == TY_VLA)
       return true;
   return false;
+}
+
+// A global or static variable can't have a size computed at run time, as
+// `int a[n];` or `int (*p)[n];` would.
+static void no_static_vla(Type *ty, Token *name) {
+  if (is_variably_modified(ty))
+    error_tok(name, "variably modified '%.*s' at file scope or with static storage",
+              name->len, name->loc);
 }
 
 // Generate code for computing a VLA size. A type whose size is already
@@ -2257,6 +2269,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
     if (attr && attr->is_static) {
       // static local variable
       no_cleanup(&all, "a static variable");
+      no_static_vla(ty, name);
       if (ty == &auto_type && equal(tok, "="))
         ty = peek_auto_type(tok->next);
       Obj *var = new_anon_gvar(ty);
@@ -3149,8 +3162,8 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int64_t
       ((double *)p)[0] = re;
       ((double *)p)[1] = im;
     } else {
-      ((long double *)p)[0] = re;
-      ((long double *)p)[1] = im;
+      write_ldouble(p, re);
+      write_ldouble(p + 16, im);
     }
     return cur;
   }
@@ -3215,7 +3228,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int64_t
   }
 
   if (ty->kind == TY_LDOUBLE) {
-    *(long double *)(buf + offset) = eval_double(init->expr);
+    write_ldouble(buf + offset, eval_double(init->expr));
     return cur;
   }
 
@@ -3307,6 +3320,10 @@ static bool is_typename(Token *tok) {
       hashmap_put(&map, kw[i], (void *)1);
   }
 
+  // Only a name or a keyword can be one.
+  if (tok->kind != TK_IDENT && tok->kind != TK_KEYWORD)
+    return false;
+
   // Before C23, `constexpr` is an ordinary name.
   if (equal(tok, "constexpr") && tok->kind != TK_KEYWORD)
     return find_typedef(tok);
@@ -3350,11 +3367,28 @@ static Token *static_assertion(Token *tok) {
 // back after the asm. No two operands share a register, which also
 // keeps early-clobber ('&') outputs apart from the inputs.
 
-#define ASM_GENERAL 0xffcf // every register but %rsp and %rbp
+//
+// Registers are numbered as the instruction set does, and a set of them
+// is a bit mask: on x86-64 %rax 0, %rcx 1, ..., %r15 15; on ARM64 x0 0 to
+// x30 30, and v0 to v31 for the FP/SIMD ones.
+
+// The general registers an operand can be in: every one but the stack
+// and frame pointers; on ARM64, x0-x15 and x19-x28, as x16-x18 are
+// mucc's scratch registers and the platform's (see cgen_arm64.c).
+static int asm_general(void) {
+  return target_arm64 ? 0x1ff8ffff : 0xffcf;
+}
+
+// %rsp and %rbp, or sp and x29, can't be operands or clobbered.
+static bool is_frame_reg(int r) {
+  return target_arm64 ? r == 29 || r == 31 : r == 4 || r == 5;
+}
 
 // The registers constraint letter `c` allows, or 0 if it isn't a
 // register constraint.
 static int asm_reg_class(char c) {
+  if (target_arm64)
+    return strchr("rgX", c) ? asm_general() : 0;
   switch (c) {
   case 'a': return 1 << 0;
   case 'b': return 1 << 3;
@@ -3364,21 +3398,52 @@ static int asm_reg_class(char c) {
   case 'D': return 1 << 7;
   case 'q': case 'Q': return 0xf;
   case 'R': return 0xcf;
-  case 'r': case 'g': case 'X': return ASM_GENERAL;
+  case 'r': case 'g': case 'X': return asm_general();
   }
   return 0;
 }
 
+// Constraint letters of the other kinds: FP/SIMD registers, memory and
+// constants. (On ARM64, Q is memory through a register.)
+static bool is_fp_constraint(char c) {
+  return strchr(target_arm64 ? "wxy" : "xv", c);
+}
+
+static bool is_mem_constraint(char c) {
+  return strchr(target_arm64 ? "moVQ<>" : "moV<>", c);
+}
+
+static bool is_imm_constraint(char c) {
+  return strchr("insIJKLMNOeZ", c);
+}
+
 // The order registers are handed out in: the caller-saved ones first,
 // since the callee-saved ones have to be saved in the prologue.
-static int asm_reg_order[] = {0, 1, 2, 6, 7, 8, 9, 10, 11, 3, 12, 13, 14, 15};
+static int x86_asm_reg_order[] = {0, 1, 2, 6, 7, 8, 9, 10, 11, 3, 12, 13, 14, 15};
+static int arm64_asm_reg_order[] = {
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 19, 20, 21, 22, 23, 24,
+  25, 26, 27, 28,
+};
 
 static int asm_pick_reg(int allowed, int used) {
-  for (int i = 0; i < sizeof(asm_reg_order) / sizeof(*asm_reg_order); i++) {
-    int r = asm_reg_order[i];
+  int *order = target_arm64 ? arm64_asm_reg_order : x86_asm_reg_order;
+  int n = target_arm64 ? sizeof(arm64_asm_reg_order) / sizeof(int)
+                       : sizeof(x86_asm_reg_order) / sizeof(int);
+  for (int i = 0; i < n; i++) {
+    int r = order[i];
     if ((allowed & (1 << r)) && !(used & (1 << r)))
       return r;
   }
+  return -1;
+}
+
+// An FP/SIMD register for an operand: %xmm0 up, or on ARM64 v0-v7 and
+// v16-v30, the ones calls don't keep (mucc doesn't save v8-v15 for
+// them). Returns -1 if there's none free.
+static int asm_pick_fp_reg(int used) {
+  for (int r = 0; r < (target_arm64 ? 31 : 16); r++)
+    if (!(used & (1 << r)) && !(target_arm64 && r >= 8 && r < 16))
+      return r;
   return -1;
 }
 
@@ -3489,15 +3554,15 @@ static int asm_constraint(AsmOperand *op, int noutputs, int *match) {
       regs |= asm_reg_class(*s);
       continue;
     }
-    if (*s == 'x' || *s == 'v') {
+    if (is_fp_constraint(*s)) {
       sse = true;
       continue;
     }
-    if (strchr("moV<>", *s)) {
+    if (is_mem_constraint(*s)) {
       mem = true;
       continue;
     }
-    if (strchr("insIJKLMNOeZ", *s)) {
+    if (is_imm_constraint(*s)) {
       imm = true;
       continue;
     }
@@ -3519,9 +3584,10 @@ static int asm_constraint(AsmOperand *op, int noutputs, int *match) {
 }
 
 // clobbers = (string-literal ("," string-literal)*)?
-// Returns the general registers named, and in `*xmm` the SSE ones. mucc
-// keeps nothing in memory caches, flags or other registers from one
-// statement to the next, so "memory", "cc" and the rest need nothing.
+// Returns the general registers named, and in `*xmm` the SSE ones (on
+// ARM64, the FP/SIMD ones: v0, or q0, d0, s0 ...). mucc keeps nothing in
+// memory caches, flags or other registers from one statement to the next,
+// so "memory", "cc" and the rest need nothing.
 static int asm_clobbers(Token **rest, Token *tok, int *xmm) {
   int regs = 0;
   for (bool first = true; !equal(tok, ":") && !equal(tok, ")"); first = false) {
@@ -3531,12 +3597,15 @@ static int asm_clobbers(Token **rest, Token *tok, int *xmm) {
       error_tok(tok, "expected a string literal");
     char *name = tok->str + (tok->str[0] == '%');
     int r = gp_reg_number(name);
-    if (r == 4 || r == 5)
+    if (r >= 0 && is_frame_reg(r))
       error_tok(tok, "an asm statement can't clobber %s", name);
     if (r >= 0)
       regs |= 1 << r;
     else if (!strncmp(name, "xmm", 3) && isdigit(name[3]) && atoi(name + 3) < 16)
       *xmm |= 1 << atoi(name + 3);
+    else if (target_arm64 && strchr("vqdshb", name[0]) && isdigit(name[1]) &&
+             atoi(name + 1) < 32)
+      *xmm |= atoi(name + 1) < 31 ? 1 << atoi(name + 1) : 0;
     else if (strcmp(name, "memory") && strcmp(name, "cc") &&
              strcmp(name, "dirflag") && strcmp(name, "fpsr") &&
              strcmp(name, "flags") && strncmp(name, "xmm", 3) &&
@@ -3626,7 +3695,7 @@ static Node *asm_stmt(Token **rest, Token *tok) {
       op->kind = ops[match[i]].kind;
 
     // `register long x asm("r10")` as a register operand goes in r10.
-    if (allowed[i] == ASM_GENERAL && e->kind == ND_VAR && e->var->asm_reg)
+    if (allowed[i] == asm_general() && e->kind == ND_VAR && e->var->asm_reg)
       allowed[i] = 1 << (e->var->asm_reg - 1);
 
     Type *ty = e->ty;
@@ -3640,6 +3709,7 @@ static Node *asm_stmt(Token **rest, Token *tok) {
       error_tok(op->tok, "an operand of type '%s' can't go in a general register",
                 type_name(ty));
     if (op->kind == 'x' && ty->kind != TY_FLOAT && ty->kind != TY_DOUBLE && !is_vector(ty) &&
+        !(target_arm64 && ty->kind == TY_LDOUBLE) &&
         !((is_integer(ty) || ty->kind == TY_PTR) && (ty->size == 4 || ty->size == 8)))
       error_tok(op->tok, "an operand of type '%s' can't go in an SSE register",
                 type_name(ty));
@@ -3686,7 +3756,7 @@ static Node *asm_stmt(Token **rest, Token *tok) {
                  (ops[i].kind == 'm' && ops[i].addr);
     if (!needs)
       continue;
-    int r = asm_pick_reg(ops[i].kind == 'm' ? ASM_GENERAL : allowed[i], used);
+    int r = asm_pick_reg(ops[i].kind == 'm' ? asm_general() : allowed[i], used);
     if (r < 0)
       error_tok(ops[i].tok, "not enough registers for this asm statement's operands");
     ops[i].reg = r;
@@ -3696,10 +3766,8 @@ static Node *asm_stmt(Token **rest, Token *tok) {
   for (int i = 0; i < n; i++) {
     if (ops[i].kind != 'x' || match[i] >= 0)
       continue;
-    int r = 0;
-    while (r < 16 && (xmm_used & (1 << r)))
-      r++;
-    if (r == 16)
+    int r = asm_pick_fp_reg(xmm_used);
+    if (r < 0)
       error_tok(ops[i].tok, "not enough SSE registers for this asm statement's operands");
     ops[i].reg = r;
     xmm_used |= 1 << r;
@@ -3714,7 +3782,7 @@ static Node *asm_stmt(Token **rest, Token *tok) {
   for (int i = 0; i < noutputs; i++)
     if (ops[i].kind == 'r')
       outputs |= 1 << ops[i].reg;
-  node->asm_scratch = asm_pick_reg(ASM_GENERAL, outputs);
+  node->asm_scratch = asm_pick_reg(asm_general(), outputs);
   current_fn->asm_regs |= used | (1 << node->asm_scratch);
 
   node->asm_ops = calloc(n, sizeof(AsmOperand));
@@ -4476,13 +4544,13 @@ static int64_t eval_wide(Node *node, char ***label) {
 
   switch (node->kind) {
   case ND_ADD:
-    return eval2(node->lhs, label) + eval(node->rhs);
+    return (uint64_t)eval2(node->lhs, label) + eval(node->rhs);
   case ND_SUB: {
     // p - q is a number if both point into the same object, or neither
     // does (as in `(char *)&((T *)0)->m - (char *)0`, an offsetof), also
     // as integers: `(long)&a[1] - (long)&a[0]`.
     char **l1 = NULL, **l2 = NULL;
-    int64_t val = eval2(node->lhs, &l1) - eval2(node->rhs, &l2);
+    int64_t val = (uint64_t)eval2(node->lhs, &l1) - eval2(node->rhs, &l2);
     if (l2) {
       if (l1 != l2)
         error_tok(node->tok, "not a compile-time constant");
@@ -4496,17 +4564,21 @@ static int64_t eval_wide(Node *node, char ***label) {
     return val;
   }
   case ND_MUL:
-    return eval(node->lhs) * eval(node->rhs);
+    return (uint64_t)eval(node->lhs) * eval(node->rhs);
   case ND_DIV:
+  case ND_MOD: {
+    int64_t a = eval(node->lhs), b = eval(node->rhs);
+    if (b == 0)
+      error_tok(node->tok, "division by zero in a constant");
     if (node->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) / eval(node->rhs);
-    return eval(node->lhs) / eval(node->rhs);
+      return node->kind == ND_DIV ? (uint64_t)a / b : (uint64_t)a % b;
+    // INT64_MIN / -1 overflows, which traps on x86-64.
+    if (b == -1)
+      return node->kind == ND_DIV ? -(uint64_t)a : 0;
+    return node->kind == ND_DIV ? a / b : a % b;
+  }
   case ND_NEG:
-    return -eval(node->lhs);
-  case ND_MOD:
-    if (node->ty->is_unsigned)
-      return (uint64_t)eval(node->lhs) % eval(node->rhs);
-    return eval(node->lhs) % eval(node->rhs);
+    return -(uint64_t)eval(node->lhs);
   case ND_BITAND:
     return eval(node->lhs) & eval(node->rhs);
   case ND_BITOR:
@@ -4514,7 +4586,7 @@ static int64_t eval_wide(Node *node, char ***label) {
   case ND_BITXOR:
     return eval(node->lhs) ^ eval(node->rhs);
   case ND_SHL:
-    return eval(node->lhs) << eval(node->rhs);
+    return (uint64_t)eval(node->lhs) << eval(node->rhs);
   case ND_SHR:
     if (node->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) >> eval(node->rhs);
@@ -4716,10 +4788,14 @@ static bool is_const_expr(Node *node) {
     return is_const_lvalue(node->lhs);
   case ND_MEMBER: // an array member, which is its address
     return node->ty->kind == TY_ARRAY && is_const_lvalue(node);
+  case ND_DIV:
+  case ND_MOD:
+    // A division by zero is code that may never run, not a constant.
+    return is_const_expr(node->lhs) && is_const_expr(node->rhs) &&
+           (!is_integer(node->ty) || eval(node->rhs));
   case ND_ADD:
   case ND_SUB:
   case ND_MUL:
-  case ND_DIV:
   case ND_BITAND:
   case ND_BITOR:
   case ND_BITXOR:
@@ -5890,9 +5966,11 @@ static Type *struct_decl(Token **rest, Token *tok) {
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (mem->is_bitfield && mem->bit_width == 0) {
       // A zero-width bit-field starts the next member at a unit of its
-      // type, even under #pragma pack. It leaves the struct's alignment
-      // alone, as with gcc.
+      // type, even under #pragma pack. As with gcc, it leaves the struct's
+      // alignment alone, but on ARM64, where the AAPCS64 counts it.
       bits = align_to(bits, mem->ty->size * 8);
+      if (target_arm64)
+        ty->align = MAX(ty->align, member_align(ty, mem));
       continue;
     }
 
@@ -5935,10 +6013,14 @@ static Type *union_decl(Token **rest, Token *tok) {
   // If union, we don't have to assign offsets because they
   // are already initialized to zero. We need to compute the
   // alignment and the size though. A bit-field takes the bytes its
-  // width needs, and a zero-width one nothing.
+  // width needs, and a zero-width one nothing (but its alignment on
+  // ARM64, as in a struct).
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    if (mem->is_bitfield && mem->bit_width == 0)
+    if (mem->is_bitfield && mem->bit_width == 0) {
+      if (target_arm64)
+        ty->align = MAX(ty->align, member_align(ty, mem));
       continue;
+    }
     mem->unit = mem->ty->size;
     ty->align = MAX(ty->align, member_align(ty, mem));
     int64_t size = mem->is_bitfield ? (mem->bit_width + 7) / 8 : mem->ty->size;
@@ -6198,7 +6280,7 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
     }
 
     if (param_ty) {
-      check_assign(param_ty, arg, format("argument %d of '%s'", nargs, name));
+      check_assign(param_ty, arg, "argument %d of '%s'", nargs, name);
       if ((param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION) ||
           is_complex(param_ty))
         arg = new_cast(arg, param_ty);
@@ -6403,6 +6485,13 @@ static Node *vector_builtin(Token **rest, Token *tok) {
 // (__va_area__, see function()), and va_arg is ND_VA_ARG, which cgen.c
 // turns into code that finds the next argument as the calling convention
 // passed it.
+//
+// A va_list is an array of one struct on x86-64, so `ap` is a pointer to
+// the struct; on ARM64 it is the struct, and `&ap` is.
+static Node *va_list_struct(Node *ap) {
+  return target_arm64 ? ap : new_unary(ND_DEREF, ap, ap->tok);
+}
+
 static Node *va_builtin(Token **rest, Token *tok) {
   Token *start = tok;
   tok = skip(tok->next, "(");
@@ -6415,10 +6504,12 @@ static Node *va_builtin(Token **rest, Token *tok) {
     *rest = skip(tok, ")");
     if (ty->kind == TY_VOID || ty->kind == TY_VLA || ty->kind == TY_FUNC)
       error_tok(start, "va_arg of this type is not supported");
-    Node *node = new_unary(ND_VA_ARG, ap, start);
+    Node *node = new_unary(ND_VA_ARG, target_arm64 ? new_unary(ND_ADDR, ap, start) : ap,
+                           start);
     node->ty = pointer_to(ty);
-    // Where a struct passed in two registers is put back together
-    node->var = new_lvar("", array_of(ty_long, 2));
+    // Where a struct passed in two registers is put back together (on
+    // ARM64, an HFA of up to 4 long doubles)
+    node->var = new_lvar("", array_of(ty_long, target_arm64 ? 8 : 2));
     return new_unary(ND_DEREF, node, start);
   }
 
@@ -6433,8 +6524,8 @@ static Node *va_builtin(Token **rest, Token *tok) {
   if (equal(start, "__builtin_va_copy")) {
     if (!arg2)
       error_tok(start, "va_copy needs two arguments");
-    return new_binary(ND_ASSIGN, new_unary(ND_DEREF, ap, start),
-                      new_unary(ND_DEREF, arg2, start), start);
+    add_type(arg2);
+    return new_binary(ND_ASSIGN, va_list_struct(ap), va_list_struct(arg2), start);
   }
 
   // va_start. In C23 the second argument is optional, and it was never
@@ -6442,8 +6533,7 @@ static Node *va_builtin(Token **rest, Token *tok) {
   if (!current_fn || !current_fn->va_area)
     error_tok(start, "va_start used in a function with fixed arguments");
   Node *area = new_cast(new_var_node(current_fn->va_area, start), pointer_to(va_elem_ty));
-  return new_binary(ND_ASSIGN, new_unary(ND_DEREF, ap, start),
-                    new_unary(ND_DEREF, area, start), start);
+  return new_binary(ND_ASSIGN, va_list_struct(ap), new_unary(ND_DEREF, area, start), start);
 }
 
 //---------- GNU builtins ----------------------------------------------------
@@ -6918,8 +7008,10 @@ static Node *sign_word(Obj *var, uint64_t *mask, Token *tok) {
     return new_unary(ND_DEREF, new_cast(addr, pointer_to(ty_ulong)), tok);
   }
   // x87's 80 bits: the sign is the top bit of the 16-bit word at byte 8.
+  // In ARM64's 128 bits, it's the top bit of the last.
   *mask = 0x8000;
-  Node *word = new_add(new_cast(addr, pointer_to(ty_ushort)), new_num(4, tok), tok);
+  Node *word = new_add(new_cast(addr, pointer_to(ty_ushort)),
+                       new_num(target_arm64 ? 7 : 4, tok), tok);
   return new_unary(ND_DEREF, word, tok);
 }
 
@@ -7336,8 +7428,19 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
   }
 
   // x86 loads are atomic, and xchg is a sequentially consistent store.
-  if (equal(start, "__atomic_load_n"))
-    return new_unary(ND_DEREF, args[0], start);
+  // An ARM64 load is ordered by a full barrier on each side.
+  if (equal(start, "__atomic_load_n")) {
+    Node *load = new_unary(ND_DEREF, args[0], start);
+    if (!target_arm64)
+      return load;
+    add_type(load);
+    Obj *var = new_lvar("", load->ty);
+    Node *set = new_binary(ND_ASSIGN, new_var_node(var, start), load, start);
+    return new_comma(new_node(ND_FENCE, start),
+                     new_comma(set, new_comma(new_node(ND_FENCE, start),
+                                              new_var_node(var, start), start), start),
+                     start);
+  }
   if (equal(start, "__atomic_exchange_n") ||
       equal(start, "__sync_lock_test_and_set") ||
       equal(start, "__atomic_store_n")) {
@@ -7347,10 +7450,13 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
       return new_cast(exch, ty_void);
     return exch;
   }
-  if (equal(start, "__sync_lock_release"))
-    return new_cast(new_binary(ND_ASSIGN, new_unary(ND_DEREF, args[0], start),
-                               new_num(0, start), start),
-                    ty_void);
+  // A release store: on ARM64, the barrier keeps earlier accesses before it.
+  if (equal(start, "__sync_lock_release")) {
+    Node *store = new_cast(new_binary(ND_ASSIGN, new_unary(ND_DEREF, args[0], start),
+                                      new_num(0, start), start),
+                           ty_void);
+    return target_arm64 ? new_comma(new_node(ND_FENCE, start), store, start) : store;
+  }
 
   // On a byte, which becomes 1 or 0
   if (equal(start, "__atomic_test_and_set") || equal(start, "__atomic_clear")) {
@@ -7363,10 +7469,11 @@ static Node *gnu_builtin(Token **rest, Token *tok) {
   // Only a sequentially consistent fence needs an instruction on x86;
   // the others just keep the compiler from moving memory accesses,
   // which mucc doesn't do. The order is __ATOMIC_SEQ_CST (5) or another.
+  // On ARM64, every fence but a relaxed one (0) needs a barrier.
   if (equal(start, "__sync_synchronize"))
     return new_node(ND_FENCE, start);
   if (equal(start, "__atomic_thread_fence")) {
-    if (is_const_expr(args[0]) && eval(args[0]) != 5)
+    if (is_const_expr(args[0]) && eval(args[0]) != 5 && (!target_arm64 || !eval(args[0])))
       return void_node(start);
     return new_node(ND_FENCE, start);
   }
@@ -9019,7 +9126,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   fn->params = locals;
 
   if (ty->is_variadic && !kr_decl)
-    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 200));
+    fn->va_area = new_lvar("__va_area__", array_of(ty_char, target_arm64 ? 224 : 200));
   fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
 
   // A parameter like `int m[r][c]` is a pointer to a variable-length row,
@@ -9146,6 +9253,8 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     if (ty->kind == TY_VOID && !attr->is_extern)
       error_tok(name, "storage size of '%.*s' isn't known", name->len, name->loc);
 
+    no_static_vla(ty, name);
+
     Obj *var = new_gvar(get_ident(name), ty);
     var->tok = name;
     var->is_definition = !attr->is_extern;
@@ -9259,14 +9368,18 @@ static void declare_builtin_functions(void) {
   builtin_alloca->is_definition = false;
 
   // __builtin_va_list, which <stdarg.h> calls va_list: one 24-byte
-  // element, as the psABI lays it out. Only the code for va_arg reads the
-  // fields; they're declared for -g, as gcc names them.
-  Token *tok = tokenize(new_file("<built-in>", 0,
-                                 "struct __va_list_tag { unsigned gp_offset, fp_offset;"
-                                 " void *overflow_arg_area, *reg_save_area; }"));
+  // element, as the psABI lays it out, or on ARM64 a 32-byte struct, as
+  // the AAPCS64 does. Only the code for va_arg reads the fields; they're
+  // declared for -g, as gcc names them.
+  char *va_list_def = target_arm64
+    ? "struct __va_list { void *__stack, *__gr_top, *__vr_top; int __gr_offs, __vr_offs; }"
+    : "struct __va_list_tag { unsigned gp_offset, fp_offset;"
+      " void *overflow_arg_area, *reg_save_area; }";
+  Token *tok = tokenize(new_file("<built-in>", 0, va_list_def));
   convert_pp_tokens(tok);
   va_elem_ty = declspec(&tok, tok, NULL);
-  push_scope("__builtin_va_list")->type_def = array_of(va_elem_ty, 1);
+  push_scope("__builtin_va_list")->type_def =
+    target_arm64 ? va_elem_ty : array_of(va_elem_ty, 1);
 
   // gcc's names for the 128-bit integers
   push_scope("__int128_t")->type_def = ty_int128;
