@@ -187,12 +187,21 @@ $mucc -g -o $tmp/s $tmp/s.c &&
         -ex 'print j' -ex 'print k' -ex 'print i' -ex 'delete 1' -ex continue \
         -ex 'info locals' -ex 'ptype b' -ex continue -ex 'print ap' -ex 'ptype ap' $tmp/s 2>&1 |
     grep -E '^([a-z]+ = |\$|type =|    |\})' | sed -E 's/0x[0-9a-f]{4,}/ADDR/g' > $tmp/got
+# (va_list is the psABI's on x86-64, the AAPCS64's on ARM64.)
 printf '%s\n' '$1 = 1' '$2 = 0' '$3 = 0' \
     'a = {0, 10, 20}' 'b = {{0, 1, 2, 3}, {1, 2, 3, 4}, {2, 3, 4, 5}}' 'r = 13' \
-    'type = int [3][4]' \
+    'type = int [3][4]' > $tmp/want
+if [ "$(uname -m)" = aarch64 ]; then
+  printf '%s\n' \
+    '$4 = {__stack = ADDR, __gr_top = ADDR, __vr_top = ADDR, __gr_offs = -32, __vr_offs = -128}' \
+    'type = struct __va_list {' '    void *__stack;' '    void *__gr_top;' '    void *__vr_top;' \
+    '    int __gr_offs;' '    int __vr_offs;' '}' >> $tmp/want
+else
+  printf '%s\n' \
     '$4 = {{gp_offset = 32, fp_offset = 48, overflow_arg_area = ADDR, reg_save_area = ADDR}}' \
     'type = struct __va_list_tag {' '    unsigned int gp_offset;' '    unsigned int fp_offset;' \
-    '    void *overflow_arg_area;' '    void *reg_save_area;' '} [1]' > $tmp/want
+    '    void *overflow_arg_area;' '    void *reg_save_area;' '} [1]' >> $tmp/want
+fi
 if diff $tmp/want $tmp/got > $tmp/diff; then
     echo "testing debug VLAs, va_list and block scopes ... passed"
 else

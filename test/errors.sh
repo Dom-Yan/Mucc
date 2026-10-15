@@ -1223,7 +1223,7 @@ void f(_Complex double z) { switch (z) {} }
 EOF
 
 # asm statements with operands: x86-64's, on any CPU, then ARM64's
-target=--target=x86_64-linux
+target="--libc=system --target=x86_64-linux"
 expect_error "1:29: error: labels in an asm statement need 'asm goto'" <<'EOF'
 void f(void) { asm("" : : : : out); out:; }
 EOF
@@ -1317,7 +1317,7 @@ expect_error "1:22: error: an asm label is only supported on a register variable
 void f(void) { int x asm("rax"); }
 EOF
 
-target=--target=aarch64-linux
+target="--libc=system --target=aarch64-linux"
 expect_error "1:37: error: an asm statement can't clobber sp" <<'EOF'
 void f(int x) { asm("" : : "r"(x) : "sp"); }
 EOF

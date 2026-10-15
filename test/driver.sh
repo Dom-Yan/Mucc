@@ -685,15 +685,16 @@ check -dumpmachine
 check '--target='
 
 # An object for each: its e_machine is 62 for x86-64, 183 for ARM64.
+# (With --libc=system: --libc=mucc wants the other CPU's musl built.)
 for t in x86_64 aarch64; do
-  $mucc --target=$t-linux -c -o $tmp/target-$t.o $tmp/empty.c &&
+  $mucc --libc=system --target=$t-linux -c -o $tmp/target-$t.o $tmp/empty.c &&
     od -An -tu2 -j18 -N2 $tmp/target-$t.o | tr -d ' ' > $tmp/target-$t.m
 done
 [ "$(cat $tmp/target-x86_64.m)" = 62 ] && [ "$(cat $tmp/target-aarch64.m)" = 183 ]
 check '--target= objects'
 
 # ARM64's own macros, and its char and wchar_t, which are unsigned
-$mucc --target=aarch64-linux -E -dM -xc /dev/null > $tmp/arm64.dm &&
+$mucc --libc=system --target=aarch64-linux -E -dM -xc /dev/null > $tmp/arm64.dm &&
   grep -q '^#define __aarch64__ 1$' $tmp/arm64.dm &&
   grep -q '^#define __CHAR_UNSIGNED__ 1$' $tmp/arm64.dm &&
   grep -q '^#define __WCHAR_TYPE__ unsigned int$' $tmp/arm64.dm &&
@@ -788,9 +789,9 @@ check '-march= -mtune='
 # x86-64's SSE and SSE2 are on; -msse4.1 and the like define the macros of
 # their extensions and those before; AVX's are accepted and define nothing
 printf '#if !defined __SSE__ || !defined __SSE2__ || !defined __MMX__ || defined __SSE3__\n#error\n#endif\n' > $tmp/isa.c
-$mucc --target=x86_64-linux -fsyntax-only $tmp/isa.c
+$mucc --libc=system --target=x86_64-linux -fsyntax-only $tmp/isa.c
 check 'SSE2 macros'
-$mucc --target=x86_64-linux -E -dM -msse4.1 -maes -mavx2 -mfma -x c /dev/null > $tmp/isa.out &&
+$mucc --libc=system --target=x86_64-linux -E -dM -msse4.1 -maes -mavx2 -mfma -x c /dev/null > $tmp/isa.out &&
   grep -q __SSE4_1__ $tmp/isa.out && grep -q __SSSE3__ $tmp/isa.out &&
   grep -q __AES__ $tmp/isa.out && ! grep -q __SSE4_2__ $tmp/isa.out &&
   ! grep -q __AVX $tmp/isa.out

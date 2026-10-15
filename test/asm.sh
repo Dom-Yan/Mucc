@@ -144,6 +144,6 @@ for t in x86_64 aarch64; do
         echo "testing asm for $t ... skipped (no GNU as for it)"
         continue
     fi
-    mc="$mucc --target=$t-linux"
+    mc="$mucc --libc=system --target=$t-linux"
     ${t}_tests
 done
