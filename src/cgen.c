@@ -234,6 +234,7 @@ static void addr_of_local(Obj *var, char *reg) {
 
 // Compute the absolute address of a given node.
 // It's an error if a given node does not reside in memory.
+//TODO catching fsyntax error. 
 static void gen_addr(Node *node) {
   switch (node->kind) {
   case ND_VAR:
