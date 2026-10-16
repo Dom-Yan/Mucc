@@ -30,8 +30,7 @@
 // constant evaluation and struct and union declarations among them,
 // then warnings, and last the top level (functions, global variables,
 // parse()).
-#include <stdio.h> 
-#include <string.h> 
+
 #include "mucc.h"
 
 //---------- Parser state ----------------------------------------------------
@@ -4960,9 +4959,6 @@ static bool has_const_member(Type *ty) {
 // be assigned, incremented or have their address taken: `(a, b)`,
 // `c ? s : t`, `s = t` and `f()`, and their members. (gcc takes a
 // statement expression's value, `({ s; })`, as one.)
-
-//TODO need to change where it accepts more than just fsyntax only.
-//Thinking maybe if i create an allow list? and then check every character of said list. 
 static bool is_rvalue(Node *node) {
   switch (node->kind) {
   case ND_COMMA: // a compound literal is one too, made at its `(`
@@ -4976,8 +4972,6 @@ static bool is_rvalue(Node *node) {
   }
   return false;
 }
-
-// static void is_lvalue(Node *node){}
 
 static void check_lvalue(Node *node) {
   if (is_rvalue(node))
