@@ -13,8 +13,9 @@
 //   5 asm.c         assembly text -> ELF object file
 //   6 link.c        object files and archives -> static executable
 //
-// main.c is the driver that runs them; ar.c is `mucc -ar`; strings.c,
-// hashmap.c and unicode.c are support code. The target is x86-64 or ARM64
+// main.c is the driver that runs them; ar.c is `mucc -ar`; diag.c
+// reports errors and warnings; strings.c, hashmap.c and unicode.c are
+// support code. The target is x86-64 or ARM64
 // (target_arm64), the CPU mucc runs on unless --target= says otherwise;
 // runtime/arm64.c is the library ARM64 code needs (see cgen_arm64.c).
 //
@@ -39,7 +40,8 @@
 //                           "Primary expressions", primary()
 //   an __attribute__        parser.c "GNU attributes", apply_attribute()
 //                           and is_known_attribute()
-//   a warning               parser.c "Warnings"
+//   a warning               parser.c "Warnings"; a named one (-W<name>)
+//                           also in diag.c named_warnings[]
 //   a new AST node kind     NodeKind below, type.c add_type(), and cgen.c
 //                           and cgen_arm64.c gen_expr() or gen_stmt()
 //   an x86 instruction      asm.c "Instructions", insns[]
@@ -114,7 +116,7 @@ void strarray_push(StringArray *arr, char *s);
 char *format(char *fmt, ...) __attribute__((format(printf, 1, 2)));
 char *vformat(char *fmt, va_list ap);
 
-//---------- token.c: tokens and error reporting (stage 1) -------------------
+//---------- token.c: tokens (stage 1) ---------------------------------------
 
 // Token
 typedef enum {
@@ -166,7 +168,7 @@ struct Token {
   char *filename;   // Filename, as #line says
   int line_no;      // Line number, as #line says once has_line (see
                     // set_line() in preprocess.c)
-  uint16_t diag;    // The #pragma GCC diagnostic state here (see token.c)
+  uint16_t diag;    // The #pragma GCC diagnostic state here (see diag.c)
   uint8_t pack;     // The #pragma pack in effect here, or 0
   bool at_bol : 1;  // True if this token is at beginning of line
   bool has_space : 1; // True if this token follows a space character
@@ -174,22 +176,6 @@ struct Token {
   Hideset *hideset; // For macro expansion
   Token *origin;    // If this is expanded from a macro, the original token
 };
-
-// Where the parser resumes after an error (see token.c), how many errors
-// have been reported, and how many warnings -Werror made errors.
-extern jmp_buf *error_recovery;
-extern int error_count;
-extern int werror_count;
-
-noreturn void error(char *fmt, ...) __attribute__((format(printf, 1, 2)));
-noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 2, 3)));
-noreturn void error_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
-void warn_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
-void warn_opt(char *name, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
-extern int diag_state;
-void pragma_diagnostic(Token *tok);
-bool warning_on(char *name);
-noreturn void error_expected(Token *tok, char *what);
 
 // Returns true if the current token is `op`. The parser and preprocessor
 // call this for nearly every token and nearly every call fails, usually
@@ -201,6 +187,7 @@ static inline bool equal(Token *tok, char *op) {
          op[tok->len] == '\0';
 }
 
+noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 2, 3)));
 Token *skip(Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
 void convert_pp_tokens(Token *tok);
@@ -215,6 +202,28 @@ void free_tokens(Token *tok, Token *end);
 
 #define unreachable() \
   error("internal error at %s:%d", __FILE__, __LINE__)
+
+//---------- diag.c: errors and warnings -------------------------------------
+
+// Where the parser resumes after an error (see diag.c), how many errors
+// have been reported, and how many warnings -Werror made errors.
+extern jmp_buf *error_recovery;
+extern int error_count;
+extern int werror_count;
+
+noreturn void error(char *fmt, ...) __attribute__((format(printf, 1, 2)));
+noreturn void error_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void warn_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void warn_opt(char *name, Token *tok, char *fmt, ...) __attribute__((format(printf, 3, 4)));
+extern int diag_state;
+void pragma_diagnostic(Token *tok);
+bool warning_on(char *name);
+noreturn void error_expected(Token *tok, char *what);
+
+// For error_at() in token.c
+noreturn void after_error(void);
+void print_diag(char *kind, char *filename, char *input, int line_no,
+                char *loc, char *msg);
 
 //---------- preprocess.c: preprocessor (stage 2) ----------------------------
 

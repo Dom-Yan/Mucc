@@ -330,7 +330,7 @@ static Type *find_tag(Token *tok) {
 //---------- Error recovery --------------------------------------------------
 
 // On an error, error_tok() jumps back to the statement or declaration
-// being parsed (see token.c). That item is skipped and parsing goes on,
+// being parsed (see diag.c). That item is skipped and parsing goes on,
 // so one run reports every independent error. These are the globals a
 // half-parsed item can leave changed; they're saved before each item.
 typedef struct {
@@ -8276,7 +8276,7 @@ static void eval_complex(Node *node, long double *re, long double *im) {
 //---------- Warnings --------------------------------------------------------
 
 // Warnings, each with a name that -W<name> and -Wno-<name> turn on and
-// off (see warning_state() in token.c). Two are checked once a function
+// off (see warning_state() in diag.c). Two are checked once a function
 // is parsed: unused local variables, and non-void functions that can end
 // without a return. The others are checked where the parser meets the
 // code: here are the functions it calls. None is given in system
