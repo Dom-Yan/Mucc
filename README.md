@@ -1,66 +1,118 @@
 # Mucc
 
 [![CI](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml/badge.svg)](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Dom-Yan/Mucc)](https://github.com/Dom-Yan/Mucc/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Mucc (`mucc`) is a small, fast, self-hosting C compiler for x86-64 and ARM64
-(AArch64) Linux. It is one static file with its own preprocessor,
-assembler, linker, archiver, headers and C library (musl) inside. Copy it
-onto any x86-64 or ARM64 Linux machine (a PC, a server, a Raspberry Pi) and
-it builds C programs with nothing else installed: no gcc, no binutils, no
-system headers. Each can also cross-compile for the other.
+Mucc is a small, fast, self-hosting C compiler for x86-64 and ARM64 Linux.
+It is a single static file with its own preprocessor, assembler, linker,
+archiver, headers and C library (musl) built in. Copy it onto any 64-bit
+Linux machine and it builds C programs with nothing else installed: no
+gcc, no binutils, no system headers.
 
-Website: <https://dom-yan.github.io/Mucc/>
+[Website](https://dom-yan.github.io/Mucc/) ·
+[Download](https://github.com/Dom-Yan/Mucc/releases/latest) ·
+[Changelog](https://dom-yan.github.io/Mucc/changelog.html) ·
+[Report a bug](https://github.com/Dom-Yan/Mucc/issues)
+
+## At a glance
+
+| | |
+| --- | --- |
+| **Compile speed** | 2.6x faster than `gcc -O0` and 1.5x faster than `clang -O0` ([details](#performance)) |
+| **Generated code** | Runs about 15% slower than `gcc -O0` code and about half as fast as `gcc -O2` code |
+| **Size** | One 8.7 MB static binary, with musl and Linux's headers inside |
+| **Source** | About 33,000 lines of C in 15 files, small enough to read end to end |
+| **Language** | C17 by default, C23 with `-std=c23`, plus the GNU extensions real code uses |
+| **Targets** | x86-64 and ARM64 (AArch64) Linux, natively or cross-compiling either way |
+| **Real programs** | SQLite, Lua, Redis, Tcl, jq, zlib, Git, libpng, QuickJS and TinyCC build with it and pass their own test suites; CPython passes 402 of its 408 |
+| **Self-hosting** | Each release is built by the one before it, with no gcc or binutils, and rebuilds itself byte for byte |
 
 ## Contents
 
-- [Why use it](#why-use-it)
-- [Get it](#get-it)
-- [Quick start](#quick-start)
-- [Using mucc](#using-mucc)
-  - [Compiling and linking](#compiling-and-linking)
-  - [The two C libraries](#the-two-c-libraries)
-  - [Libraries and archives](#libraries-and-archives)
-  - [Build systems: make, configure and friends](#build-systems-make-configure-and-friends)
-  - [C standards](#c-standards)
-  - [Warnings and errors](#warnings-and-errors)
-  - [Debugging](#debugging)
-  - [Assembly](#assembly)
-  - [Using it in place of gcc](#using-it-in-place-of-gcc)
-- [Options](#options)
-- [What it supports](#what-it-supports)
+- [Features](#features)
 - [Limitations](#limitations)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Make mucc your default compiler](#make-mucc-your-default-compiler)
+- [Using mucc](#using-mucc)
 - [Performance](#performance)
-- [Where it runs](#where-it-runs)
 - [Build from source](#build-from-source)
 - [How it works](#how-it-works)
 - [Testing](#testing)
-- [Statistics](#statistics)
 - [Contributing](#contributing)
 - [License](#license)
 
-## Why use it
+## Features
 
-- **Nothing to install.** One 8.5 MB file is the whole toolchain. It works
-  in an empty container, on old distributions and on machines with no
-  compiler at all.
-- **Programs that run anywhere.** By default it links programs statically
-  against its own musl, so what it builds runs on any Linux for its CPU
-  (on ARM64, with pages of 4, 16 or 64 KB alike).
-- **Fast builds.** It compiles about 2.7x faster than `gcc -O0` and 12x
-  faster than `gcc -O2`.
-- **Real C.** C17 by default, C23 with `-std=c23`, and the GNU extensions
-  real code uses. SQLite, Lua, Git, CPython, Redis, Tcl, jq, zlib and
-  others build with it and pass their own test suites.
-- **Self-hosting.** Each release is built by the release before it, with
-  gcc and binutils made to fail, and a mucc built by mucc builds a
-  byte-identical mucc.
-- **Small enough to read.** About 33,000 lines of C, in clearly marked
-  sections, that one person can understand end to end.
+- **Nothing else to install.** The compiler, assembler, linker, archiver,
+  headers and C library are one file. It works in an empty container, on
+  old distributions like CentOS 7, and on machines with no compiler at all.
+- **Programs that run anywhere.** By default it links statically against
+  its own musl, so what it builds runs on any Linux for that CPU. With
+  `--libc=system` it uses the system's glibc and shared libraries instead.
+- **Drop-in for gcc.** It takes gcc's flags (`-c`, `-o`, `-I`, `-D`, `-l`,
+  `-std=`, `-M*`, `-Wall`, ...), so Makefiles and `configure` scripts work
+  unchanged.
+- **Real C.** VLAs, `_Generic`, `_Atomic`, threads, complex numbers, bit
+  fields, `#embed`, `constexpr`, `typeof`, `__int128`, statement
+  expressions, inline and extended `asm`, gcc's builtins and attributes,
+  and SSE intrinsics up to SSE4.2.
+- **Debuggable.** `-g` writes DWARF that gdb understands, and diagnostics
+  point at the line and column like gcc's. `-Wall`, `-Werror`,
+  `-Wno-<name>` and `#pragma GCC diagnostic` work.
+- **Cross-compiles.** `--target=aarch64-linux` or `--target=x86_64-linux`
+  builds for the other CPU.
 
-Use gcc or clang instead when you need the fastest generated code, C++, or
-a target other than x86-64 or ARM64 Linux.
+## Limitations
 
-## Get it
+Use gcc or clang instead if you need any of these.
+
+- **Platforms:** only x86-64 and ARM64 Linux (on Windows, WSL 2). No
+  macOS, native Windows, or 32-bit targets.
+- **Optimization:** none beyond register allocation and constant folding.
+  Generated code is in the range of `gcc -O0`, not `-O2`. No LTO, PGO or
+  `-march` tuning.
+- **Language:** C only, no C++. No `_BitInt`, nested functions,
+  `__label__`, VLAs inside structs or integer `_Complex`. No AVX or NEON
+  intrinsics (code that checks `__AVX__` or `__ARM_NEON` takes its portable
+  path).
+- **Bundled musl:** static programs only, so no shared libraries or
+  `dlopen` (use `--libc=system`). Its `malloc` and stdio are slower than
+  glibc's, and its locale support is basic.
+- **Tooling:** no sanitizers, coverage or profiling. Shared libraries
+  (`-shared`) and Intel-syntax assembly use the system's `ld` and `as`.
+- **Diagnostics:** it rejects the common mistakes but is not a strict
+  checker; some invalid programs gcc rejects are accepted. See the
+  [open issues](https://github.com/Dom-Yan/Mucc/issues).
+
+<details>
+<summary>The full list</summary>
+
+- Cross-compiling from x86-64 to ARM64, `long double` constants are only
+  as precise as x86-64's own `long double` (64 bits of mantissa, not
+  ARM64's 113). At run time, and in a mucc that runs on ARM64, they are
+  exact.
+- Implicit function declarations are errors, as C99 and later require.
+- gcc attributes that change what a program does but that mucc doesn't
+  implement are errors rather than silently ignored: `ifunc`, `naked`,
+  `target`, `target_clones`, `symver`, `weakref`, `retain`, `copy`,
+  `noinit`, `persistent`, `scalar_storage_order` and `hardbool`. Unknown
+  attributes only warn.
+- Vectors must be 4, 8 or 16 bytes.
+- No unwind tables (`.eh_frame`): fine for C, but `.cfi_*` directives in
+  assembly are dropped.
+- Objects from gcc that call libgcc's helpers (complex multiplication,
+  128-bit division) need gcc's `libgcc.a` to link. (On ARM64, the bundled
+  musl comes with those.)
+- With the bundled musl, threads get 128 KB stacks unless a program asks
+  for more, and `iconv` differs from glibc's in small ways.
+- `-O0` to `-O3` and other flags that only tune optimization, diagnostics
+  or hardening are accepted and ignored. An unknown flag is an error.
+
+</details>
+
+## Install
 
 On any x86-64 or ARM64 Linux (Ubuntu, Debian, Fedora, Arch, Alpine,
 Raspberry Pi OS, WSL 2, ...):
@@ -72,13 +124,14 @@ chmod +x ~/.local/bin/mucc
 mucc --version
 ```
 
-That fetches `mucc-x86_64-linux` or `mucc-aarch64-linux`, as your CPU is.
-
-If `mucc` is not found, open a new terminal or add `~/.local/bin` to your
-`PATH`. To update, run the same `curl` again. To uninstall, delete the file.
-
-Each release also has a `.sha256` file to check the download with
+That downloads `mucc-x86_64-linux` or `mucc-aarch64-linux` to match your
+CPU. Each release also has a `.sha256` file to check it with
 `sha256sum -c`.
+
+- **`mucc: command not found`?** Open a new terminal, or add
+  `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc`.
+- **Update:** run the same `curl` again.
+- **Uninstall:** `rm ~/.local/bin/mucc`.
 
 ## Quick start
 
@@ -100,184 +153,126 @@ mucc -o hello hello.c
 `hello` is a static executable: copy it to any Linux machine with the same
 kind of CPU and it runs there.
 
-## Using mucc
+## Make mucc your default compiler
 
-mucc takes the same command-line flags as gcc, so most commands you would
-type for gcc work as they are.
+Pick the scope you want. Each one is undone by reversing its step.
 
-### Compiling and linking
-
-```sh
-mucc -o prog main.c util.c         # compile and link in one step
-mucc -c main.c                     # compile only: main.o
-mucc -c -o build/util.o util.c     # compile to a chosen file
-mucc -o prog main.o build/util.o   # link objects
-mucc -S main.c                     # assembly: main.s
-mucc -E main.c                     # preprocess only, to stdout
-mucc -fsyntax-only main.c          # check, write nothing
-```
-
-Common flags: `-I dir` adds an include directory, `-D NAME[=VALUE]` and
-`-U NAME` define and undefine macros, `-L dir` and `-l name` add library
-directories and libraries, `-include file` includes a file first, and
-`-x c` (or `-x assembler`) says what the next inputs are. `-` reads
-standard input. Dependency files for make work as with gcc: `-M`, `-MM`,
-`-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP`.
-
-`-O0` to `-O3` are accepted and ignored: mucc always compiles the same way
-(see [Performance](#performance)).
-
-### The two C libraries
-
-mucc can build against either of two C libraries:
-
-| | `--libc=mucc` (the default for the released binary) | `--libc=system` |
-| --- | --- | --- |
-| C library | musl, inside mucc | the system's glibc |
-| Linking | static | dynamic, as gcc does (`-static` for static) |
-| Needs on the machine | nothing | glibc's development files (`build-essential` on Ubuntu); `ld` for shared libraries |
-| Programs run on | any Linux for its CPU | machines with a compatible glibc |
-| Shared libraries, `dlopen`, `.so` files | no | yes |
-| Speed of the C library | slower `malloc` and stdio | faster |
-
-Use the default for portable tools and anything that should run without
-installing things. Use `--libc=system` for programs that need the system's
-shared libraries (OpenSSL, SDL, GTK, ...), plugins loaded with `dlopen`,
-or the fastest C library.
-
-```sh
-mucc -o tool tool.c                              # portable, static, musl
-mucc --libc=system -o app app.c -lssl -lcrypto   # with system libraries
-```
-
-`-lm`, `-lpthread`, `-ldl`, `-lrt` and the other libraries that musl puts
-inside libc all work with the default, as they do with glibc.
-
-### x86-64 and ARM64, and cross-compiling
-
-mucc builds programs for the CPU it runs on, and for the other with
-`--target=aarch64-linux` or `--target=x86_64-linux` (any GNU triple for
-either works, and so does clang's `-target`). On ARM64, as with gcc there,
-plain `char` and `wchar_t` are unsigned and `long double` is IEEE
-quadruple precision.
-
-```sh
-mucc --target=aarch64-linux -o hello-arm hello.c   # on an x86-64 machine
-```
-
-To cross-compile against the bundled musl, mucc needs musl for the other
-CPU, which the released binary doesn't carry: build it from source with
-`make libc-aarch64` (or `make libc-x86_64`), and `make install` installs it
-too. `--libc=system` uses the cross-compiling glibc and gcc that Debian
-and Ubuntu package (`sudo apt install gcc-aarch64-linux-gnu`), and their
-`as` and `ld` where the built-in ones don't do.
-
-### Libraries and archives
-
-`mucc -ar` makes static libraries, as GNU `ar` does, and `mucc -ranlib`
-rewrites an archive's index:
-
-```sh
-mucc -c a.c b.c
-mucc -ar rcs libfoo.a a.o b.o
-mucc -o prog main.c -L. -lfoo
-```
-
-Archives are deterministic: dates, owners and modes are fixed, so the same
-inputs give the same bytes. mucc also links archives and objects made by
-gcc and GNU `ar`.
-
-Shared libraries (`-shared`, `-fPIC`) need `--libc=system` and the
-system's `ld`.
-
-### Build systems: make, configure and friends
-
-Point the build at mucc as its C compiler:
+**One build.** Most build systems take the compiler as `CC`:
 
 ```sh
 make CC=mucc
 ./configure CC=mucc AR="mucc -ar" RANLIB="mucc -ranlib"
 ```
 
-Autoconf `configure` scripts, plain Makefiles and Linux-style builds work:
-SQLite, Lua, Git, CPython, Redis, Tcl, jq, zlib, libpng, BusyBox and others
-are built this way in mucc's own tests. Like clang, mucc says it is gcc 4.2
-(`__GNUC__` is 4), so headers and scripts that look for gcc take their gcc
-paths but don't expect a newer gcc's features.
-
-### C standards
-
-C17 is the default. `-std=` picks another: `c89`, `c99`, `c11`, `c17` and
-`c23` (and their `gnu` spellings). `__STDC_VERSION__` is set to match.
+**Your shell.** Add this to `~/.bashrc` (or your shell's equivalent), and
+every build that reads `$CC` uses mucc:
 
 ```sh
-mucc -std=c23 -o prog prog.c
+export CC=mucc AR="mucc -ar" RANLIB="mucc -ranlib"
 ```
 
-### Warnings and errors
-
-Errors and warnings point at the line and column, with the source line
-shown, as gcc does. Warnings work as with gcc:
-
-- `-Wall` adds `printf` and `scanf` format checks, `if (x = 0)`,
-  statements with no effect, comparisons with string literals, unused
-  variables and static functions, and enum values a `switch` misses.
-- Some warn by default: returning a local's address, division by zero,
-  bad shift counts, unknown attributes, excess initializer elements.
-- `-Werror`, `-Werror=<name>`, `-Wno-<name>` and `-w` work, and so does
-  `#pragma GCC diagnostic`.
-
-### Debugging
-
-`-g` writes DWARF debug info, so gdb shows variables, parameters, globals,
-structs, `const` and `volatile` types, and backtraces, as with
-`gcc -g -O0`:
-
-```sh
-mucc -g -o prog prog.c
-gdb ./prog
-```
-
-Line numbers are always recorded, so backtraces have them even without
-`-g`.
-
-### Assembly
-
-mucc assembles `.s` files with its own assembler, and `.S` files after
-running them through the preprocessor. Inline `asm` and extended `asm`
-(with operands, clobbers and `asm goto`) work in C.
-
-The built-in assembler knows the instructions mucc and typical
-hand-written code use, including system instructions like `cpuid`,
-`rdtsc`, `rdmsr`, `lgdt` and `iretq` on x86-64, and on ARM64 the base
-instruction set, its floating point, `mrs`, `msr`, the barriers and the
-exclusive loads and stores, and the common NEON arithmetic. It also has
-GNU as's common directives:
-`.byte` to `.quad`, `.float`, `.double`, `.ascii`, `.string`, `.skip`,
-`.fill`, `.align`, `.p2align`, `.set`, `.equ`, `.rept`, `.macro`,
-`.section`, `.pushsection`, `.comm`, `.incbin` and more. Anything it
-doesn't know, such as Intel syntax, is handed to the system `as` if there
-is one (`-fno-as-fallback` turns that off, `-fno-integrated-as` always uses
-`as`).
-
-### Using it in place of gcc
-
-To make mucc the compiler for everything that runs `cc`, link it under
-that name earlier in your `PATH`:
+**Your user, as `cc`.** Builds that run `cc` directly use whatever `cc` is
+first in your `PATH`. Put mucc there under that name (no `sudo` needed):
 
 ```sh
 ln -s ~/.local/bin/mucc ~/.local/bin/cc
+hash -r
+cc --version          # mucc 1.4.0
 ```
 
-Builds that need things mucc doesn't do (C++, sanitizers, LTO,
-`-march`-specific code; see [Limitations](#limitations)) still need gcc or
-clang.
+Undo with `rm ~/.local/bin/cc`.
 
-## Options
+**The whole system** (Debian, Ubuntu and derivatives). Install mucc where
+every user can run it and register it as an alternative for `cc`:
 
-The flags mucc acts on. Other gcc flags that only tune optimization,
-diagnostics or hardening (`-O2`, `-fstack-protector`, `-flto`, `-pipe`,
-...) are accepted and ignored. An unknown flag is an error.
+```sh
+sudo install -m 755 ~/.local/bin/mucc /usr/local/bin/mucc
+sudo update-alternatives --install /usr/bin/cc cc /usr/local/bin/mucc 100
+cc --version          # mucc 1.4.0
+```
+
+Switch back with `sudo update-alternatives --config cc`, or remove it with
+`sudo update-alternatives --remove cc /usr/local/bin/mucc`.
+
+Anything that needs what mucc doesn't do (C++, sanitizers, LTO; see
+[Limitations](#limitations)) still needs gcc or clang, so keep them
+installed alongside it.
+
+## Using mucc
+
+mucc takes gcc's command-line flags, so most commands you'd type for gcc
+work unchanged.
+
+```sh
+mucc -o prog main.c util.c         # compile and link
+mucc -c main.c                     # compile only: main.o
+mucc -o prog main.o util.o         # link objects
+mucc -S main.c                     # assembly: main.s
+mucc -E main.c                     # preprocess to stdout
+mucc -fsyntax-only main.c          # check, write nothing
+mucc -std=c23 -o prog prog.c       # C23 (c89, c99, c11, c17 and gnu* too)
+mucc -g -o prog prog.c && gdb ./prog
+```
+
+### The two C libraries
+
+| | `--libc=mucc` (the default) | `--libc=system` |
+| --- | --- | --- |
+| C library | musl, built into mucc | the system's glibc |
+| Linking | static | dynamic, as gcc does (`-static` for static) |
+| Needs on the machine | nothing | glibc's development files (`build-essential`) |
+| Programs run on | any Linux for that CPU | machines with a compatible glibc |
+| Shared libraries, `dlopen` | no | yes |
+
+Use the default for portable tools. Use `--libc=system` for programs that
+link the system's shared libraries (OpenSSL, SDL, GTK, ...), load plugins
+with `dlopen`, or need glibc's faster `malloc` and stdio:
+
+```sh
+mucc -o tool tool.c                              # portable, static, musl
+mucc --libc=system -o app app.c -lssl -lcrypto   # with system libraries
+```
+
+`-lm`, `-lpthread`, `-ldl` and `-lrt` work with either.
+
+### Cross-compiling
+
+```sh
+mucc --target=aarch64-linux -o hello-arm hello.c   # on an x86-64 machine
+```
+
+Any GNU triple for either CPU works, and so does clang's `-target`. As
+with gcc on ARM64, plain `char` is unsigned there and `long double` is
+128-bit. The released binary only carries musl for its own CPU: to
+cross-compile against musl, build from source and run `make libc-aarch64`
+(or `make libc-x86_64`). With `--libc=system`, mucc uses Debian and
+Ubuntu's cross glibc (`sudo apt install gcc-aarch64-linux-gnu`).
+
+### Static libraries
+
+```sh
+mucc -c a.c b.c
+mucc -ar rcs libfoo.a a.o b.o      # like GNU ar; mucc -ranlib too
+mucc -o prog main.c -L. -lfoo
+```
+
+Archives are deterministic, and objects and archives from gcc and mucc
+link together either way.
+
+### Assembly
+
+`.s` files go through mucc's own assembler, and `.S` files through the
+preprocessor first. It handles AT&T syntax for x86-64, ARM64's base, FP
+and common NEON instructions, and GNU as's common directives (`.macro`,
+`.rept`, `.p2align`, `.incbin`, ...). Anything it doesn't know is handed
+to the system `as` if there is one.
+
+<details>
+<summary>All the options mucc acts on</summary>
+
+Other gcc flags that only tune optimization, diagnostics or hardening
+(`-O2`, `-fstack-protector`, `-flto`, `-pipe`, ...) are accepted and
+ignored. An unknown flag is an error.
 
 | Flag | What it does |
 | --- | --- |
@@ -287,14 +282,15 @@ diagnostics or hardening (`-O2`, `-fstack-protector`, `-flto`, `-pipe`,
 | `-I`, `-isystem`, `-iquote`, `-idirafter`, `-nostdinc` | Include directories |
 | `-D`, `-U`, `-include`, `-imacros` | Macros |
 | `-dM -E` | Print every macro defined at the end |
-| `-std=` | C standard: `c89`, `c99`, `c11`, `c17`, `c23` |
+| `-std=` | C standard: `c89`, `c99`, `c11`, `c17`, `c23` (and `gnu*`) |
 | `-g`, `-g0` | Debug info on or off |
 | `-Wall`, `-W<name>`, `-Wno-<name>`, `-Werror`, `-w` | Warnings |
 | `-L`, `-l`, `-static`, `-shared`, `-r`, `-s`, `-pthread`, `-rdynamic` | Linking |
 | `-nostdlib`, `-nostartfiles`, `-nodefaultlibs` | Leave out the C library or startup files |
 | `-Wl,a,b`, `-Xlinker a` | Pass options to the linker |
 | `-Wp,...`, `-Xassembler a` | Pass options to the preprocessor or `as` |
-| `--libc=mucc`, `--libc=system` | Which C library (see above) |
+| `--libc=mucc`, `--libc=system` | Which C library |
+| `--target=`, `-target` | Build for x86-64 or ARM64 |
 | `-fpic`, `-fPIC`, `-fno-pic` | Position-independent code |
 | `-funsigned-char`, `-fsigned-char` | Whether plain `char` is unsigned |
 | `-fcommon`, `-fno-common`, `-fvisibility=` | Symbols |
@@ -305,128 +301,48 @@ diagnostics or hardening (`-O2`, `-fstack-protector`, `-flto`, `-pipe`,
 | `-v`, `-###`, `--version`, `-dumpversion`, `-dumpmachine`, `-print-search-dirs` | Information |
 | `-ar`, `-ranlib` | Run the archiver (as the first argument) |
 
-## What it supports
-
-- **C17 and C23:** `bool`, `nullptr`, `constexpr`, `auto`, `#embed`,
-  `typeof`, `[[attributes]]`, `_Static_assert`, checked arithmetic
-  (`<stdckdint.h>`), `<stdbit.h>` and more.
-- **The whole of C:** the full preprocessor, VLAs, `_Generic`, `_Atomic`
-  and `<stdatomic.h>`, thread-local variables, structs and unions by
-  value, bit-fields, varargs, complex numbers (`_Complex` and
-  `<complex.h>`), designated initializers, compound literals, and K&R
-  function definitions.
-- **GNU extensions:** `__int128`, statement expressions, computed `goto`,
-  case ranges, `__attribute__` (including `mode`, `vector_size`,
-  `transparent_union`, `cleanup`, `constructor`, `weak`, `alias`,
-  `section`, `visibility`, `aligned` and `packed`), asm labels, extended
-  `asm` and `asm goto`, and gcc's builtins for bit counting, byte swaps,
-  branch hints, overflow checks, atomics (`__sync_*`, `__atomic_*`),
-  floating point and the C library.
-- **SIMD:** gcc's vector types of 4, 8 or 16 bytes with their operators,
-  passed in XMM (or ARM64's vector) registers as the ABI says, and the x86
-  intrinsics headers (`<immintrin.h>` and the rest) up to SSE4.2, AES and
-  PCLMUL.
-- **Debugging and warnings:** see [Debugging](#debugging) and
-  [Warnings and errors](#warnings-and-errors).
-- **Its own toolchain:** an assembler, a linker for static executables,
-  relocatable objects (`-r`) and map files (`-Wl,-Map,FILE`), and an
-  archiver.
-- **Linux's own headers** (`<linux/*.h>`, `<asm/*.h>`, ...) come with the
-  bundled musl, for programs that use the kernel directly: usbfs, input
-  devices, netlink, ioctls.
-- **gcc's object format and calling convention** (the System V ABI on
-  x86-64, the AAPCS64 on ARM64), so objects and archives from gcc and mucc
-  link together either way.
-
-## Limitations
-
-What mucc does not do, and what to use instead.
-
-**Platform**
-
-- It runs on, and builds programs for, x86-64 and ARM64 Linux only. No
-  macOS, Windows (except under WSL 2), 32-bit ARM or 32-bit x86.
-- On ARM64, no `<arm_neon.h>` intrinsics: code that checks `__ARM_NEON`
-  takes its portable path.
-- Cross-compiling from x86-64 to ARM64, `long double` constants and
-  constant expressions are only as precise as x86-64's own `long double`
-  (64 bits of mantissa, not ARM64's 113); at run time, and in a mucc that
-  runs on ARM64, they are exact.
-
-**Language**
-
-- C only: no C++ or Objective-C.
-- Not supported: `_BitInt`, nested functions, `__label__`, variable-length
-  arrays inside structs, integer `_Complex`, and vectors of sizes other
-  than 4, 8 and 16 bytes.
-- Implicit function declarations are errors, as C99 and later require.
-- Some gcc attributes that change what a program does are errors rather
-  than silently ignored: `ifunc`, `naked`, `target`, `target_clones`,
-  `symver`, `weakref`, `retain`, `copy`, `noinit`, `persistent`,
-  `scalar_storage_order` and `hardbool`. Unknown attributes only warn.
-- No AVX or later instructions: code that checks `__AVX__` takes its SSE
-  path.
-- mucc accepts some invalid programs that gcc and clang reject. It rejects
-  the common mistakes, but it isn't a strict checker.
-
-**Code generation**
-
-- No optimization beyond register allocation and constant folding.
-  Generated code runs about as fast as `gcc -O0`. No LTO, profile-guided
-  optimization or `-march`-specific code.
-- No sanitizers (`-fsanitize=`), coverage (`--coverage`) or profiling
-  (`-pg`).
-- No unwind tables (`.eh_frame`): fine for C, but `.cfi_*` directives in
-  assembly are dropped.
-
-**The bundled C library (musl)**
-
-- Programs are static only: no shared libraries, no `dlopen`. Use
-  `--libc=system` for those.
-- musl's `malloc` and stdio are slower than glibc's, which makes some
-  programs 1.3 to 1.5 times slower than with `--libc=system`.
-- musl's locales are basic (`setlocale` accepts names but changes little),
-  its `iconv` differs from glibc's in small ways, and threads get 128 KB
-  stacks unless a program asks for more.
-
-**Toolchain**
-
-- Shared libraries (`-shared`) are linked by the system's `ld`.
-- Intel-syntax assembly is handed to the system `as`.
-- Objects from gcc that call libgcc's helpers (complex multiplication,
-  128-bit division) need gcc's `libgcc.a` to link. (On ARM64, the bundled
-  musl comes with those for `long double` and 128-bit integers.)
+</details>
 
 ## Performance
 
-| | Time |
-| --- | --- |
-| mucc 1.3.0 compiling its own source | 0.46 s |
-| gcc 15.2 `-O0`, the same | 1.22 s |
-| gcc 15.2 `-O2`, the same | 5.35 s |
+How long each compiler takes to compile mucc's own source (`src/*.c`,
+32,137 lines, 56,252 after preprocessing) to objects:
 
-The generated code runs about as fast as `gcc -O0` with glibc
-(`--libc=system`), and about 1.3 to 1.5 times slower with the bundled musl,
-whose `malloc` and stdio are slower. For the fastest programs, use gcc or
-clang with `-O2`.
+| Compiler | Time | Lines per second | mucc is |
+| --- | ---: | ---: | ---: |
+| **mucc 1.4.0** | **0.56 s** | **99,000** | |
+| clang 21 `-O0` | 0.84 s | 66,000 | 1.5x faster |
+| gcc 15 `-O0` | 1.47 s | 38,000 | 2.6x faster |
+| clang 21 `-O2` | 5.46 s | 10,000 | 9.7x faster |
+| gcc 15 `-O2` | 7.83 s | 7,200 | 14x faster |
 
-## Where it runs
+How fast the code each one makes runs, using mucc itself as the program:
+mucc built four ways, each compiling the same source.
 
-- Any 64-bit Intel or AMD Linux, and any ARM64 Linux (the Raspberry Pi 3,
-  4 and 5, Asahi Linux, ARM servers and cloud instances), with glibc, musl
-  or no C library at all: current distributions, old ones like CentOS 7,
-  containers, and WSL 2.
-- The released binaries are static and need nothing else, not even `/proc`
-  or `/tmp` (they fall back to the current directory for temporary files).
-- The programs it builds are x86-64 or ARM64 Linux executables. On ARM64,
-  their segments are 64 KB aligned, as GNU ld makes them, so they run on
-  kernels with 4, 16 or 64 KB pages.
+| mucc built by | Time | Slower than gcc `-O2` by |
+| --- | ---: | ---: |
+| gcc `-O2` | 0.23 s | |
+| gcc `-O0` | 0.40 s | 1.7x |
+| mucc, with glibc (`--libc=system`) | 0.46 s | 1.9x |
+| mucc, with its musl (the default) | 0.65 s | 2.7x |
+
+Measured on an Intel Core i7-1185G7 laptop under WSL 2 with gcc 15.2 and
+clang 21.1: real time, best of 7 with the compilers taking turns, one
+file at a time. Your numbers will differ; run `make bench`
+(`test/bench.sh`) to measure them on your machine.
+
+In short: mucc compiles faster than gcc and clang, and the code it makes
+is a little slower than theirs at `-O0`. The bundled musl's `malloc` and
+stdio make programs about 1.4x slower than with glibc. For the fastest
+programs, build with gcc or clang at `-O2`.
 
 ## Build from source
 
-### With only mucc (any x86-64 or ARM64 Linux)
+You need `git` and `make`, plus a C compiler: either mucc itself or gcc.
 
-Needs `mucc` from [Get it](#get-it), plus `git` and `make`. No gcc.
+### With only mucc (no gcc)
+
+Install mucc as in [Install](#install), then:
 
 ```sh
 git clone https://github.com/Dom-Yan/Mucc.git && cd Mucc
@@ -436,125 +352,118 @@ make build/mucc     # the single binary, as released
 build/mucc --version
 ```
 
-This takes about 15 seconds. Copy `build/mucc` anywhere, for example over
-`~/.local/bin/mucc`.
-
-Releases are built this way, by the release before them, with gcc and
-binutils made to fail so nothing else can take part:
-`test/bootstrap.sh mucc out/mucc -s` does the same. Whichever compiler
-starts the chain, the result is the same bytes (`make test-bootstrap`).
-The ARM64 release is cross-compiled by the x86-64 one
-(`test/bootstrap.sh mucc out/mucc-aarch64 -s aarch64`, or `make
-build/mucc-aarch64`), and an ARM64 mucc builds the same objects from the
-same source.
+This takes about 15 seconds. This is how releases are built: each one by
+the release before it, with gcc and binutils made to fail so nothing else
+takes part (`test/bootstrap.sh`).
 
 ### With gcc
-
-Install the build tools first:
 
 ```sh
 sudo apt install build-essential git        # Ubuntu, Debian, WSL
 sudo dnf install gcc make git glibc-devel   # Fedora
 sudo pacman -S base-devel git               # Arch
-```
 
-Then:
-
-```sh
 git clone https://github.com/Dom-Yan/Mucc.git && cd Mucc
 make && make libc && make build/mucc
 ```
 
-`make install` puts mucc in `/usr/local` (`make install PREFIX=$HOME/.local`
-for no `sudo`), and `make uninstall` removes it.
+### Installing what you built
+
+Either copy the single binary over the downloaded one:
+
+```sh
+cp build/mucc ~/.local/bin/mucc
+```
+
+or install `./mucc` with its headers and musl:
+
+```sh
+make install                        # into /usr/local (needs sudo)
+make install PREFIX=$HOME/.local    # into ~/.local, no sudo
+make uninstall                      # removes it again
+```
+
+Then see [Make mucc your default compiler](#make-mucc-your-default-compiler).
 
 ### Notes
 
-- A `./mucc` built from source uses the system's glibc by default. Use
-  `build/mucc`, or `./mucc --libc=mucc` after `make libc`, to compile
-  without it.
+- `./mucc` built from source uses the system's glibc by default. Use
+  `build/mucc`, or `./mucc --libc=mucc` after `make libc`, for the bundled
+  musl.
 - On WSL 2, clone into your Linux home (`~`), not `/mnt/c`. It is much
-  faster there.
-- `cc: not found` or `cc: Not a directory` means gcc is not installed. Use
-  the steps under [With only mucc](#with-only-mucc-any-x86-64-or-arm64-linux)
-  or install gcc.
+  faster.
+- `cc: not found` means there is no C compiler: use `make CC=mucc` or
+  install gcc.
 
 ## How it works
 
 The compiler is a pipeline, one stage per file in `src/`:
 
-1. `token.c` turns source text into tokens.
-2. `preprocess.c` expands macros and includes.
-3. `parser.c` and `type.c` build a typed syntax tree.
-4. `cgen.c` writes x86-64 assembly, with register allocation for
-   variables and constant folding, or `cgen_arm64.c` ARM64 assembly.
-5. `asm.c` assembles it into an ELF object file.
-6. `link.c` links objects and archives into a static executable.
+| Stage | File | Does |
+| --- | --- | --- |
+| 1 | `token.c` | source text to tokens |
+| 2 | `preprocess.c` | macros, `#include`, `#if` |
+| 3 | `parser.c`, `type.c` | tokens to a typed syntax tree |
+| 4 | `cgen.c`, `cgen_arm64.c` | syntax tree to x86-64 or ARM64 assembly |
+| 5 | `asm.c` | assembly to an ELF object |
+| 6 | `link.c` | objects and archives to a static executable |
 
-`main.c` is the driver that runs them, `ar.c` is `mucc -ar`, and `mucc.h`
-declares what they share, with a guide at its top to where common changes
-go. Each file is split into sections by `//---------- Name ---` lines:
-`grep -n '^//-------' src/*.c` lists them.
+`main.c` is the driver, `ar.c` is `mucc -ar`, and `diag.c` prints errors
+and warnings for every stage. `mucc.h` declares what they share and has a
+guide at its top to where common changes go. Each file is split into
+sections by `//---------- Name ---` lines (`grep -n '^//-------' src/*.c`
+lists them).
 
-The released binary carries its headers (`include/`), musl's headers and
-libraries, and Linux's headers inside it, and reads them from memory. On
-ARM64, `runtime/arm64.c` goes with musl: the routines for `long double`
-and 128-bit division that gcc's libgcc has, which code for ARM64 calls.
+The released binary carries its headers (`include/`), musl and Linux's
+headers inside it and reads them from memory. On ARM64,
+`runtime/arm64.c` provides the `long double` and 128-bit routines that
+gcc's libgcc would.
 
 ## Testing
 
 ```sh
-make test        # language, driver, error, assembler, linker and debugger tests
-make test-all    # also self-hosting, musl, the single binary, and
-                 # programs written from scratch for Linux, each built by
-                 # the single binary alone in an empty root, and mucc for
-                 # the other CPU (make test-cross)
-make difftest    # random programs compared against gcc
+make test        # language, driver, error, assembler, linker and gdb tests
+make test-all    # plus self-hosting, musl, the single binary, and cross-compiling
+make difftest    # random programs, compared against gcc
+make bench       # the numbers in Performance
 ```
 
-`make test-cross` builds mucc for the other CPU and, if qemu-user can run
-its programs (`sudo apt install qemu-user-binfmt`), checks it builds mucc
-the same and passes the tests there. With ARM64's GNU as
-(`binutils-aarch64-linux-gnu`), `make test` also checks the ARM64
-assembler against it.
-
 The tests need gcc and glibc's headers (`build-essential`), since they also
-check `--libc=system`. Real programs are tested by the scripts in
-`test/thirdparty/`, one per program, which download it, build it with
-mucc and run its own test suite.
+check `--libc=system`. With `gdb`, `qemu-user-binfmt` and
+`binutils-aarch64-linux-gnu` installed they also cover debugging and ARM64.
+Real programs are tested by `test/thirdparty/*.sh`, which download each
+one, build it with mucc and run its own test suite.
 
-## Statistics
-
-| | |
-| --- | --- |
-| Source | 32,895 lines of C in 14 files (`wc -l src/*.c src/*.h`), plus 632 in runtime/ for ARM64 |
-| Released binary | about 8.5 MB, with musl and Linux's headers inside |
-| Compiling its own source | 0.46 s (gcc `-O0`: 1.22 s, gcc `-O2`: 5.35 s) |
-| Tests | 57 programs with over 2,700 assertions, 8 Linux programs with 166 checks, plus hundreds of command-line, error, assembler, linker and debugger checks |
-| Real programs | With the bundled musl: SQLite (249,453 tests, 0 errors), Lua, zlib, Redis, Tcl, jq, the kilo text editor. With `--libc=system`: CPython 3.10 (402 of 408 test suites pass), Git (21,115 tests pass), libpng, TinyCC, QuickJS (its 9 test files pass) |
-| Self-hosting | a mucc built by mucc builds a byte-identical mucc |
-
-Times are for the released binary, compiling `src/*.c` to objects one file
-at a time, best of 7, on WSL 2 on Ubuntu with gcc 15.2.
-
-
-## Disclaimer 
-AI was used in this project but for automating tests. And Comments explaining some logic. 
+The suite has 57 test programs with 2,793 assertions, 8 programs written
+from scratch for Linux, over 300 checks of errors and warnings, and the
+assembler compared byte for byte with GNU as on 114 programs.
 
 ## Contributing
 
-- Run `make test-all` before every commit, and add a test for each fix.
+Bug reports and pull requests are welcome. The
+[open issues](https://github.com/Dom-Yan/Mucc/issues) are a good place to
+start.
+
+- Report a bug with the smallest C file that shows it, the command you
+  ran, and what gcc does with it.
+- Run `make test-all` before sending a change, and add a test for each
+  fix (`test/*.c` for the language, `test/errors.sh` for diagnostics).
 - `src/` may only use C that the latest release compiles, since each
   release is built by the one before it.
 - Changes should make mucc faster, smaller, clearer or more correct.
-- AI tools are fine if you have read every line you submit. AI agents should
-  read [AGENTS.md](AGENTS.md).
+- AI tools are fine if you have read and understood every line you
+  submit. AI agents should read [AGENTS.md](AGENTS.md).
+
+A note on AI: it was used in this project to help automate tests and to
+write some of the comments that explain the logic.
 
 ## License
 
-MIT. See [LICENSE](LICENSE). musl, in `thirdparty/musl/`, is MIT too.
+MIT, see [LICENSE](LICENSE). Mucc started from Rui Ueyama's
+[chibicc](https://github.com/rui314/chibicc). musl, in `thirdparty/musl/`,
+is MIT too.
 
-Linux's headers, in `thirdparty/linux-headers/`, which the released
-binary carries, are the kernel's: GPL-2.0 WITH Linux-syscall-note. That
-note says programs that use the kernel through them aren't derived works
-of it, so they don't change the license of mucc or of programs it builds.
+Linux's headers, in `thirdparty/linux-headers/`, are GPL-2.0 WITH
+Linux-syscall-note. That note says programs that use the kernel through
+them aren't derived works of it, so they don't change the license of mucc
+or of the programs it builds.

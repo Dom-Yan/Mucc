@@ -30,12 +30,13 @@ use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
 <h2>Features</h2>
 <ul>
   <li><b>ONE FILE!</b> The compiler, preprocessor, assembler, linker, headers
-    and C library (musl) are one static program of about 8.5 MB. Copy it onto
+    and C library (musl) are one static program of about 8.7 MB. Copy it onto
     any x86-64 or ARM64 Linux machine, an empty container or a USB stick, and build C
     programs with nothing else installed: no gcc, no binutils, no system
     headers.</li>
-  <li><b>FAST!</b> It compiles, assembles and links about 2.7 times
-    <a href="#speed">faster</a> than <code>gcc -O0</code>.</li>
+  <li><b>FAST!</b> It compiles and assembles about 2.6 times
+    <a href="#speed">faster</a> than <code>gcc -O0</code> and 1.5 times
+    faster than <code>clang -O0</code>.</li>
   <li><b>REAL C!</b> C17 by default, C23 with <code>-std=c23</code>, and the
     GNU extensions real code uses. SQLite, Lua, Redis, Tcl, jq and zlib
     build with it and pass their own test suites with the bundled musl;
@@ -47,7 +48,7 @@ use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
   <li><b>BUILT BY ITSELF!</b> Each release is compiled, assembled and
     linked by the one before it, with gcc and binutils nowhere in sight,
     and comes out the same bytes on any machine.</li>
-  <li><b>SMALL!</b> About 28,000 lines of C, in sections, that one person can
+  <li><b>SMALL!</b> About 33,000 lines of C, in sections, that one person can
     read from end to end.</li>
   <li><b>ITS OWN TOOLCHAIN!</b> Its assembler takes hand-written
     assembly with GNU as's common directives (<code>.macro</code>,
@@ -63,22 +64,26 @@ full guide: how to use mucc day to day, every option, and what it
 doesn't do.</p>
 
 <h2 id="speed">Compilation Speed</h2>
-<p>Compilation speed for mucc's own source. There are 27,667 lines; 47,319
-lines (1.0 MBytes) are compiled because the same headers are included in
-many files. Mucc is about <b>2.7 times</b> faster than GCC <code>-O0</code>
-and 12 times faster than GCC <code>-O2</code>.</p>
+<p>Compilation speed for mucc's own source. There are 32,137 lines; 56,252
+lines (1.2 MBytes) are compiled because the same headers are included in
+many files. Mucc is about <b>2.6 times</b> faster than GCC <code>-O0</code>,
+1.5 times faster than Clang <code>-O0</code>, and 14 times faster than GCC
+<code>-O2</code>.</p>
 <table class="speed">
   <tr><th>Compiler</th><th>Time(s)</th><th>lines/second</th><th>MBytes/second</th></tr>
-  <tr><td>Mucc 1.3.0</td><td>0.46</td><td>103000</td><td>2.3</td></tr>
-  <tr><td>GCC 15.2 -O0</td><td>1.22</td><td>38800</td><td>0.86</td></tr>
-  <tr><td>GCC 15.2 -O2</td><td>5.35</td><td>8800</td><td>0.20</td></tr>
+  <tr><td>Mucc 1.4.0</td><td>0.56</td><td>99000</td><td>2.2</td></tr>
+  <tr><td>Clang 21.1 -O0</td><td>0.84</td><td>66000</td><td>1.5</td></tr>
+  <tr><td>GCC 15.2 -O0</td><td>1.47</td><td>38000</td><td>0.84</td></tr>
+  <tr><td>Clang 21.1 -O2</td><td>5.46</td><td>10000</td><td>0.23</td></tr>
+  <tr><td>GCC 15.2 -O2</td><td>7.83</td><td>7200</td><td>0.16</td></tr>
 </table>
-<p>Measures were done on an AMD Ryzen 5 7600X under WSL 2, one file at a
-time, best of 7. Real time is measured. Compilation time includes
-compilation and assembly. Code that mucc generates runs about as fast as
-code from <code>gcc -O0</code> with glibc (<code>--libc=system</code>), and
-about 1.3 to 1.5 times slower with the bundled musl: for the fastest
-programs, use gcc or clang.</p>
+<p>Measures were done on an Intel Core i7-1185G7 laptop under WSL 2, one
+file at a time, best of 7, with the compilers taking turns. Real time is
+measured. Compilation time includes compilation and assembly. Code that
+mucc generates runs about 15% slower than code from <code>gcc -O0</code>
+with glibc (<code>--libc=system</code>), and about 1.4 times slower again
+with the bundled musl: for the fastest programs, use gcc or clang. Run
+<code>make bench</code> to measure all of this on your own machine.</p>
 
 <h2 id="download">Download</h2>
 <p>The latest release is at
@@ -103,6 +108,9 @@ only mucc, is explained in the
     or make programs for anything else.</li>
   <li>Optimize beyond register allocation and constant folding: use gcc or
     clang where performance is crucial.</li>
+  <li>Some invalid programs that gcc rejects are accepted: it isn't a strict
+    checker. The <a href="https://github.com/Dom-Yan/Mucc/issues">issue
+    tracker</a> lists the known bugs.</li>
   <li>C++, <code>_BitInt</code>, gcc's nested functions, AVX and later
     vector instructions, or Intel-syntax assembly without the system's
     <code>as</code>.</li>
@@ -113,12 +121,12 @@ only mucc, is explained in the
 <a href="https://github.com/Dom-Yan/Mucc#limitations">Limitations</a> has
 the full list.</p>
 
-<h2>You want to help ?</h2>
+<h2>Want to help?</h2>
 <p>Here are some suggestions:</p>
 <ul>
   <li>Report bugs on the <a href="https://github.com/Dom-Yan/Mucc/issues">issue
-    tracker</a>, with a small C file that shows the problem (and eventually
-    fix them).</li>
+    tracker</a>, with a small C file that shows the problem, or pick one of
+    the open issues and fix it.</li>
   <li>Send fixes as <a href="https://github.com/Dom-Yan/Mucc/pulls">pull
     requests</a>. Run <code>make test-all</code> first, add a test for each
     fix, and make sure you have read and understood every line you
@@ -147,8 +155,8 @@ the full list.</p>
 as is musl, the C library inside it.</p>
 
 <hr>
-<p>Copyright (c) 2026 Dominick and Rei. Mucc&trade; and Dom-Yan&trade; are
-trademarks of Dominick.</p>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan.</p>
 <hr>
 <p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
 <a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
