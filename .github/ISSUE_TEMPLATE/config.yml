@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: README
+    url: https://github.com/Dom-Yan/Mucc#readme
+    about: How to use mucc, every option, and its known limitations.
