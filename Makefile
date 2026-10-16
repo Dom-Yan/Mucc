@@ -281,6 +281,11 @@ test-programs: build/mucc
 test-bootstrap: build/mucc
 	test/bootstrap.sh build/mucc
 
+# The speed numbers in the README, measured on this machine (see
+# test/bench.sh). Needs gcc; clang and tcc are measured if installed.
+bench: build/mucc
+	test/bench.sh build/mucc
+
 # Install
 
 install: mucc
@@ -314,4 +319,4 @@ clean:
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 .PHONY: test clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
-  test-libc test-single test-programs test-bootstrap test-cross
+  test-libc test-single test-programs test-bootstrap test-cross bench
