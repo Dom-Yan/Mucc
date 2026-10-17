@@ -293,6 +293,17 @@ EOF
 expect_error "1:34: error: not an lvalue" <<'EOF'
 int *f(int i, int j) { return &(i, j); }
 EOF
+
+# Nor are other values, which cgen can't find the address of; the parser
+# says so, so -fsyntax-only does too.
+for e in 'x++ = 1' '(x + 1) = 2' '++x = 1' '(long)x = 1' '-x = 1' '&(x + 1)' '&x++'; do
+  printf 'void f(void) { int x = 0; %s; }\n' "$e" > $tmp/lv.c
+  if ! $mucc -fsyntax-only $tmp/lv.c 2>&1 | grep -q 'error: not an lvalue'; then
+    echo "testing error '-fsyntax-only: $e is not an lvalue' ... failed"
+    exit 1
+  fi
+  echo "testing error '-fsyntax-only: $e is not an lvalue' ... passed"
+done
 expect_ok 'a statement expression or compound literal as an lvalue' <<'EOF'
 struct S { int a; } s, t;
 void f(void) { ({ s; }) = t; ({ s; }).a = 1; (struct S){1}.a = 2; int *p = &(int){3}; }

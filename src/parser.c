@@ -4955,26 +4955,29 @@ static bool has_const_member(Type *ty) {
   return false;
 }
 
-// Some values cgen can find the address of aren't lvalues, so they can't
-// be assigned, incremented or have their address taken: `(a, b)`,
-// `c ? s : t`, `s = t` and `f()`, and their members. (gcc takes a
-// statement expression's value, `({ s; })`, as one.)
-static bool is_rvalue(Node *node) {
+// What can be assigned, incremented or have its address taken: a
+// variable, `*p`, a member of an lvalue, and a compound literal, and as
+// gcc takes it, a statement expression's struct value, `({ s; })`. Not
+// `x + 1`, `x++`, a cast, nor values cgen can find the address of anyway:
+// `(a, b)`, `c ? s : t`, `s = t`, `f()`, and their members.
+static bool is_lvalue(Node *node) {
   switch (node->kind) {
-  case ND_COMMA: // a compound literal is one too, made at its `(`
-    return equal(node->tok, ",");
-  case ND_COND:
-  case ND_ASSIGN:
-  case ND_FUNCALL:
+  case ND_VAR:
+  case ND_DEREF:
+  case ND_VLA_PTR:
     return true;
+  case ND_COMMA: // a compound literal is one too, made at its `(`
+    return !equal(node->tok, ",");
+  case ND_STMT_EXPR:
+    return node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION;
   case ND_MEMBER:
-    return is_rvalue(node->lhs);
+    return is_lvalue(node->lhs);
   }
   return false;
 }
 
 static void check_lvalue(Node *node) {
-  if (is_rvalue(node))
+  if (!is_lvalue(node))
     error_tok(node->tok, "not an lvalue");
 }
 
