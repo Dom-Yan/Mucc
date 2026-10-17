@@ -868,30 +868,45 @@ static void canonicalize_newline(char *p) {
 }
 
 // Removes backslashes followed by a newline.
+// The text between splices is moved in pieces, which is much faster than
+// a character at a time: this runs from the first splice to the end of
+// the file, and a big file like sqlite3.c has splices near its start.
 static void remove_backslash_newline(char *p) {
-  int i = 0, j = 0;
+  char *in = p, *out = p;
 
   // We want to keep the number of newline characters so that
   // the logical line number matches the physical one.
   // This counter maintain the number of newlines we have removed.
   int n = 0;
 
-  while (p[i]) {
-    if (p[i] == '\\' && p[i + 1] == '\n') {
-      i += 2;
-      n++;
-    } else if (p[i] == '\n') {
-      p[j++] = p[i++];
-      for (; n > 0; n--)
-        p[j++] = '\n';
-    } else {
-      p[j++] = p[i++];
+  for (;;) {
+    char *splice = strchr(in, '\\');
+    while (splice && splice[1] != '\n')
+      splice = strchr(splice + 1, '\\');
+    char *end = splice ? splice : in + strlen(in);
+
+    // The removed newlines go back after the next newline.
+    if (n) {
+      char *nl = memchr(in, '\n', end - in);
+      if (nl) {
+        memmove(out, in, nl + 1 - in);
+        out += nl + 1 - in;
+        in = nl + 1;
+        memset(out, '\n', n);
+        out += n;
+        n = 0;
+      }
     }
+    memmove(out, in, end - in);
+    out += end - in;
+    if (!splice)
+      break;
+    in = splice + 2;
+    n++;
   }
 
-  for (; n > 0; n--)
-    p[j++] = '\n';
-  p[j] = '\0';
+  memset(out, '\n', n);
+  out[n] = '\0';
 }
 
 static uint32_t read_universal_char(char *p, int len) {
