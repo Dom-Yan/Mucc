@@ -21,7 +21,9 @@ expect_error() {
         echo "testing error '$1' ... failed (compiled without error)"
         exit 1
     fi
-    got=$(head -1 $tmp/err | sed "s|^$tmp/t.c:||")
+    # (A mucc built with ASan warns before a huge allocation fails.)
+    got=$(grep -v '^==[0-9]*==WARNING: AddressSanitizer' $tmp/err | head -1 |
+          sed "s|^$tmp/t.c:||")
     if [ "$got" != "$1" ]; then
         echo "testing error '$1' ... failed"
         echo "  got: $got"

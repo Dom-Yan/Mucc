@@ -49,7 +49,9 @@ jobs:
   sanitizers:
     runs-on: ubuntu-latest
     env:
-      ASAN_OPTIONS: detect_leaks=0
+      # (allocator_may_return_null: a huge allocation fails, as without
+      # ASan, so mucc reports it as out of memory, which a test checks.)
+      ASAN_OPTIONS: detect_leaks=0:allocator_may_return_null=1
       SAN: -fsanitize=address,undefined -fno-sanitize-recover=undefined
     steps:
       - uses: actions/checkout@v5
