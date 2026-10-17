@@ -407,10 +407,13 @@ static void skip_space(void) {
 
 // Symbol names may also contain UTF-8, as C identifiers can. (No
 // isalnum(): it finds its table through a function call each time.)
-static bool is_symchar(char c) {
-  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') ||
-         c == '_' || c == '.' || c == '$' || (unsigned char)c >= 0x80;
-}
+// A table and a macro, not a function: the assembler asks this for nearly
+// every character it reads, and mucc doesn't inline.
+static const bool symchars[256] = {
+  ['a' ... 'z'] = true, ['A' ... 'Z'] = true, ['0' ... '9'] = true,
+  ['_'] = true, ['.'] = true, ['$'] = true, [0x80 ... 0xff] = true,
+};
+#define is_symchar(c) symchars[(unsigned char)(c)]
 
 // Reads a number. Big positive ones like 18446744073709551615 wrap
 // around to their 64-bit pattern, as GNU as does (here, -1).
@@ -501,9 +504,13 @@ static bool next_op(char *op) {
   char *q = p;
   while (*q == ' ' || *q == '\t')
     q++;
-  if (strncmp(q, op, strlen(op)))
+  // (Most calls fail on the first character, so that's tested first.)
+  if (*q != *op)
     return false;
-  p = q + strlen(op);
+  int len = strlen(op);
+  if (strncmp(q, op, len))
+    return false;
+  p = q + len;
   return true;
 }
 
