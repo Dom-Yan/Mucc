@@ -919,28 +919,29 @@ static uint32_t read_universal_char(char *p, int len) {
   return c;
 }
 
-// Replace \u or \U escape sequences with corresponding UTF-8 bytes.
+// Replace \u or \U escape sequences with corresponding UTF-8 bytes. An
+// escaped backslash, `\\`, is a pair. The text between backslashes is
+// moved in pieces, as in remove_backslash_newline(): this runs from the
+// line of the first escape to the end of the file, which in sqlite3.c is
+// one in a comment near its start.
 static void convert_universal_chars(char *p) {
   char *q = p;
 
-  while (*p) {
-    if (startswith(p, "\\u")) {
-      uint32_t c = read_universal_char(p + 2, 4);
-      if (c) {
-        p += 6;
-        q += encode_utf8(q, c);
-      } else {
-        *q++ = *p++;
-      }
-    } else if (startswith(p, "\\U")) {
-      uint32_t c = read_universal_char(p + 2, 8);
-      if (c) {
-        p += 10;
-        q += encode_utf8(q, c);
-      } else {
-        *q++ = *p++;
-      }
-    } else if (p[0] == '\\') {
+  for (;;) {
+    char *bs = strchr(p, '\\');
+    char *end = bs ? bs : p + strlen(p);
+    memmove(q, p, end - p);
+    q += end - p;
+    p = end;
+    if (!bs)
+      break;
+
+    int len = (p[1] == 'u') ? 4 : (p[1] == 'U') ? 8 : 0;
+    uint32_t c = len ? read_universal_char(p + 2, len) : 0;
+    if (c) {
+      q += encode_utf8(q, c);
+      p += 2 + len;
+    } else if (p[1] == '\\') {
       *q++ = *p++;
       *q++ = *p++;
     } else {
