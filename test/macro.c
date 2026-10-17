@@ -527,6 +527,22 @@ int main() {
   ASSERT(0, strcmp(VO7(a, 0), "aa aa"));
   ASSERT(0, strcmp(VO7(a), ""));
 
+  // An empty __VA_OPT__, or one ending in an empty paste, is a
+  // placemarker, which ## pastes as nothing (C23's examples, and others)
+#define VO8(X, ...) VSTR(__VA_OPT__(a X ## X) ## b)
+#define VO9(...) VSTR([a __VA_OPT__(x) ## b])
+#define VO10(X, ...) VSTR(__VA_OPT__(X) ## b)
+#define VO11A(...) __VA_OPT__()/**/__VA_OPT__()
+#define VO11B(X) a ## X ## b
+#define VO11C(X) VO11B(X)
+  ASSERT(0, strcmp(VO8(, 1), "a b"));
+  ASSERT(0, strcmp(VO8(c, 1), "a ccb"));
+  ASSERT(0, strcmp(VO9(), "[a b]"));
+  ASSERT(0, strcmp(VO10(, 1), "b"));
+  ASSERT(0, strcmp(VO10(q, 1), "qb"));
+  ASSERT(0, strcmp(VO10(q), "b"));
+  ASSERT(0, strcmp(VSTR(VO11C(VO11A())), "ab"));
+
   // gcc's description of the target
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__ || defined __STDC_NO_COMPLEX__ || __CHAR_BIT__ != 8
   ASSERT(0, 1);

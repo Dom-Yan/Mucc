@@ -878,20 +878,31 @@ static void take_spacing(Token *first, Token *cur, Token *tok) {
   }
 }
 
-static Token *subst(Token *tok, MacroArg *args);
+static Token *subst(Token *tok, MacroArg *args, Token **ends_pm);
 
 // `__VA_OPT__(...)` at `tok`: if __VA_ARGS__ is empty, nothing (an EOF);
 // otherwise what's in the parentheses, with the parameters replaced.
-static Token *va_opt(Token **rest, Token *tok, MacroArg *args) {
+// `ends_pm`: the placemarker that ends in, or NULL (see subst()).
+static Token *va_opt(Token **rest, Token *tok, MacroArg *args, Token **ends_pm) {
   MacroArg *arg = read_macro_arg_one(&tok, tok->next->next, true);
   *rest = skip(tok, ")");
-  return has_varargs(args) ? subst(arg->tok, args) : new_eof(tok);
+  *ends_pm = NULL;
+  return has_varargs(args) ? subst(arg->tok, args, ends_pm) : new_eof(tok);
 }
 
 // Replace func-like macro parameters with given arguments.
-static Token *subst(Token *tok, MacroArg *args) {
+//
+// An empty argument next to ##, or an empty __VA_OPT__, is a placemarker
+// (C23 6.10.5.3): `x ## y` is y if x is one, and x if y is one. `pm` says
+// the replacement so far ends in one, so a ## after it pastes nothing, and
+// `pm_tok` is where it was, whose spacing the token after it takes. A
+// placemarker leaves nothing in the result; `ends_pm` is set to the one it
+// ends in, or NULL, for __VA_OPT__(...)'s.
+static Token *subst(Token *tok, MacroArg *args, Token **ends_pm) {
   Token head = {};
   Token *cur = &head;
+  bool pm = false;
+  Token *pm_tok = NULL;
 
   // Arguments # and ## take as written (see expand_arg())
   for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
@@ -905,10 +916,13 @@ static Token *subst(Token *tok, MacroArg *args) {
   }
 
   while (tok->kind != TK_EOF) {
+    bool was_pm = pm;
+    pm = false;
+
     // C23's #__VA_OPT__(...): __VA_OPT__'s replacement, stringized
     if (equal(tok, "#") && equal(tok->next, "__VA_OPT__") && equal(tok->next->next, "(")) {
-      Token *hash = tok;
-      cur = cur->next = stringize(hash, va_opt(&tok, tok->next, args));
+      Token *hash = tok, *unused;
+      cur = cur->next = stringize(hash, va_opt(&tok, tok->next, args, &unused));
       continue;
     }
 
@@ -940,75 +954,76 @@ static Token *subst(Token *tok, MacroArg *args) {
     }
 
     if (equal(tok, "##")) {
-      if (cur == &head)
+      if (cur == &head && !was_pm)
         error_tok(tok, "'##' cannot appear at start of macro expansion");
 
       if (tok->next->kind == TK_EOF)
         error_tok(tok, "'##' cannot appear at end of macro expansion");
 
-      // `L ## #x`: the stringized argument, as in a wide string
-      if (equal(tok->next, "#") && find_arg(args, tok->next->next)) {
-        Token *str = stringize(tok->next, find_arg(args, tok->next->next)->tok);
-        *cur = *paste(cur, str);
-        tok = tok->next->next->next;
-        continue;
-      }
-
+      // The right side, up to `end` or an EOF: `#x`, the stringized
+      // argument, as in a wide string (`L ## #x`); an argument as
+      // written; __VA_OPT__(...)'s replacement; or a token.
+      Token *rhs, *end = NULL, *rhs_pm = NULL;
       MacroArg *arg = find_arg(args, tok->next);
-      if (arg) {
-        if (arg->tok->kind != TK_EOF) {
-          *cur = *paste(cur, arg->tok);
-          for (Token *t = arg->tok->next; t->kind != TK_EOF; t = t->next)
-            cur = cur->next = copy_token(t);
-        }
+      if (equal(tok->next, "#") && find_arg(args, tok->next->next)) {
+        rhs = stringize(tok->next, find_arg(args, tok->next->next)->tok);
+        tok = tok->next->next->next;
+      } else if (arg) {
+        rhs = arg->tok;
         tok = tok->next->next;
-        continue;
+      } else if (equal(tok->next, "__VA_OPT__") && equal(tok->next->next, "(")) {
+        rhs = va_opt(&tok, tok->next, args, &rhs_pm);
+      } else {
+        rhs = tok->next;
+        end = rhs->next;
+        tok = rhs->next;
       }
 
-      *cur = *paste(cur, tok->next);
-      tok = tok->next->next;
+      // Either side may be a placemarker, which pastes as nothing.
+      if (rhs == end || rhs->kind == TK_EOF) {
+        pm = was_pm;
+        continue;
+      }
+      Token *first = cur;
+      if (was_pm)
+        cur = cur->next = copy_token(rhs);
+      else
+        *cur = *paste(cur, rhs);
+      for (Token *t = rhs->next; t != end && t->kind != TK_EOF; t = t->next)
+        cur = cur->next = copy_token(t);
+      if (was_pm)
+        take_spacing(first, cur, pm_tok);
+      pm = rhs_pm != NULL;
+      pm_tok = rhs_pm;
       continue;
     }
 
     MacroArg *arg = find_arg(args, tok);
 
+    // An argument before ## is as written, or if it's empty, a placemarker.
     if (arg && equal(tok->next, "##")) {
-      Token *rhs = tok->next->next;
-
       if (arg->tok->kind == TK_EOF) {
-        MacroArg *arg2 = find_arg(args, rhs);
-        // `x ## y ## z` with x empty: y is the left side of the next ##,
-        // so start over from it (C17 6.10.3.3's placemarkers).
-        if (arg2 && equal(rhs->next, "##")) {
-          tok = rhs;
-          continue;
-        }
+        pm = true;
+        pm_tok = tok;
+      } else {
         Token *first = cur;
-        if (arg2) {
-          for (Token *t = arg2->tok; t->kind != TK_EOF; t = t->next)
-            cur = cur->next = copy_token(t);
-        } else {
-          cur = cur->next = copy_token(rhs);
-        }
+        for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next)
+          cur = cur->next = copy_token(t);
         take_spacing(first, cur, tok);
-        tok = rhs->next;
-        continue;
       }
-
-      Token *first = cur;
-      for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next)
-        cur = cur->next = copy_token(t);
-      take_spacing(first, cur, tok);
       tok = tok->next;
       continue;
     }
 
-    // If __VA_ARGS__ is empty, __VA_OPT__(x) is expanded to the
-    // empty token list. Otherwise, __VA_OPT__(x) is expanded to x, with
-    // the parameters in x replaced too.
+    // If __VA_ARGS__ is empty, __VA_OPT__(x) is expanded to a placemarker.
+    // Otherwise, __VA_OPT__(x) is expanded to x, with the parameters in x
+    // replaced too.
     if (equal(tok, "__VA_OPT__") && equal(tok->next, "(")) {
-      for (Token *t = va_opt(&tok, tok, args); t->kind != TK_EOF; t = t->next)
+      Token *first = cur, *va = tok, *group_pm;
+      for (Token *t = va_opt(&tok, tok, args, &group_pm); t->kind != TK_EOF; t = t->next)
         cur = cur->next = t;
+      pm = cur == first || group_pm != NULL;
+      pm_tok = cur == first ? va : group_pm;
       continue;
     }
 
@@ -1030,6 +1045,8 @@ static Token *subst(Token *tok, MacroArg *args) {
   }
 
   cur->next = tok;
+  if (ends_pm)
+    *ends_pm = pm ? pm_tok : NULL;
   return head.next;
 }
 
@@ -1119,7 +1136,7 @@ static bool expand_macro(Token **rest, Token *tok) {
   Hideset *hs = hideset_intersection(macro_token->hideset, rparen->hideset);
   hs = hideset_union(hs, new_hideset(m->name));
 
-  *rest = expansion(subst(m->body, args), hs, macro_token, tok->next, true);
+  *rest = expansion(subst(m->body, args, NULL), hs, macro_token, tok->next, true);
   take_place(*rest, macro_token, tok->next);
   return true;
 }
