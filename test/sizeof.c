@@ -41,6 +41,9 @@ int main() {
   ASSERT(8, sizeof(int(*)[][10]));
 
   ASSERT(4, sizeof(struct { int x, y[]; }));
+  // Huge structs: the size is counted in bits, up to about 2^60 bytes
+  ASSERT(1, sizeof(struct { char a[1L << 59]; char b; }) == (1L << 59) + 1);
+  ASSERT(1, sizeof(struct { char a[(1L << 60) - (1L << 33)]; }) == (1L << 60) - (1L << 33));
 
   ASSERT(1, sizeof(char));
   ASSERT(1, sizeof(signed char));

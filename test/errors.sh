@@ -537,6 +537,18 @@ expect_error "1:8: error: size of array is too large" <<'EOF'
 char a[1L << 62][4];
 EOF
 
+# A struct's size is counted in bits, so it can be up to about 2^60 bytes.
+# (One larger came out with a negative size, read as incomplete.)
+expect_error "1:17: error: struct is too large" <<'EOF'
+struct S { char a[1L << 60]; };
+extern struct S s;
+unsigned long n = sizeof s;
+EOF
+
+expect_error "1:35: error: struct is too large" <<'EOF'
+struct S { char a[1L << 59]; char b[1L << 59]; };
+EOF
+
 # A global's size can't be computed at run time.
 expect_error "1:16: error: variably modified 'a' at file scope or with static storage" <<'EOF'
 int n = 3; int a[n];
@@ -1072,8 +1084,8 @@ expect_error "1:26: error: not a compile-time constant" <<'EOF'
 int a; long bad = (long)&a % 32;
 EOF
 
-expect_error "mucc: error: out of memory for the initializer of an array of 4611686018427387904 elements" <<'EOF'
-struct T { char s[1L << 62]; int n; };
+expect_error "mucc: error: out of memory for the initializer of an array of 576460752303423488 elements" <<'EOF'
+struct T { char s[1L << 59]; int n; };
 struct T t = {.s[1] = 1};
 EOF
 

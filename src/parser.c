@@ -5988,6 +5988,13 @@ static Type *struct_decl(Token **rest, Token *tok) {
     } else {
       bits = align_to(bits, member_align(ty, mem) * 8);
       mem->offset = bits / 8;
+      // The size is counted in bits, so a struct can be up to about 2^60
+      // bytes. (A little under, so that aligning can't overflow either.)
+      // (It stays incomplete, so it isn't laid out, and reported, again.)
+      if (mem->ty->size > (INT64_MAX - bits) / 8 - (1L << 32)) {
+        ty->size = -1;
+        error_tok(mem->name ? mem->name : tok, "struct is too large");
+      }
       bits += mem->ty->size * 8;
     }
 
