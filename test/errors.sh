@@ -745,6 +745,16 @@ _Atomic(int) at; unsigned u; typedef int T; T t;
 int g(void) { auto w = 1; return w; }
 EOF
 
+# ARM64's long double limits, cross-compiled on x86-64, whose long double
+# is narrower, are finite; a real overflow isn't.
+target=--target=aarch64-linux expect_clean "ARM64's LDBL_MAX" <<'EOF'
+#include <float.h>
+_Static_assert(LDBL_MAX * 0 == 0 && LDBL_MAX > 1e4932L, "LDBL_MAX is inf");
+_Static_assert(1.18973149535723176508575932662800702e+4932L * 0 == 0, "musl's is inf");
+_Static_assert(-0x1.ffffffffffffffffffffffffffffp+16383L * 0 == 0, "-LDBL_MAX is inf");
+_Static_assert(1e4933L * 0 != 0 && 0x1.1p+16384L * 0 != 0, "an overflow is finite");
+EOF
+
 expect_clean 'constants that fit, signed or unsigned' <<'EOF'
 char a = 0xff; unsigned char b = -1; signed char c = 128; unsigned u = -1;
 int i = 0xffffffff; unsigned long ul = -1; _Bool t = 300; char d = '\xff';

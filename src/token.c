@@ -6,6 +6,7 @@
 //============================================================================
 
 #include "mucc.h"
+#include <float.h>
 
 //---------- Tokenizer state -------------------------------------------------
 
@@ -469,6 +470,31 @@ static bool convert_pp_int(Token *tok, char *s, int len) {
   return true;
 }
 
+// A floating literal, the `len` characters at `s`, that strtold() made
+// `inf`. Cross-compiling for ARM64 on x86-64, ARM64's long double has 113
+// bits to this machine's 64, with the same exponents, so its largest
+// values, like its LDBL_MAX, are just above this machine's largest: by
+// less than 2^-64 of it. Those get this machine's largest, the nearest
+// it has, as every long double constant gets this machine's 64 bits. Any
+// other overflow is `inf`, as with gcc. (Within 2^-60: this machine can't
+// tell ARM64's largest from 0x1p16384, a hair above it.)
+static long double ldouble_overflow(char *s, int len, long double val) {
+  if (!target_arm64 || LDBL_MANT_DIG >= 113)
+    return val;
+
+  // The literal with its exponent one less, so this machine can read it,
+  // compared with LDBL_MAX divided the same way
+  bool hex = len > 1 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X');
+  char *buf = format("%.*s", len, s);
+  char *e = strpbrk(buf, hex ? "pP" : "eE");
+  if (!e)
+    return val;
+  long exp = strtol(e + 1, NULL, 10);
+  long double less = strtold(format("%.*s%c%ld", (int)(e - buf), buf, *e, exp - 1), NULL);
+  long double base = hex ? 2 : 10;
+  return less <= LDBL_MAX / base * (1 + 0x1p-60L) ? LDBL_MAX : val;
+}
+
 // The definition of the numeric literal at the preprocessing stage
 // is more relaxed than the definition of that at the later stages.
 // In order to handle that, a numeric literal is tokenized as a
@@ -498,6 +524,8 @@ static void convert_pp_number(Token *tok) {
   // If it's not an integer, it must be a floating point constant.
   char *end;
   long double val = strtold(s, &end);
+  if (val > LDBL_MAX)
+    val = ldouble_overflow(s, end - s, val);
 
   // [GNU] An `i` or `j` before or after the suffix makes an imaginary
   // constant, as in 2.0i or 1.0fi: a complex number with no real part.
