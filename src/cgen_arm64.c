@@ -2735,6 +2735,7 @@ void emit_text_arm64(Obj *prog) {
       add_imm("sp", "sp", size);
     }
     println("  ret");
+    println("  .size %s, .-%s", fn->name, fn->name); // as in cgen.c
     if (opt_g)
       println(".L.end.%s:", fn->name); // for the debug info's code range
   }

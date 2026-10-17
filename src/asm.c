@@ -5114,7 +5114,12 @@ bool assemble_text(char *src, char *path, char **why) {
     sym->njumps = t->njumps;
     sym->is_tls = t->is_tls;
     sym->type = sym->type ? sym->type : t->type;
-    sym->size = sym->size ? sym->size : t->size;
+    // (A size of .-start is only known after layout, below.)
+    if (!sym->size && !sym->size_from) {
+      sym->size = t->size;
+      sym->size_from = t->size_from;
+      sym->size_to = t->size_to;
+    }
   }
 
   for (int i = 0; i < nsections; i++)

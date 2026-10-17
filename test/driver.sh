@@ -74,6 +74,18 @@ check --version
 echo 'int main() {}' | $mucc -S -o- -xc - | grep -q 'main:'
 check -S
 
+# A function's symbol has its size, from its start to the next one's, as
+# profilers and debuggers need
+if command -v readelf > /dev/null; then
+  printf 'int f(int x) { return x * 3; }\nint g(void) { return f(2); }\n' |
+      $mucc -c -o $tmp/size.o -xc -
+  read f_addr f_size g_addr g_size < <(readelf -sW $tmp/size.o |
+      awk '$4 == "FUNC" { print $8, $2, $3 }' | sort | awk '{ printf "%s %s ", $2, $3 }')
+  [ "$f_size" -gt 0 ] && [ "$g_size" -gt 0 ] &&
+      { [ $((0x$g_addr - 0x$f_addr)) = $f_size ] || [ $((0x$f_addr - 0x$g_addr)) = $g_size ]; }
+  check 'function sizes'
+fi
+
 # Default output file
 rm -f $tmp/out.o $tmp/out.s
 echo 'int main() {}' > $tmp/out.c

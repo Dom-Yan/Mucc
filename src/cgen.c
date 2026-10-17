@@ -4186,6 +4186,9 @@ static void emit_text(Obj *prog) {
     println("  mov %%rbp, %%rsp");
     println("  pop %%rbp");
     println("  ret");
+    // The function's size in the symbol table, which profilers and
+    // debuggers use to tell which function an address is in
+    println("  .size %s, .-%s", fn->name, fn->name);
     if (opt_g)
       println(".L.end.%s:", fn->name); // for the debug info's code range
   }
