@@ -3325,7 +3325,7 @@ static void a64_instruction(char *name, int len) {
     if (n != 3)
       fail("bad operands");
     int bit = imm(&ops[1], 0, d->size * 8 - 1);
-    a64_branch((bit >> 5) << 31 | insn->op | (bit & 31) << 19 | gpreg(d, false),
+    a64_branch((uint32_t)(bit >> 5) << 31 | insn->op | (bit & 31) << 19 | gpreg(d, false),
                R_AARCH64_TSTBR14, &ops[2]);
     return;
   }
