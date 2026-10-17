@@ -366,7 +366,9 @@ static Token *read_char_literal(char *start, char *quote, Type *ty) {
       c = (unsigned char)*p++;
     else
       c = decode_utf8(&p, p);
-    val = is_plain ? (val << 8) | (c & 0xff) : c;
+    // (Only the last 4 bytes of a plain one count, so it's kept to 32
+    // bits: 9 or more would overflow val.)
+    val = is_plain ? (uint32_t)(val << 8 | (c & 0xff)) : c;
     len++;
   }
   if (len == 0)

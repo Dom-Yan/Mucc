@@ -126,6 +126,8 @@ of(char), \
   ASSERT(0x52494646, 'RIFF');
   ASSERT(0x6162, 'ab');
   ASSERT(0x62636465, 'abcde');
+  ASSERT(0x66676869, 'abcdefghi');
+  ASSERT(0x6d6e6f70, 'abcdefghijklmnop');
   ASSERT(0xff01, '\377\1');
 #ifdef __CHAR_UNSIGNED__
   ASSERT(255, '\xff');
