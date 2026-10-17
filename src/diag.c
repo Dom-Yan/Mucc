@@ -161,7 +161,7 @@ static struct {
   {"attributes", true}, {"discarded-qualifiers", true},
   {"return-local-addr", true}, {"div-by-zero", true},
   {"shift-count-overflow", true}, {"shift-count-negative", true},
-  {"unused-variable", false}, {"return-type", false},
+  {"overflow", true}, {"unused-variable", false}, {"return-type", false},
   {"parentheses", false}, {"unused-value", false}, {"format", false},
   {"format-extra-args", false}, {"address", false},
   {"unused-function", false}, {"switch", false},

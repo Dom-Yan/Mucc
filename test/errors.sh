@@ -710,6 +710,26 @@ expect_warning "1:25: warning: left shift count >= width of type [-Wshift-count-
 int f(int a) { return a << 32; }
 EOF
 
+# A constant that a narrower type can hold neither signed nor unsigned,
+# in an initializer, an assignment, an argument or a return
+expect_warning "1:10: warning: overflow in conversion from 'int' to 'char' changes value from '300' to '44' [-Woverflow]" <<'EOF'
+char c = 300;
+EOF
+expect_warning "1:19: warning: unsigned conversion from 'int' to 'unsigned char' changes value from '-129' to '127' [-Woverflow]" <<'EOF'
+unsigned char c = -129;
+EOF
+expect_warning "1:9: warning: overflow in conversion from 'unsigned long' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]" <<'EOF'
+int i = 0xffffffffffffffffUL;
+EOF
+expect_warning "2:29: warning: overflow in conversion from 'int' to 'short' changes value from '70000' to '4464' [-Woverflow]" <<'EOF'
+void g(short);
+short f(short s) { s = 1; g(70000); return s; }
+EOF
+expect_clean 'constants that fit, signed or unsigned' <<'EOF'
+char a = 0xff; unsigned char b = -1; signed char c = 128; unsigned u = -1;
+int i = 0xffffffff; unsigned long ul = -1; _Bool t = 300; char d = '\xff';
+EOF
+
 expect_clean 'no default warning for what -Wall adds' <<'EOF'
 static int unused(void) { return 0; }
 int f(int a) { if (a = 1) a == 2; return a; }

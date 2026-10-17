@@ -1041,6 +1041,32 @@ bool is_assignable(Type *to, Node *from) {
   return is_compatible_unqual(to, ty);
 }
 
+// -Woverflow, on by default as with gcc: an integer constant converted to
+// a narrower integer type that can hold it neither signed nor unsigned, as
+// in `char c = 300`. (`char c = 0xff` and `unsigned char c = -1` are fine.)
+static void check_overflow(Type *to, Node *from) {
+  if (!is_integer(to) || to->kind == TY_BOOL || to->size >= 8 ||
+      !is_integer(from->ty) || !is_foldable(from) || in_system_header(from->tok))
+    return;
+  int64_t v = fold(from);
+  int bits = to->size * 8;
+  // (A 64-bit unsigned value above INT64_MAX reads as negative.)
+  bool huge = from->ty->is_unsigned && from->ty->size == 8 && v < 0;
+  if (!huge && v >= -(1L << (bits - 1)) && v < (1L << bits))
+    return;
+
+  uint64_t mask = (1UL << bits) - 1;
+  int64_t w = v & mask;
+  if (!to->is_unsigned && (w >> (bits - 1)))
+    w |= ~mask;
+  warn_opt("overflow", from->tok,
+           from->ty->is_unsigned
+               ? "%s conversion from '%s' to '%s' changes value from '%lu' to '%ld'"
+               : "%s conversion from '%s' to '%s' changes value from '%ld' to '%ld'",
+           to->is_unsigned ? "unsigned" : "overflow in", type_name(from->ty),
+           type_name(to), v, w);
+}
+
 // Reports an error if `from` can't be converted to type `to` without a
 // cast, as in `=`, initializers, function arguments and `return` (the
 // rules are C11 6.5.16.1). The printf-style `fmt` names the place, e.g.
@@ -1066,8 +1092,10 @@ void check_assign(Type *to, Node *from, char *fmt, ...) {
     error_tok(from->tok, "void value used in %s", vformat(fmt, ap));
   }
 
-  if ((is_numeric(to) || is_complex(to)) && (is_numeric(ty) || is_complex(ty)))
+  if ((is_numeric(to) || is_complex(to)) && (is_numeric(ty) || is_complex(ty))) {
+    check_overflow(to, from);
     return;
+  }
   if (to->kind == TY_BOOL && ty->kind == TY_PTR)
     return;
 
