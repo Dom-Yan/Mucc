@@ -838,10 +838,31 @@ static Token *paste(Token *lhs, Token *rhs) {
   return tok;
 }
 
+// An argument, macro-expanded, as it is substituted where # and ## don't
+// take it as written. It's expanded in place, which changes its tokens'
+// links, so one that # or ## also use (is_raw_used) is expanded from a copy.
+static Token *expand_arg(MacroArg *arg) {
+  if (!arg->expanded) {
+    Token *src = arg->tok;
+    if (arg->is_raw_used) {
+      Token head = {};
+      Token *t2 = &head;
+      for (Token *t = arg->tok; t; t = t->kind == TK_EOF ? NULL : t->next)
+        t2 = t2->next = copy_token(t);
+      src = head.next;
+    }
+    arg->expanded = preprocess2(src);
+  }
+  return arg->expanded;
+}
+
+// Whether __VA_OPT__ is on: if the variable arguments have tokens once
+// macro-expanded, as with gcc, so an argument that expands to nothing
+// (`F(EMPTY)`) leaves it off.
 static bool has_varargs(MacroArg *args) {
   for (MacroArg *ap = args; ap; ap = ap->next)
-    if (!strcmp(ap->name, "__VA_ARGS__"))
-      return ap->tok->kind != TK_EOF;
+    if (ap->is_va_args)
+      return ap->tok->kind != TK_EOF && expand_arg(ap)->kind != TK_EOF;
   return false;
 }
 
@@ -850,8 +871,7 @@ static Token *subst(Token *tok, MacroArg *args) {
   Token head = {};
   Token *cur = &head;
 
-  // An argument is expanded in place, which changes its tokens' links,
-  // so one that # or ## also take as written is expanded from a copy.
+  // Arguments # and ## take as written (see expand_arg())
   for (Token *t = tok; t->kind != TK_EOF; t = t->next) {
     MacroArg *arg = NULL;
     if (equal(t, "#") || equal(t, "##"))
@@ -965,19 +985,8 @@ static Token *subst(Token *tok, MacroArg *args) {
     // Handle a macro token. Macro arguments are completely macro-expanded
     // before they are substituted into a macro body.
     if (arg) {
-      if (!arg->expanded) {
-        Token *src = arg->tok;
-        if (arg->is_raw_used) {
-          Token head2 = {};
-          Token *t2 = &head2;
-          for (Token *t = arg->tok; t; t = t->kind == TK_EOF ? NULL : t->next)
-            t2 = t2->next = copy_token(t);
-          src = head2.next;
-        }
-        arg->expanded = preprocess2(src);
-      }
       Token *first = cur;
-      for (Token *t = arg->expanded; t->kind != TK_EOF; t = t->next)
+      for (Token *t = expand_arg(arg); t->kind != TK_EOF; t = t->next)
         cur = cur->next = copy_token(t);
       if (cur != first) {
         first->next->at_bol = tok->at_bol;

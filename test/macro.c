@@ -498,6 +498,19 @@ int main() {
   ASSERT(0, strcmp(VO2(q), "q"));
   ASSERT(9, ({ int yy = 9; VO3(y, 1); }));
 
+  // __VA_OPT__ is on if the variable arguments have tokens once
+  // macro-expanded (C23 6.10.5.1's examples)
+#define VSTR_(...) #__VA_ARGS__
+#define VSTR(...) VSTR_(__VA_ARGS__)
+#define VO4(...) f(0 __VA_OPT__(,) __VA_ARGS__)
+#define VO5(X, ...) f(0, X __VA_OPT__(,) __VA_ARGS__)
+#define VO_EMPTY
+  ASSERT(0, strcmp(VSTR(VO4()), "f(0)"));
+  ASSERT(0, strcmp(VSTR(VO4(VO_EMPTY)), "f(0)"));
+  ASSERT(0, strcmp(VSTR(VO5(a, )), "f(0, a)"));
+  ASSERT(0, strcmp(VSTR(VO5(a)), "f(0, a)"));
+  ASSERT(0, strcmp(VSTR(VO5(a, VO_EMPTY VO_EMPTY)), "f(0, a)"));
+
   // gcc's description of the target
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__ || defined __STDC_NO_COMPLEX__ || __CHAR_BIT__ != 8
   ASSERT(0, 1);
