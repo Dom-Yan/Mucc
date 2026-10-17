@@ -144,9 +144,10 @@ selfhost: $(OBJNAMES:%=$(S3)/%) $(OBJNAMES:%=$(S2)/%)
 # musl, from thirdparty/musl, built by mucc with musl's own configure and
 # Makefile in build/musl, for the CPU mucc runs on (ARCH), archived by
 # `mucc -ar`, and with no `as` (-fno-as-fallback). Left out: musl's x86-64
-# math overrides (x87 assembly and SSE asm operands, which mucc doesn't
-# have) and ARM64 string functions (NEON assembly); musl's portable C is
-# built instead. It's built from scratch whenever mucc changes, since
+# long double math (x87 assembly, the files ending in l.s and l.c, which
+# mucc's assembler doesn't have; its SSE sqrt, lrint and the like are in)
+# and ARM64 string functions (NEON assembly); musl's portable C is built
+# instead. It's built from scratch whenever mucc changes, since
 # musl's Makefile doesn't know its objects depend on the compiler.
 # MUSL_BUILD is set at the top. Its headers go in $(MUSL_BUILD)/include
 # and the rest in $(MUSL_BUILD)/lib, where --libc=mucc finds them, with
@@ -161,7 +162,7 @@ selfhost: $(OBJNAMES:%=$(S3)/%) $(OBJNAMES:%=$(S2)/%)
 # a musl for the other CPU, in build/musl-aarch64 or build/musl-x86_64,
 # for --target= to cross-compile with.
 
-MUSL_SKIP_x86_64=$$(srcdir)/src/math/x86_64/%
+MUSL_SKIP_x86_64=$$(srcdir)/src/math/x86_64/%l.s $$(srcdir)/src/math/x86_64/%l.c
 MUSL_SKIP_aarch64=$$(srcdir)/src/string/aarch64/%
 
 # $(call build_musl,DIR,ARCH): musl for ARCH (x86_64 or aarch64) in DIR

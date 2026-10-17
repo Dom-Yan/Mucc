@@ -66,3 +66,12 @@ PATH=$tmp/bin:$PATH ./mucc --libc=mucc -o $tmp/prog $tmp/prog.c -lm -lpthread &&
     [ ! -s $tmp/calls ] && file $tmp/prog | grep -q 'statically linked' &&
     [ "$($tmp/prog)" = "13579 1.414 1.5 8 3 2.71828 2 0.959" ]
 check 'a program built against it runs'
+
+# On x86-64, musl's SSE versions of sqrt, lrint, fma and the like are in:
+# sqrt is the instruction, not musl's portable C.
+if [ "$(uname -m)" = x86_64 ]; then
+  echo 'double sqrt(double); int main(int c, char **v) { return sqrt(c) == 1 ? 0 : 1; }' > $tmp/sqrt.c
+  ./mucc --libc=mucc -o $tmp/sqrt $tmp/sqrt.c && $tmp/sqrt &&
+      objdump -d $tmp/sqrt | awk '/<sqrt>:/,/ret/' | grep -q sqrtsd
+  check 'sqrt is sqrtsd on x86-64'
+fi
