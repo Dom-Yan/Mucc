@@ -1377,8 +1377,10 @@ static void write_executable(char *path) {
   // The sections are in `image` already; add the tables after them.
   image = realloc(image, size);
   memset(image + image_size, 0, size - image_size);
-  memcpy(image + symtab_off, symtab.data, symtab.len);
-  memcpy(image + strtab_off, strtab.data, strtab.len);
+  if (!strip) { // (stripped, they're empty, and their data NULL)
+    memcpy(image + symtab_off, symtab.data, symtab.len);
+    memcpy(image + strtab_off, strtab.data, strtab.len);
+  }
   memcpy(image + shstr_off, shstrtab.data, shstrtab.len);
 
   Elf64_Shdr *sh = (Elf64_Shdr *)(image + shoff);
