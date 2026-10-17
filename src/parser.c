@@ -99,6 +99,7 @@ typedef struct {
   bool is_constexpr;
   bool is_register;
   bool is_unused; // __attribute__((unused)): no unused-variable warning
+  bool is_kr_param; // a K&R definition's parameter, which may be implicit int
   int align;
   Attrs gnu;      // all GNU attributes in the declaration specifiers
 } VarAttr;
@@ -207,6 +208,7 @@ StringArray toplevel_asm; // asm("...") at file scope, in order
 
 static Obj *builtin_alloca;
 static Type *va_elem_ty; // an element of __builtin_va_list
+static bool is_lookahead; // in is_function(), which parses a declarator twice
 
 // declspec() returns this for `auto` with no other type, as in C23's
 // `auto x = 1;`. declaration() and global_variable() then take the type
@@ -1077,6 +1079,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
 
   Type *ty = ty_int;
   int counter = 0;
+  bool has_type = false; // _Atomic(T)'s, which counter doesn't count
   bool is_atomic = false;
   bool is_const = false;
   bool is_volatile = false;
@@ -1174,6 +1177,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       if (equal(tok , "(")) {
         ty = typename(&tok, tok->next);
         tok = skip(tok, ")");
+        has_type = true;
       }
       is_atomic = true;
       continue;
@@ -1362,6 +1366,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   *rest = tok;
   if (is_auto && counter == 0 && !is_atomic)
     return &auto_type;
+
+  // No type at all, as in `main() {}` or `static x;`, is implicit int,
+  // which C99 dropped: a warning, as with gcc before gcc 14 made it an
+  // error. (C89 has it, and so does a K&R definition's `register a;`.)
+  if (counter == 0 && !has_type && opt_std >= 1999 && !(attr && attr->is_kr_param) &&
+      !is_lookahead)
+    warn_opt("implicit-int", tok, "type defaults to 'int'");
   return ty;
 }
 
@@ -8887,7 +8898,7 @@ static Type *kr_params(Token **rest, Token *tok, Type *fn_ty, Type ***decl) {
     names[i] = t;
 
   while (!equal(tok, "{")) {
-    VarAttr attr = {};
+    VarAttr attr = {.is_kr_param = true};
     Type *basety = declspec(&tok, tok, &attr);
     do {
       Type *ty = declarator(&tok, tok, basety, NULL);
@@ -9337,7 +9348,9 @@ static bool is_function(Token *tok, Type *basety) {
   // The dummy is an int, which mode(QI) and vector_size(16) can apply to.
   Type dummy = *ty_int;
   Attrs ignored = {};
+  is_lookahead = true;
   Type *ty = declarator(&tok, tok, &dummy, &ignored);
+  is_lookahead = false;
   return ty->kind == TY_FUNC || (ty == &dummy && basety->kind == TY_FUNC);
 }
 

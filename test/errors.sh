@@ -725,6 +725,26 @@ expect_warning "2:29: warning: overflow in conversion from 'int' to 'short' chan
 void g(short);
 short f(short s) { s = 1; g(70000); return s; }
 EOF
+# Implicit int, which C99 dropped, but not in C89, nor for a K&R
+# definition's parameters, nor for C23's auto
+expect_warning "1:1: warning: type defaults to 'int' [-Wimplicit-int]" <<'EOF'
+main() { return 0; }
+EOF
+expect_warning "1:22: warning: type defaults to 'int' [-Wimplicit-int]" <<'EOF'
+int f(void) { static x; return x; }
+EOF
+expect_warning "1:13: warning: type defaults to 'int' [-Wimplicit-int]" <<'EOF'
+int g(const c) { return c; }
+EOF
+target=-std=c89 expect_clean 'implicit int in C89' <<'EOF'
+main() { static x; return x; }
+EOF
+expect_clean 'no implicit int' <<'EOF'
+int f(a, b) register a; { return a + b; }
+_Atomic(int) at; unsigned u; typedef int T; T t;
+int g(void) { auto w = 1; return w; }
+EOF
+
 expect_clean 'constants that fit, signed or unsigned' <<'EOF'
 char a = 0xff; unsigned char b = -1; signed char c = 128; unsigned u = -1;
 int i = 0xffffffff; unsigned long ul = -1; _Bool t = 300; char d = '\xff';
