@@ -936,14 +936,8 @@ static void convert_universal_chars(char *p) {
   *q = '\0';
 }
 
-// The start of the line with the first backslash-u or backslash-U, where
-// convert_universal_chars() has work to do. (The line's start, so an
-// escaped backslash before it is still read as a pair.)
-static char *first_ucn(char *p) {
-  char *u = strstr(p, "\\u"), *U = strstr(p, "\\U");
-  char *q = !u ? U : (U && U < u) ? U : u;
-  if (!q)
-    return p;
+// The start of the line `q` is on, in the text starting at `p`
+static char *line_start(char *p, char *q) {
   while (q > p && q[-1] != '\n')
     q--;
   return q;
@@ -963,24 +957,32 @@ Token *tokenize_file(char *path) {
     p += 3;
 
   // Most files need none of these rewrites, and each is a full pass over
-  // the file, so first do a fast search for anything to rewrite. Splices
-  // and \u escapes both start with a backslash, which few lines have.
+  // the file, so first do a fast search for anything to rewrite: the
+  // first splice and the first \u or \U escape. Both start with a
+  // backslash, which few lines have. An escaped backslash, `\\`, is a
+  // pair, as convert_universal_chars() reads it, so "\\u" in a string is
+  // no escape. A backslash before a splice may make one once the splice
+  // is gone, as in "\\\nu0041", so it counts as one.
   if (strchr(p, '\r'))
     canonicalize_newline(p);
-  char *splice = NULL;
-  bool ucn = false;
-  for (char *q = strchr(p, '\\'); q; q = strchr(q + 1, '\\')) {
-    if (q[1] == '\n' && !splice)
-      splice = q;
-    ucn |= q[1] == 'u' || q[1] == 'U';
+  char *splice = NULL, *ucn = NULL;
+  for (char *q = strchr(p, '\\'); q && !(splice && ucn); q = strchr(q + 1, '\\')) {
+    if (q[1] == '\n') {
+      if (!splice)
+        splice = q;
+    } else if (q[1] == '\\' && q[2] != '\n') {
+      q++;
+    } else if ((q[1] == 'u' || q[1] == 'U' || q[1] == '\\') && !ucn) {
+      ucn = q;
+    }
   }
-  // (A splice can make a \u escape, as in "\\\nu0041".)
-  if (splice) {
+  if (splice)
     remove_backslash_newline(splice);
-    ucn = strstr(p, "\\u") || strstr(p, "\\U");
-  }
+
+  // From the start of the line of the escape, or of the first splice if
+  // that's before it: the text before that is as it was.
   if (ucn)
-    convert_universal_chars(first_ucn(p));
+    convert_universal_chars(line_start(p, splice && splice < ucn ? splice : ucn));
 
   return tokenize(add_input_file(path, p));
 }
