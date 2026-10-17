@@ -76,3 +76,18 @@ fi
 # Embedded headers are no files make could find, so -M leaves them out.
 [ "$(mucc -M $tmp/prog.c | grep -c '<mucc>')" = 0 ]
 check '-M'
+
+# A link its own linker can't do goes to the system's ld, which is given
+# copies of the embedded crt1.o, libc.a, ..., removed afterwards. (The
+# linker script places only .text: the program links, but wouldn't run.)
+if command -v ld > /dev/null; then
+  mkdir $tmp/t
+  echo 'int main(void) { return 3; }' > $tmp/m.c
+  echo 'SECTIONS { . = 0x400000 + SIZEOF_HEADERS; .text : { *(.text*) } }' > $tmp/s.ld
+  TMPDIR=$tmp/t $tmp/alone/mucc -fuse-ld=bfd -o $tmp/m $tmp/m.c &&
+      { $tmp/m; [ $? = 3 ]; } && [ -z "$(ls $tmp/t)" ]
+  check 'with the system ld'
+  TMPDIR=$tmp/t $tmp/alone/mucc -Wl,-T,$tmp/s.ld -o $tmp/m2 $tmp/m.c 2> /dev/null &&
+      [ -x $tmp/m2 ] && [ -z "$(ls $tmp/t)" ]
+  check 'with the system ld and a linker script'
+fi

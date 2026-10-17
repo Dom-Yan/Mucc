@@ -1197,24 +1197,39 @@ static char *replace_extn(char *tmpl, char *extn) {
   return format("%s%s", filename, extn);
 }
 
+// Removes the temporary files and directories, newest first, so each
+// directory is empty by its turn.
 static void cleanup(void) {
-  for (int i = 0; i < tmpfiles.len; i++)
-    unlink(tmpfiles.data[i]);
+  for (int i = tmpfiles.len - 1; i >= 0; i--)
+    remove(tmpfiles.data[i]);
 }
 
-// A new temporary file, removed when mucc exits. It goes in $TMPDIR, or
-// /tmp, or where mucc runs if there's no /tmp (as in an empty container),
-// as with gcc.
-static char *create_tmpfile(void) {
+// Where temporary files go: $TMPDIR, or /tmp, or where mucc runs if
+// there's no /tmp (as in an empty container), as with gcc.
+static char *tmp_dir(void) {
   char *dir = getenv("TMPDIR");
   if (!dir || !*dir)
     dir = file_exists("/tmp") ? "/tmp" : ".";
-  char *path = format("%s/mucc-XXXXXX", dir);
+  return dir;
+}
+
+// A new temporary file, removed when mucc exits.
+static char *create_tmpfile(void) {
+  char *path = format("%s/mucc-XXXXXX", tmp_dir());
   int fd = mkstemp(path);
   if (fd == -1)
     error("cannot create a temporary file %s: %s", path, strerror(errno));
   close(fd);
 
+  strarray_push(&tmpfiles, path);
+  return path;
+}
+
+// A new temporary directory, removed with what's in it when mucc exits.
+static char *create_tmpdir(void) {
+  char *path = format("%s/mucc-XXXXXX", tmp_dir());
+  if (!mkdtemp(path))
+    error("cannot create a temporary directory %s: %s", path, strerror(errno));
   strarray_push(&tmpfiles, path);
   return path;
 }
@@ -1253,6 +1268,51 @@ static void run_subprocess(char **argv) {
   }
   if (status != 0)
     exit(1);
+}
+
+// Creates the directories in `path` after its first `skip` characters, as
+// `mkdir -p` would, to be removed when mucc exits.
+static void make_dirs(char *path, int skip) {
+  for (char *p = strchr(path + skip + 1, '/'); p; p = strchr(p + 1, '/')) {
+    *p = '\0';
+    if (!mkdir(path, 0700))
+      strarray_push(&tmpfiles, strdup(path));
+    *p = '/';
+  }
+}
+
+// Other programs (`ld`, `as`) can't read the files inside the binary (see
+// find_embedded()). Each argument with an embedded path in it, like
+// "<mucc>/musl/lib/crt1.o" or "-L<mucc>/musl/lib", is changed to name a
+// copy of that file, or of every file in that directory, in a temporary
+// directory removed when mucc exits.
+static void export_embedded(char **argv) {
+  static char *dir;
+  int prefix = strlen(EMBED_DIR);
+  for (int i = 0; argv[i]; i++) {
+    char *p = strstr(argv[i], EMBED_DIR "/");
+    if (!p)
+      continue;
+    if (!dir)
+      dir = create_tmpdir();
+
+    int len = strlen(p);
+    while (len > prefix + 1 && p[len - 1] == '/')
+      len--;
+    for (EmbeddedFile *f = mucc_files; f->path; f++) {
+      if (strncmp(f->path, p, len) || (f->path[len] && f->path[len] != '/'))
+        continue;
+      char *path = format("%s%s", dir, f->path + prefix);
+      if (file_exists(path))
+        continue;
+      make_dirs(path, strlen(dir));
+      FILE *out = fopen(path, "wb");
+      if (!out || fwrite(f->data, 1, f->size, out) != f->size || fclose(out))
+        error("cannot write %s: %s", path, strerror(errno));
+      strarray_push(&tmpfiles, path);
+    }
+    argv[i] = format("%.*s%s%s", (int)(p - argv[i]), argv[i], dir, p + prefix);
+  }
 }
 
 // Runs `mucc -cc1` to compile `input`. It writes assembly to `output`,
@@ -1477,6 +1537,7 @@ static void run_as(char *input, char *output) {
   for (int i = 0; i < as_extra_args.len; i++)
     strarray_push(&cmd, as_extra_args.data[i]);
   strarray_push(&cmd, NULL);
+  export_embedded(cmd.data);
   run_subprocess(cmd.data);
 }
 
@@ -1889,6 +1950,7 @@ static void run_relocatable_link(StringArray *inputs, char *output) {
   for (int i = 0; i < inputs->len; i++)
     strarray_push(&arr, inputs->data[i]);
   strarray_push(&arr, NULL);
+  export_embedded(arr.data);
   run_subprocess(arr.data);
 }
 
@@ -1955,6 +2017,7 @@ static void run_linker(StringArray *inputs, char *output) {
   }
   strarray_push(&arr, NULL);
 
+  export_embedded(arr.data);
   run_subprocess(arr.data);
 }
 
