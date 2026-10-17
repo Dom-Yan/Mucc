@@ -111,15 +111,19 @@ static bool startswith_(char *p, char *q) {
 // the same rule holds: no arguments with side effects.
 #define startswith(p, q) (*(p) == *(q) && startswith_(p, q))
 
-// Tests for ASCII characters. <ctype.h>'s find their table through a
-// function call each time, which the tokenizer's loops feel.
-static bool is_digit(char c) {
-  return '0' <= c && c <= '9';
-}
-
-static bool is_alnum(char c) {
-  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || is_digit(c);
-}
+// Tests for ASCII characters, by a table and macros. <ctype.h>'s find
+// their table through a function call each time, and mucc doesn't inline
+// one of its own, which the tokenizer's loops feel. PUNCT2 is a second
+// character of a punctuator longer than one, as in `<=` or `->`.
+enum { DIGIT = 1, ALPHA = 2, PUNCT2 = 4 };
+static const unsigned char char_class[256] = {
+  ['0' ... '9'] = DIGIT, ['a' ... 'z'] = ALPHA, ['A' ... 'Z'] = ALPHA,
+  ['='] = PUNCT2, ['<'] = PUNCT2, ['>'] = PUNCT2, ['.'] = PUNCT2,
+  ['+'] = PUNCT2, ['-'] = PUNCT2, ['&'] = PUNCT2, ['|'] = PUNCT2,
+  ['#'] = PUNCT2,
+};
+#define is_digit(c) (char_class[(unsigned char)(c)] & DIGIT)
+#define is_alnum(c) (char_class[(unsigned char)(c)] & (DIGIT | ALPHA))
 
 // Read an identifier and returns the length of it.
 // If p does not point to a valid identifier, 0 is returned.
@@ -163,9 +167,9 @@ static int read_punct(char *p) {
     "||", "<<", ">>", "##",
   };
 
-  // Most punctuators are one character. These are the second characters
-  // of the longer ones.
-  if (!p[1] || !strchr("=<>.+-&|#", p[1]))
+  // Most punctuators are one character: the longer ones have a PUNCT2
+  // second.
+  if (!(char_class[(unsigned char)p[1]] & PUNCT2))
     return ispunct(*p) ? 1 : 0;
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -665,7 +669,8 @@ Token *tokenize(File *file) {
     if (is_digit(*p) || (*p == '.' && is_digit(p[1]))) {
       char *q = p++;
       for (;;) {
-        if (p[0] && p[1] && strchr("eEpP", p[0]) && strchr("+-", p[1]))
+        if ((p[0] == 'e' || p[0] == 'E' || p[0] == 'p' || p[0] == 'P') &&
+            (p[1] == '+' || p[1] == '-'))
           p += 2;
         else if (is_alnum(*p) || *p == '.' || *p == '_')
           p++; // `802_2` is one token, as ETH_P_##802_2 needs
