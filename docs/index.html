@@ -30,12 +30,13 @@ use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
 <h2>Features</h2>
 <ul>
   <li><b>ONE FILE!</b> The compiler, preprocessor, assembler, linker, headers
-    and C library (musl) are one static program of about 8.7 MB. Copy it onto
+    and C library (musl) are one static program of about 8.8 MB (3.7 MB of
+    it Linux's headers, 3.2 MB musl's library, 1.3 MB the compiler). Copy it onto
     any x86-64 or ARM64 Linux machine, an empty container or a USB stick, and build C
     programs with nothing else installed: no gcc, no binutils, no system
     headers.</li>
-  <li><b>FAST!</b> It compiles and assembles about 2.6 times
-    <a href="#speed">faster</a> than <code>gcc -O0</code> and 1.5 times
+  <li><b>FAST!</b> It compiles and assembles about 2.7 times
+    <a href="#speed">faster</a> than <code>gcc -O0</code> and 1.6 times
     faster than <code>clang -O0</code>.</li>
   <li><b>REAL C!</b> C17 by default, C23 with <code>-std=c23</code>, and the
     GNU extensions real code uses. SQLite, Lua, Redis, Tcl, jq and zlib
@@ -64,18 +65,32 @@ full guide: how to use mucc day to day, every option, and what it
 doesn't do.</p>
 
 <h2 id="speed">Compilation Speed</h2>
-<p>Compilation speed for mucc's own source. There are 32,137 lines; 56,252
+<p>Compilation speed for mucc's own source. There are 32,419 lines; 56,573
 lines (1.2 MBytes) are compiled because the same headers are included in
-many files. Mucc is about <b>2.6 times</b> faster than GCC <code>-O0</code>,
-1.5 times faster than Clang <code>-O0</code>, and 14 times faster than GCC
-<code>-O2</code>.</p>
+many files. Mucc is about <b>2.7 times</b> faster than GCC <code>-O0</code>,
+1.6 times faster than Clang <code>-O0</code>, and 14 times faster than GCC
+<code>-O2</code>. The Mucc measured is the release binary, which Mucc
+built.</p>
 <table class="speed">
   <tr><th>Compiler</th><th>Time(s)</th><th>lines/second</th><th>MBytes/second</th></tr>
-  <tr><td>Mucc 1.4.0</td><td>0.56</td><td>99000</td><td>2.2</td></tr>
-  <tr><td>Clang 21.1 -O0</td><td>0.84</td><td>66000</td><td>1.5</td></tr>
-  <tr><td>GCC 15.2 -O0</td><td>1.47</td><td>38000</td><td>0.84</td></tr>
-  <tr><td>Clang 21.1 -O2</td><td>5.46</td><td>10000</td><td>0.23</td></tr>
-  <tr><td>GCC 15.2 -O2</td><td>7.83</td><td>7200</td><td>0.16</td></tr>
+  <tr><td>Mucc 1.4.0</td><td>0.54</td><td>105000</td><td>2.3</td></tr>
+  <tr><td>Clang 21.1 -O0</td><td>0.84</td><td>67000</td><td>1.5</td></tr>
+  <tr><td>GCC 15.2 -O0</td><td>1.46</td><td>39000</td><td>0.85</td></tr>
+  <tr><td>Clang 21.1 -O2</td><td>5.27</td><td>11000</td><td>0.24</td></tr>
+  <tr><td>GCC 15.2 -O2</td><td>7.72</td><td>7300</td><td>0.16</td></tr>
+</table>
+<p>And SQLite's amalgamation, <code>sqlite3.c</code> 3.38.2, 239,379 lines
+in one file. TinyCC, which writes machine code directly in one pass, is
+far faster; it can't compile Mucc's own source, which uses
+<code>__int128</code>.</p>
+<table class="speed">
+  <tr><th>Compiler</th><th>Time(s)</th><th>lines/second</th></tr>
+  <tr><td>TinyCC 0.9.27</td><td>0.05</td><td>4200000</td></tr>
+  <tr><td>Mucc 1.4.0</td><td>0.79</td><td>302000</td></tr>
+  <tr><td>Clang 21.1 -O0</td><td>0.93</td><td>255000</td></tr>
+  <tr><td>GCC 15.2 -O0</td><td>2.35</td><td>102000</td></tr>
+  <tr><td>Clang 21.1 -O2</td><td>12.78</td><td>19000</td></tr>
+  <tr><td>GCC 15.2 -O2</td><td>16.51</td><td>14000</td></tr>
 </table>
 <p>Measures were done on an Intel Core i7-1185G7 laptop under WSL 2, one
 file at a time, best of 7, with the compilers taking turns. Real time is

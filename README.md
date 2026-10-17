@@ -19,9 +19,9 @@ gcc, no binutils, no system headers.
 
 | | |
 | --- | --- |
-| **Compile speed** | 2.6x faster than `gcc -O0` and 1.5x faster than `clang -O0` ([details](#performance)) |
+| **Compile speed** | 2.7x faster than `gcc -O0` and 1.6x faster than `clang -O0` ([details](#performance)) |
 | **Generated code** | Runs about 15% slower than `gcc -O0` code and about half as fast as `gcc -O2` code |
-| **Size** | One 8.7 MB static binary, with musl and Linux's headers inside |
+| **Size** | One 8.8 MB static binary, with musl and Linux's headers inside ([what's in it](#whats-inside-the-binary)) |
 | **Source** | About 33,000 lines of C in 15 files, small enough to read end to end |
 | **Language** | C17 by default, C23 with `-std=c23`, plus the GNU extensions real code uses |
 | **Targets** | x86-64 and ARM64 (AArch64) Linux, natively or cross-compiling either way |
@@ -288,13 +288,16 @@ ignored. An unknown flag is an error.
 | `-L`, `-l`, `-static`, `-shared`, `-r`, `-s`, `-pthread`, `-rdynamic` | Linking |
 | `-nostdlib`, `-nostartfiles`, `-nodefaultlibs` | Leave out the C library or startup files |
 | `-Wl,a,b`, `-Xlinker a` | Pass options to the linker |
-| `-Wp,...`, `-Xassembler a` | Pass options to the preprocessor or `as` |
+| `-Wp,...` | Pass options to the preprocessor |
+| `-Wa,a,b`, `-Xassembler a` | Pass options to `as`. The built-in assembler takes none: it ignores `--noexecstack`, `-g` and `--64` quietly and warns about others |
 | `--libc=mucc`, `--libc=system` | Which C library |
 | `--target=`, `-target` | Build for x86-64 or ARM64 |
 | `-fpic`, `-fPIC`, `-fno-pic` | Position-independent code |
 | `-funsigned-char`, `-fsigned-char` | Whether plain `char` is unsigned |
 | `-fcommon`, `-fno-common`, `-fvisibility=` | Symbols |
-| `-msse3` to `-msse4.2`, `-maes`, `-mpclmul`, `-mpopcnt` | Define the macros for these extensions |
+| `-msse3` to `-msse4.2`, `-maes`, `-mpclmul`, `-mpopcnt` | Define gcc's macros for these extensions (`__SSE4_2__` and those before it, ...), so code takes its paths for them. The code mucc makes doesn't change |
+| `-march=`, `-mtune=`, `-mcpu=` | Accepted, and change nothing: mucc only emits instructions every x86-64 (or ARMv8-A) CPU has, `-march=native` included |
+| `-fno-builtin`, `-ffreestanding` | `fabs`, `fabsf` and `fabsl` are calls, not builtins |
 | `-fno-integrated-as`, `-fno-as-fallback`, `-fuse-ld=` | Use the system `as` or `ld`, or never `as` |
 | `-x c`, `-x assembler`, `-x assembler-with-cpp`, `-x none` | Type of the next inputs |
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP`, `-MG` | Dependency files |
@@ -305,31 +308,52 @@ ignored. An unknown flag is an error.
 
 ## Performance
 
+The mucc measured here is the release binary (`build/mucc`), which is
+built by mucc itself, as the one you download is. (A mucc built by
+`gcc -O2` compiles about 2.7 times as fast, as the last table shows.)
+
 How long each compiler takes to compile mucc's own source (`src/*.c`,
-32,137 lines, 56,252 after preprocessing) to objects:
+32,419 lines, 56,573 after preprocessing) to objects:
 
 | Compiler | Time | Lines per second | mucc is |
 | --- | ---: | ---: | ---: |
-| **mucc 1.4.0** | **0.56 s** | **99,000** | |
-| clang 21 `-O0` | 0.84 s | 66,000 | 1.5x faster |
-| gcc 15 `-O0` | 1.47 s | 38,000 | 2.6x faster |
-| clang 21 `-O2` | 5.46 s | 10,000 | 9.7x faster |
-| gcc 15 `-O2` | 7.83 s | 7,200 | 14x faster |
+| **mucc 1.4.0** | **0.54 s** | **105,000** | |
+| clang 21 `-O0` | 0.84 s | 67,000 | 1.6x faster |
+| gcc 15 `-O0` | 1.46 s | 39,000 | 2.7x faster |
+| clang 21 `-O2` | 5.27 s | 11,000 | 9.8x faster |
+| gcc 15 `-O2` | 7.72 s | 7,300 | 14x faster |
+
+And SQLite's amalgamation, `sqlite3.c` 3.38.2 (239,379 lines in one
+file), the usual test of compile speed. tcc, the Tiny C Compiler, is much
+faster still: it generates machine code directly in one pass. (It can't
+compile mucc's own source, which uses `__int128`.)
+
+| Compiler | Time | Lines per second | mucc is |
+| --- | ---: | ---: | ---: |
+| tcc 0.9.27 | 0.05 s | 4,200,000 | 16x slower |
+| **mucc 1.4.0** | **0.79 s** | **302,000** | |
+| clang 21 `-O0` | 0.93 s | 255,000 | 1.2x faster |
+| gcc 15 `-O0` | 2.35 s | 102,000 | 3.0x faster |
+| clang 21 `-O2` | 12.78 s | 19,000 | 16x faster |
+| gcc 15 `-O2` | 16.51 s | 14,000 | 21x faster |
 
 How fast the code each one makes runs, using mucc itself as the program:
 mucc built four ways, each compiling the same source.
 
 | mucc built by | Time | Slower than gcc `-O2` by |
 | --- | ---: | ---: |
-| gcc `-O2` | 0.23 s | |
-| gcc `-O0` | 0.40 s | 1.7x |
-| mucc, with glibc (`--libc=system`) | 0.46 s | 1.9x |
-| mucc, with its musl (the default) | 0.65 s | 2.7x |
+| gcc `-O2` | 0.24 s | |
+| gcc `-O0` | 0.37 s | 1.6x |
+| mucc, with glibc (`--libc=system`) | 0.43 s | 1.8x |
+| mucc, with its musl (the default) | 0.64 s | 2.7x |
 
-Measured on an Intel Core i7-1185G7 laptop under WSL 2 with gcc 15.2 and
-clang 21.1: real time, best of 7 with the compilers taking turns, one
-file at a time. Your numbers will differ; run `make bench`
-(`test/bench.sh`) to measure them on your machine.
+Measured on an Intel Core i7-1185G7 laptop under WSL 2 with gcc 15.2,
+clang 21.1 and tcc 0.9.27: real time, best of 7 with the compilers taking
+turns, one file at a time. Your numbers will differ; run `make bench`
+(`test/bench.sh`) to measure them on your machine. It times `sqlite3.c`
+too if you download the amalgamation from
+[sqlite.org](https://sqlite.org/download.html) and give its path:
+`make bench SQLITE3_C=path/to/sqlite3.c`.
 
 In short: mucc compiles faster than gcc and clang, and the code it makes
 is a little slower than theirs at `-O0`. The bundled musl's `malloc` and
@@ -418,6 +442,18 @@ The released binary carries its headers (`include/`), musl and Linux's
 headers inside it and reads them from memory. On ARM64,
 `runtime/arm64.c` provides the `long double` and 128-bit routines that
 gcc's libgcc would.
+
+### What's inside the binary
+
+Of the 8.8 MB of `build/mucc` on x86-64:
+
+| Part | Size |
+| --- | ---: |
+| Linux's headers (`<linux/*.h>`, `<asm/*.h>`, ...) | 3.7 MB |
+| musl's `libc.a` and startup files | 3.2 MB |
+| The compiler itself, code and data (with the musl functions it uses) | 1.3 MB |
+| musl's headers | 0.5 MB |
+| mucc's own headers (`include/`) | 0.1 MB |
 
 ## Testing
 

@@ -18,6 +18,57 @@
 Downloads for each release are on the
 <a href="https://github.com/Dom-Yan/Mucc/releases">releases page</a>.</p>
 
+<h2 id="v1.4.1">Mucc 1.4.1 (not yet released)</h2>
+<ul>
+  <li>Faster: tokenizing tests a word's first character before calling
+    anything, which makes compiling <code>sqlite3.c</code> 8% faster.</li>
+  <li>The bundled musl's <code>sqrt</code>, <code>lrint</code>,
+    <code>fma</code> and the like are one instruction each on x86-64,
+    not portable C: a loop of <code>sqrt</code> and <code>lrint</code>
+    calls runs 14 times as fast
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/12">#12</a>).</li>
+  <li>A link that goes to the system's <code>ld</code> (a linker script,
+    <code>-fuse-ld=bfd</code>) works with the bundled musl
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/16">#16</a>).</li>
+  <li><code>-Wa,</code> options reach the assembler, and the built-in
+    assembler names those it ignores
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/17">#17</a>).</li>
+  <li>Functions have their sizes in the symbol table, so profilers and
+    debuggers can tell which function an address is in
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/18">#18</a>).</li>
+  <li><code>__VA_OPT__</code> as C23 has it: off when the variable
+    arguments expand to nothing, <code>#__VA_OPT__(...)</code>, and
+    placemarkers with <code>##</code>
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/3">#3</a>,
+    <a href="https://github.com/Dom-Yan/Mucc/issues/4">#4</a>,
+    <a href="https://github.com/Dom-Yan/Mucc/issues/5">#5</a>).
+    A token pasted with <code>##</code> keeps the space before it.</li>
+  <li>New warnings, on by default as with gcc: <code>-Woverflow</code>
+    (<code>char c = 300</code>) and <code>-Wimplicit-int</code>
+    (<code>main() {}</code>); no more false <code>-Wformat</code> warning
+    for <code>enum : long long</code>
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/8">#8</a>,
+    <a href="https://github.com/Dom-Yan/Mucc/issues/9">#9</a>,
+    <a href="https://github.com/Dom-Yan/Mucc/issues/10">#10</a>).</li>
+  <li><code>fabs</code>, <code>fabsf</code> and <code>fabsl</code> are
+    builtins, so they need no <code>-lm</code>
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/11">#11</a>).</li>
+  <li><code>-fsyntax-only</code> rejects assigning to values that aren't
+    lvalues (<a href="https://github.com/Dom-Yan/Mucc/issues/2">#2</a>);
+    a struct too large to lay out is an error, not an "incomplete type"
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/7">#7</a>);
+    cross-compiling to ARM64, <code>LDBL_MAX</code> is finite
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/6">#6</a>).</li>
+  <li>Undefined behavior in mucc fixed, found by a new CI job that runs
+    the tests with mucc built with AddressSanitizer and
+    UndefinedBehaviorSanitizer
+    (<a href="https://github.com/Dom-Yan/Mucc/issues/13">#13</a>,
+    <a href="https://github.com/Dom-Yan/Mucc/issues/14">#14</a>,
+    <a href="https://github.com/Dom-Yan/Mucc/issues/15">#15</a>).</li>
+  <li><code>make bench SQLITE3_C=path/to/sqlite3.c</code> times SQLite's
+    amalgamation too, with tcc if it's installed.</li>
+</ul>
+
 <h2 id="v1.4.0">Mucc 1.4.0 (October 14, 2026)</h2>
 <ul>
   <li>64-bit ARM (AArch64) Linux: mucc runs there and makes programs for
