@@ -182,10 +182,13 @@ struct Token {
 // on the first character, so that's checked here, inline, before the
 // rest. strncmp, not memcmp, stops at the end of an `op` shorter than the
 // token instead of reading past it.
-static inline bool equal(Token *tok, char *op) {
-  return tok->loc[0] == op[0] && strncmp(tok->loc, op, tok->len) == 0 &&
-         op[tok->len] == '\0';
+static inline bool equal_(Token *tok, char *op) {
+  return strncmp(tok->loc, op, tok->len) == 0 && op[tok->len] == '\0';
 }
+// mucc doesn't inline, so the first-character test is a macro: most
+// calls fail there without a function call. It evaluates its arguments
+// twice, so they must have no side effects (none do).
+#define equal(tok, op) ((tok)->loc[0] == (op)[0] && equal_(tok, op))
 
 noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 2, 3)));
 Token *skip(Token *tok, char *op);

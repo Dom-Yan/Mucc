@@ -100,12 +100,15 @@ static Token *new_token(TokenKind kind, char *start, char *end) {
   return tok;
 }
 
-static bool startswith(char *p, char *q) {
+static bool startswith_(char *p, char *q) {
   while (*q)
     if (*p++ != *q++)
       return false;
   return true;
 }
+// The first character is tested inline, as in equal() (see mucc.h), and
+// the same rule holds: no arguments with side effects.
+#define startswith(p, q) (*(p) == *(q) && startswith_(p, q))
 
 // Tests for ASCII characters. <ctype.h>'s find their table through a
 // function call each time, which the tokenizer's loops feel.
@@ -903,6 +906,19 @@ static void convert_universal_chars(char *p) {
   *q = '\0';
 }
 
+// The start of the line with the first backslash-u or backslash-U, where
+// convert_universal_chars() has work to do. (The line's start, so an
+// escaped backslash before it is still read as a pair.)
+static char *first_ucn(char *p) {
+  char *u = strstr(p, "\\u"), *U = strstr(p, "\\U");
+  char *q = !u ? U : (U && U < u) ? U : u;
+  if (!q)
+    return p;
+  while (q > p && q[-1] != '\n')
+    q--;
+  return q;
+}
+
 Token *tokenize_file(char *path) {
   char *p = read_file(path);
   if (!p)
@@ -934,7 +950,7 @@ Token *tokenize_file(char *path) {
     ucn = strstr(p, "\\u") || strstr(p, "\\U");
   }
   if (ucn)
-    convert_universal_chars(p);
+    convert_universal_chars(first_ucn(p));
 
   return tokenize(add_input_file(path, p));
 }

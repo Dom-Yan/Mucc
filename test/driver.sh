@@ -226,6 +226,12 @@ check 'ignored options'
 printf '\xef\xbb\xbfxyz\n' | $mucc -E -o- -xc - | grep -q '^xyz'
 check 'BOM marker'
 
+# \u escapes are converted from the first line that has one, but an
+# escaped backslash before a u, even on that line, stays a backslash.
+printf '"\\\\u0041" "\\u0042\\\\u0043"\n"\\u0044"\n' |
+    $mucc -E -P -o- -xc - | tr -d '\n' | grep -qx '"\\\\u0041" "B\\\\u0043""D"'
+check '\u escapes after an escaped backslash'
+
 # Inline functions
 echo 'inline void foo() {}' > $tmp/inline1.c
 echo 'inline void foo() {}' > $tmp/inline2.c
