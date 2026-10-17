@@ -365,11 +365,37 @@ bool is_aggregate(Type *ty) {
   return false;
 }
 
+// put_str() and put_long() write `s` or `val` in decimal at `p` and
+// return the end, for operands made for nearly every load and store,
+// where snprintf() was slow enough to show in profiles.
+static char *put_str(char *p, char *s) {
+  while (*s)
+    *p++ = *s++;
+  *p = '\0';
+  return p;
+}
+
+static char *put_long(char *p, int64_t val) {
+  char digits[20];
+  int n = 0;
+  uint64_t u = val < 0 ? -(uint64_t)val : val;
+  do {
+    digits[n++] = '0' + u % 10;
+    u /= 10;
+  } while (u);
+  if (val < 0)
+    *p++ = '-';
+  while (n)
+    *p++ = digits[--n];
+  *p = '\0';
+  return p;
+}
+
 // Returns the memory operand of a local variable, e.g. "-8(%rbp)".
 // The string is overwritten by the next call.
 static char *local_addr(Obj *var) {
   static char buf[32];
-  snprintf(buf, sizeof(buf), "%d(%%rbp)", var->offset);
+  put_str(put_long(buf, var->offset), "(%rbp)");
   return buf;
 }
 
@@ -1587,7 +1613,7 @@ static char *simple_operand(Node *node) {
     int64_t val = fold(node);
     if (val != (int32_t)val)
       return NULL;
-    snprintf(buf, sizeof(buf), "  mov $%ld, %%rdi", val);
+    put_str(put_long(put_str(buf, "  mov $"), val), ", %rdi");
     return buf;
   }
 
@@ -1596,16 +1622,11 @@ static char *simple_operand(Node *node) {
   if (!var || !is_int_or_ptr(var->ty))
     return NULL;
 
-  char *insn = var->ty->is_unsigned ? "movz" : "movs";
-  char *src = var_operand(var);
-  if (var->ty->size == 1)
-    snprintf(buf, sizeof(buf), "  %sbl %s, %%edi", insn, src);
-  else if (var->ty->size == 2)
-    snprintf(buf, sizeof(buf), "  %swl %s, %%edi", insn, src);
-  else if (var->ty->size == 4)
-    snprintf(buf, sizeof(buf), "  movsxd %s, %%rdi", src);
-  else
-    snprintf(buf, sizeof(buf), "  mov %s, %%rdi", src);
+  char *insn = var->ty->size == 1 ? (var->ty->is_unsigned ? "  movzbl " : "  movsbl ")
+             : var->ty->size == 2 ? (var->ty->is_unsigned ? "  movzwl " : "  movswl ")
+             : var->ty->size == 4 ? "  movsxd " : "  mov ";
+  char *dest = var->ty->size <= 2 ? ", %edi" : ", %rdi";
+  put_str(put_str(put_str(buf, insn), var_operand(var)), dest);
   return buf;
 }
 
@@ -2380,10 +2401,10 @@ static void gen_expr(Node *node) {
       Node *base = node->lhs;
       if (base->kind == ND_VAR && base->var->is_local && base->ty->kind != TY_VLA &&
           !base->var->is_overaligned) {
-        snprintf(addr, sizeof(addr), "%ld(%%rbp)", base->var->offset + mem->offset);
+        put_str(put_long(addr, base->var->offset + mem->offset), "(%rbp)");
       } else {
         gen_addr(base);
-        snprintf(addr, sizeof(addr), "%ld(%%rax)", mem->offset);
+        put_str(put_long(addr, mem->offset), "(%rax)");
       }
       // A bit-field's whole unit, not its promoted type (see add_type())
       if (mem->is_bitfield)
