@@ -878,6 +878,16 @@ static void take_spacing(Token *first, Token *cur, Token *tok) {
   }
 }
 
+static Token *subst(Token *tok, MacroArg *args);
+
+// `__VA_OPT__(...)` at `tok`: if __VA_ARGS__ is empty, nothing (an EOF);
+// otherwise what's in the parentheses, with the parameters replaced.
+static Token *va_opt(Token **rest, Token *tok, MacroArg *args) {
+  MacroArg *arg = read_macro_arg_one(&tok, tok->next->next, true);
+  *rest = skip(tok, ")");
+  return has_varargs(args) ? subst(arg->tok, args) : new_eof(tok);
+}
+
 // Replace func-like macro parameters with given arguments.
 static Token *subst(Token *tok, MacroArg *args) {
   Token head = {};
@@ -895,6 +905,13 @@ static Token *subst(Token *tok, MacroArg *args) {
   }
 
   while (tok->kind != TK_EOF) {
+    // C23's #__VA_OPT__(...): __VA_OPT__'s replacement, stringized
+    if (equal(tok, "#") && equal(tok->next, "__VA_OPT__") && equal(tok->next->next, "(")) {
+      Token *hash = tok;
+      cur = cur->next = stringize(hash, va_opt(&tok, tok->next, args));
+      continue;
+    }
+
     // "#" followed by a parameter is replaced with stringized actuals.
     // (In assembly, another `#` is just copied, as with gcc.)
     if (equal(tok, "#") && (!opt_asm_cpp || find_arg(args, tok->next))) {
@@ -990,11 +1007,8 @@ static Token *subst(Token *tok, MacroArg *args) {
     // empty token list. Otherwise, __VA_OPT__(x) is expanded to x, with
     // the parameters in x replaced too.
     if (equal(tok, "__VA_OPT__") && equal(tok->next, "(")) {
-      MacroArg *arg = read_macro_arg_one(&tok, tok->next->next, true);
-      if (has_varargs(args))
-        for (Token *t = subst(arg->tok, args); t->kind != TK_EOF; t = t->next)
-          cur = cur->next = t;
-      tok = skip(tok, ")");
+      for (Token *t = va_opt(&tok, tok, args); t->kind != TK_EOF; t = t->next)
+        cur = cur->next = t;
       continue;
     }
 

@@ -518,6 +518,15 @@ int main() {
   ASSERT(0, strcmp(VSTR(VO5(a)), "f(0, a)"));
   ASSERT(0, strcmp(VSTR(VO5(a, VO_EMPTY VO_EMPTY)), "f(0, a)"));
 
+  // #__VA_OPT__(...) stringizes its replacement
+#define VO6(...) #__VA_OPT__(x y)
+#define VO7(X, ...) #__VA_OPT__(X##X X##X)
+  ASSERT(0, strcmp(VO6(1), "x y"));
+  ASSERT(0, strcmp(VO6(), ""));
+  ASSERT(0, strcmp(VO7(, 0), ""));
+  ASSERT(0, strcmp(VO7(a, 0), "aa aa"));
+  ASSERT(0, strcmp(VO7(a), ""));
+
   // gcc's description of the target
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__ || defined __STDC_NO_COMPLEX__ || __CHAR_BIT__ != 8
   ASSERT(0, 1);
