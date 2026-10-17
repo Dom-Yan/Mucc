@@ -25,6 +25,7 @@ bool opt_fcommon = true;
 char *opt_fvisibility; // -fvisibility=hidden and so on: definitions' default
 bool opt_fpic;
 bool opt_funsigned_char; // -funsigned-char: plain char is unsigned
+bool opt_fno_builtin; // -fno-builtin, -ffreestanding: fabs is only a function
 bool opt_asm_cpp; // preprocessing assembly (.S), not C
 int opt_std = 2017; // -std=: 1989, 1999, 2011, 2017 or 2023 (C17 by default, as gcc 14)
 
@@ -1133,6 +1134,12 @@ static void parse_args(int argc, char **argv) {
       strarray_push(&opt_warnings, argv[i] + 2);
       continue;
     }
+
+    // These make fabs a call to the library's again, not a builtin (see
+    // funcall() in parser.c), and are otherwise ignored, below.
+    if (!strcmp(argv[i], "-fno-builtin") || !strncmp(argv[i], "-fno-builtin-fabs", 17) ||
+        !strcmp(argv[i], "-ffreestanding"))
+      opt_fno_builtin = true;
 
     if (is_ignored_option(argv[i]))
       continue;

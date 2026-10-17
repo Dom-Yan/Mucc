@@ -783,6 +783,7 @@ extern bool opt_g;
 extern StringArray opt_warnings;
 extern bool opt_fpic;
 extern bool opt_funsigned_char;
+extern bool opt_fno_builtin;
 extern bool opt_asm_cpp;
 extern bool opt_fcommon;
 extern char *opt_fvisibility;

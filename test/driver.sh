@@ -1096,6 +1096,18 @@ int main(void) { double complex z = 1 + 2 * I; return creal(z) + cimag(conj(z)) 
   $mucc -o $tmp/opt/cp -xc - && $tmp/opt/cp
 check 'creal, cimag and conj without -lm'
 
+# So are fabs, fabsf and fabsl, but not with -fno-builtin or -ffreestanding
+echo '#include <math.h>
+int main(int argc, char **argv) {
+  volatile double z = -0.0; volatile float f = -2.5f; volatile long double l = -3;
+  return fabs(-argc) == 1 && !signbit(fabs(z)) && fabsf(f) == 2.5f && fabsl(l) == 3 ? 0 : 1;
+}' > $tmp/opt/absval.c
+$mucc -o $tmp/opt/absval $tmp/opt/absval.c && $tmp/opt/absval &&
+    [ "$($mucc -S -o- $tmp/opt/absval.c | grep -c 'fabs')" = 0 ] &&
+    $mucc -S -o- -fno-builtin $tmp/opt/absval.c | grep -q 'fabsf' &&
+    $mucc -S -o- -ffreestanding $tmp/opt/absval.c | grep -q 'fabsl'
+check 'fabs, fabsf and fabsl without -lm'
+
 # -fvisibility=hidden: definitions are hidden unless the attribute says
 # otherwise; declarations of others' symbols aren't touched.
 printf 'int f(void) { return 1; }\nint x = 2;\n__attribute__((visibility("default"))) int g(void) { return 3; }\nint h(void);\nint k(void) { return h(); }\n' > $tmp/vis.c

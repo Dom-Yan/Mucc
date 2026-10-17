@@ -290,6 +290,7 @@ static void warn_div_by_zero(Node *lhs, Node *rhs, Token *tok);
 static void warn_shift_count(Node *lhs, Node *rhs, Token *tok);
 static void warn_format(Obj *fn, Node *args);
 static void warn_switch(Node *sw);
+static Node *copysign_node(Node *x, Node *from, Type *ty, Token *tok);
 
 //---------- Scopes and name lookup ------------------------------------------
 
@@ -6348,6 +6349,18 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
     return new_cast(new_binary(ND_COMMA, val, new_var_node(z, t), t), ty->return_ty);
   }
 
+  // fabs, fabsf and fabsl, declared as the C library has them, are
+  // builtins too, as with gcc, unless -fno-builtin or -ffreestanding: no
+  // -lm, and no call.
+  if (!opt_fno_builtin && fn->kind == ND_VAR && fn->var->is_function &&
+      !fn->var->is_definition && nargs == 1 && is_flonum(ty->return_ty) &&
+      ty->params && !ty->params->next && !ty->is_variadic &&
+      ty->params->kind == ty->return_ty->kind &&
+      (!strcmp(name, "fabs") ? ty->return_ty->kind == TY_DOUBLE
+       : !strcmp(name, "fabsf") ? ty->return_ty->kind == TY_FLOAT
+       : !strcmp(name, "fabsl") && ty->return_ty->kind == TY_LDOUBLE))
+    return copysign_node(head.next, NULL, ty->return_ty, fn->tok);
+
   // Errors about the call's value point at the function name.
   Node *node = new_unary(ND_FUNCALL, fn, fn->tok);
   node->func_ty = ty;
@@ -7040,6 +7053,29 @@ static Node *new_comma(Node *lhs, Node *rhs, Token *tok) {
   return new_binary(ND_COMMA, lhs, rhs, tok);
 }
 
+// fabs(x), or with `from`, copysign(x, from), of type `ty`: they clear and
+// copy the sign bit, as gcc does, so they need no libm and get -0.0 and
+// NaNs right.
+static Node *copysign_node(Node *x, Node *from, Type *ty, Token *tok) {
+  Node *init;
+  Obj *var = fp_temp(x, ty, &init, tok);
+  uint64_t mask;
+  Node *word = sign_word(var, &mask, tok);
+  Node *bits = new_binary(ND_BITAND, sign_word(var, &mask, tok),
+                          new_ulong(~mask, tok), tok);
+  if (from) {
+    Node *init2;
+    Obj *src = fp_temp(from, ty, &init2, tok);
+    init = new_comma(init, init2, tok);
+    bits = new_binary(ND_BITOR, bits,
+                      new_binary(ND_BITAND, sign_word(src, &mask, tok),
+                                 new_ulong(mask, tok), tok),
+                      tok);
+  }
+  Node *set = new_binary(ND_ASSIGN, word, bits, tok);
+  return new_comma(init, new_comma(set, new_var_node(var, tok), tok), tok);
+}
+
 static Node *new_cond(Node *c, Node *then, Node *els, Token *tok) {
   Node *node = new_node(ND_COND, tok);
   node->cond = c;
@@ -7150,28 +7186,10 @@ static Node *fp_builtin(Token *start, Node **args) {
     return new_comma(init_a, new_comma(init_b, res, tok), tok);
   }
 
-  // fabs and copysign clear and copy the sign bit, as gcc does, so they
-  // need no libm and get -0.0 and NaNs right.
   if (!strncmp(name, "__builtin_fabs", 14) || !strncmp(name, "__builtin_copysign", 18)) {
     bool is_fabs = name[10] == 'f';
     Type *ty = fp_suffix_type(start, is_fabs ? 14 : 18);
-    Node *init;
-    Obj *var = fp_temp(args[0], ty, &init, tok);
-    uint64_t mask;
-    Node *word = sign_word(var, &mask, tok);
-    Node *bits = new_binary(ND_BITAND, sign_word(var, &mask, tok),
-                            new_ulong(~mask, tok), tok);
-    if (!is_fabs) {
-      Node *init2;
-      Obj *from = fp_temp(args[1], ty, &init2, tok);
-      init = new_comma(init, init2, tok);
-      bits = new_binary(ND_BITOR, bits,
-                        new_binary(ND_BITAND, sign_word(from, &mask, tok),
-                                   new_ulong(mask, tok), tok),
-                        tok);
-    }
-    Node *set = new_binary(ND_ASSIGN, word, bits, tok);
-    return new_comma(init, new_comma(set, new_var_node(var, tok), tok), tok);
+    return copysign_node(args[0], is_fabs ? NULL : args[1], ty, tok);
   }
 
   // The classifications, on one argument of any floating type
