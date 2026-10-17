@@ -750,6 +750,13 @@ int printf(const char *, ...);
 void f(int a) { printf("%d\n", a, a); }
 EOF
 
+# An enum of a 64-bit type goes with %ld and %lld.
+target=-std=c23 expect_clean '-Wformat with enum : long long' <<'EOF'
+int printf(const char *, ...);
+enum E : long long { A = 1 }; enum F : long { B = 1 };
+void f(enum E e, enum F g) { printf("%lld %ld %ld %lld\n", e, e, g, g); }
+EOF
+
 expect_warning "1:12: warning: 'unused' defined but not used [-Wunused-function]" <<'EOF'
 static int unused(void) { return 0; }
 EOF

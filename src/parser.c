@@ -8509,8 +8509,11 @@ static bool format_arg_ok(Type *want, Type *arg, char conv, char *len) {
                                       : arg->kind == TY_DOUBLE || arg->kind == TY_FLOAT;
     if (!is_integer(arg))
       return false;
+    // (An enum doesn't keep whether its fixed type, `enum E : long long`,
+    // was long or long long, so it goes with either.)
     if (want->size == 8)
-      return arg->size == 8 && (any64 || arg->is_distinct == want->is_distinct);
+      return arg->size == 8 && (any64 || arg->kind == TY_ENUM ||
+                                arg->is_distinct == want->is_distinct);
     return arg->size <= 4;
   }
 
