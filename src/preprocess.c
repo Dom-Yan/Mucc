@@ -826,7 +826,8 @@ static Token *stringize(Token *hash, Token *arg) {
   return tok;
 }
 
-// Concatenate two tokens to create a new token.
+// Concatenate two tokens to create a new token. It takes the place of
+// `lhs`, and its spacing: in `[a x##y]`, a space before xy.
 static Token *paste(Token *lhs, Token *rhs) {
   // Paste the two tokens.
   char *buf = format("%.*s%.*s", lhs->len, lhs->loc, rhs->len, rhs->loc);
@@ -835,6 +836,8 @@ static Token *paste(Token *lhs, Token *rhs) {
   Token *tok = tokenize(new_file(lhs->file->name, lhs->file->file_no, buf));
   if (tok->kind == TK_EOF || tok->next->kind != TK_EOF)
     error_tok(lhs, "pasting forms '%s', an invalid token", buf);
+  tok->at_bol = lhs->at_bol;
+  tok->has_space = lhs->has_space;
   return tok;
 }
 
@@ -864,6 +867,15 @@ static bool has_varargs(MacroArg *args) {
     if (ap->is_va_args)
       return ap->tok->kind != TK_EOF && expand_arg(ap)->kind != TK_EOF;
   return false;
+}
+
+// The first of the tokens added after `first` (up to `cur`) takes the
+// spacing of `tok`, whose place they take.
+static void take_spacing(Token *first, Token *cur, Token *tok) {
+  if (cur != first) {
+    first->next->at_bol = tok->at_bol;
+    first->next->has_space = tok->has_space;
+  }
 }
 
 // Replace func-like macro parameters with given arguments.
@@ -954,18 +966,22 @@ static Token *subst(Token *tok, MacroArg *args) {
           tok = rhs;
           continue;
         }
+        Token *first = cur;
         if (arg2) {
           for (Token *t = arg2->tok; t->kind != TK_EOF; t = t->next)
             cur = cur->next = copy_token(t);
         } else {
           cur = cur->next = copy_token(rhs);
         }
+        take_spacing(first, cur, tok);
         tok = rhs->next;
         continue;
       }
 
+      Token *first = cur;
       for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next)
         cur = cur->next = copy_token(t);
+      take_spacing(first, cur, tok);
       tok = tok->next;
       continue;
     }
@@ -988,10 +1004,7 @@ static Token *subst(Token *tok, MacroArg *args) {
       Token *first = cur;
       for (Token *t = expand_arg(arg); t->kind != TK_EOF; t = t->next)
         cur = cur->next = copy_token(t);
-      if (cur != first) {
-        first->next->at_bol = tok->at_bol;
-        first->next->has_space = tok->has_space;
-      }
+      take_spacing(first, cur, tok);
       tok = tok->next;
       continue;
     }

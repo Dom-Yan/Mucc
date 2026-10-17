@@ -488,6 +488,13 @@ int main() {
 #define join(c, d) in_between(c hash_hash d)
   ASSERT(0, strcmp(join(x, y), "x ## y"));
 
+  // A pasted token keeps the space before it, as an argument does.
+#define M35(x, y) XSTR([x y##y x##x])
+#define M36(x) XSTR([a x##b])
+  ASSERT(0, strcmp(M35(p, q), "[p qq pp]"));
+  ASSERT(0, strcmp(M36(c), "[a cb]"));
+  ASSERT(0, strcmp(M36(), "[a b]"));
+
   // Parameters inside __VA_OPT__ are replaced, # and ## work there.
 #define VO1(a, ...) (a __VA_OPT__(+ __VA_ARGS__ + a))
 #define VO2(x, ...) #x __VA_OPT__(" " #x)
