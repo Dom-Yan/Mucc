@@ -1047,6 +1047,22 @@ $mucc -c -Xassembler --noexecstack -specs=x.specs --param max-inline-insns-singl
   --param=l1-cache-size=32 -mcmodel=small -o $tmp/opt/a.o $tmp/opt/a.c
 check 'options for as and tuning, ignored'
 
+# -Wa,ARG,ARG goes to as, split at commas. The built-in assembler takes
+# none: it names those that would change something.
+$mucc -c -Wa,--noexecstack,-g -Wa,--64 -o $tmp/opt/a.o $tmp/opt/a.c 2> $tmp/opt/err &&
+    [ ! -s $tmp/opt/err ]
+check '-Wa, with options that change nothing'
+$mucc -c -Wa,-al,--bogus -o $tmp/opt/a.o $tmp/opt/a.c 2>&1 |
+    grep -q 'the built-in assembler ignores --bogus'
+check '-Wa, with options the built-in assembler ignores'
+[ -z "$($mucc -fsyntax-only -Wa,--bogus $tmp/opt/a.c 2>&1)" ]
+check '-Wa, with nothing to assemble'
+if command -v as > /dev/null; then
+  $mucc -fno-integrated-as -c -Wa,--noexecstack,-W -### -o $tmp/opt/a.o $tmp/opt/a.c 2>&1 |
+      grep -q '^as .* --noexecstack -W$'
+  check '-Wa, with as'
+fi
+
 $mucc -print-search-dirs | grep -q '^libraries: ='
 check '-print-search-dirs'
 

@@ -856,6 +856,15 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
+    // -Wa,ARG,...: -Xassembler ARG for each ARG, split at commas, as with
+    // -Wl,. (Before -W, the warning options, below.)
+    if (!strncmp(argv[i], "-Wa,", 4)) {
+      char *s = strdup(argv[i] + 4);
+      for (char *arg = strtok(s, ","); arg; arg = strtok(NULL, ","))
+        strarray_push(&as_extra_args, arg);
+      continue;
+    }
+
     // -Xlinker ARG is -Wl,ARG, in its place among the inputs, but ARG
     // isn't split at commas.
     if (!strcmp(argv[i], "-Xlinker")) {
@@ -1541,6 +1550,24 @@ static void run_as(char *input, char *output) {
   run_subprocess(cmd.data);
 }
 
+// Options for `as` that change nothing for the built-in assembler: its
+// objects always mark the stack non-executable and are for the 64-bit
+// target, and debug info is -g's to mucc, not to the assembler.
+static char *as_noop_flags[] = {"--noexecstack", "-g", "--64"};
+
+// The built-in assembler takes no options, so it names those it ignores
+// (that `as` would use, with -fno-integrated-as), except as_noop_flags[].
+static void warn_as_args(void) {
+  for (int i = 0; i < as_extra_args.len; i++) {
+    bool noop = false;
+    for (int j = 0; j < sizeof(as_noop_flags) / sizeof(*as_noop_flags); j++)
+      noop |= !strcmp(as_extra_args.data[i], as_noop_flags[j]);
+    if (!noop)
+      fprintf(stderr, "mucc: warning: the built-in assembler ignores %s "
+              "(-fno-integrated-as passes it to as)\n", as_extra_args.data[i]);
+  }
+}
+
 static void write_file(char *path, char *buf, size_t len) {
   FILE *out = open_file(path);
   fwrite(buf, len, 1, out);
@@ -2135,6 +2162,8 @@ int main(int argc, char **argv) {
   }
   if (ncompiled > 1 && opt_o && (opt_c || opt_S || opt_E))
     error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
+  if (opt_integrated_as && ncompiled && !opt_S && !opt_E && !opt_M && !opt_syntax_only)
+    warn_as_args();
 
   StringArray ld_args = {};
 
