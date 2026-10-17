@@ -712,8 +712,10 @@ EOF
 
 # A constant that a narrower type can hold neither signed nor unsigned,
 # in an initializer, an assignment, an argument or a return
-expect_warning "1:10: warning: overflow in conversion from 'int' to 'char' changes value from '300' to '44' [-Woverflow]" <<'EOF'
-char c = 300;
+# (signed char: plain char is unsigned on ARM64, so it's "unsigned
+# conversion" there, as with gcc)
+expect_warning "1:17: warning: overflow in conversion from 'int' to 'signed char' changes value from '300' to '44' [-Woverflow]" <<'EOF'
+signed char c = 300;
 EOF
 expect_warning "1:19: warning: unsigned conversion from 'int' to 'unsigned char' changes value from '-129' to '127' [-Woverflow]" <<'EOF'
 unsigned char c = -129;
@@ -746,10 +748,11 @@ int g(void) { auto w = 1; return w; }
 EOF
 
 # ARM64's long double limits, cross-compiled on x86-64, whose long double
-# is narrower, are finite; a real overflow isn't.
-target=--target=aarch64-linux expect_clean "ARM64's LDBL_MAX" <<'EOF'
-#include <float.h>
-_Static_assert(LDBL_MAX * 0 == 0 && LDBL_MAX > 1e4932L, "LDBL_MAX is inf");
+# is narrower, are finite; a real overflow isn't. (No C library is needed,
+# so --libc=system, which needs none for this, not the ARM64 musl, which
+# may not be built.)
+target="--target=aarch64-linux --libc=system" expect_clean "ARM64's LDBL_MAX" <<'EOF'
+_Static_assert(0x1.ffffffffffffffffffffffffffffp+16383L * 0 == 0, "LDBL_MAX is inf");
 _Static_assert(1.18973149535723176508575932662800702e+4932L * 0 == 0, "musl's is inf");
 _Static_assert(-0x1.ffffffffffffffffffffffffffffp+16383L * 0 == 0, "-LDBL_MAX is inf");
 _Static_assert(1e4933L * 0 != 0 && 0x1.1p+16384L * 0 != 0, "an overflow is finite");
