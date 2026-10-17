@@ -1022,6 +1022,7 @@ static Token *subst(Token *tok, MacroArg *args, Token **ends_pm) {
       Token *first = cur, *va = tok, *group_pm;
       for (Token *t = va_opt(&tok, tok, args, &group_pm); t->kind != TK_EOF; t = t->next)
         cur = cur->next = t;
+      take_spacing(first, cur, va);
       pm = cur == first || group_pm != NULL;
       pm_tok = cur == first ? va : group_pm;
       continue;

@@ -543,6 +543,11 @@ int main() {
   ASSERT(0, strcmp(VO10(q), "b"));
   ASSERT(0, strcmp(VSTR(VO11C(VO11A())), "ab"));
 
+  // __VA_OPT__'s replacement takes the space before it
+#define VO12(name, ...) VSTR(S name __VA_OPT__(= { __VA_ARGS__ }))
+  ASSERT(0, strcmp(VO12(bar, 1, 2), "S bar = { 1, 2 }"));
+  ASSERT(0, strcmp(VO9(1), "[a xb]"));
+
   // gcc's description of the target
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__ || defined __STDC_NO_COMPLEX__ || __CHAR_BIT__ != 8
   ASSERT(0, 1);
