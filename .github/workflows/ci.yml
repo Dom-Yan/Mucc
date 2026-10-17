@@ -42,6 +42,27 @@ jobs:
           path: difftest-failures/
           if-no-files-found: ignore
 
+  # mucc built with AddressSanitizer and UndefinedBehaviorSanitizer, which
+  # stop it at a memory error or undefined behavior in mucc itself, running
+  # its tests. (Not leaks: mucc frees little on purpose before it exits.)
+  # Releases are built by mucc; gcc is only the sanitizers' compiler here.
+  sanitizers:
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=0
+      SAN: -fsanitize=address,undefined -fno-sanitize-recover=undefined
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build with sanitizers
+        run: make -j"$(nproc)" mucc CFLAGS="-std=c11 -O1 -g -fno-common -Wall -Wno-switch $SAN" LDFLAGS="$SAN"
+
+      - name: Install gdb
+        run: sudo apt-get install -y gdb
+
+      - name: Test
+        run: make test
+
   # The same tests with the bundled musl (--libc=mucc), including stages
   # 2 and 3 built against it, then the single binary (build/mucc, which
   # test-all makes) on Ubuntu, Fedora, Alpine, CentOS 7 and FROM scratch,

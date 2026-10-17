@@ -20,6 +20,13 @@ else
   unknown_insn='fwait'
 fi
 
+# A mucc built with AddressSanitizer (CI's sanitizer job) reserves terabytes
+# of address space and uses more memory, so for it, address space limits
+# are lifted and memory use isn't checked.
+asan=
+grep -qa __asan_init "${mucc%% *}" && asan=1
+limit() { [ $asan ] && echo unlimited || echo $1; }
+
 tmp=`mktemp -d /tmp/mucc-test-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
 echo > $tmp/empty.c
@@ -555,7 +562,7 @@ echo 'other' > $tmp/wrap0/other.h
 echo '#include_next <wrap.h>' > $tmp/wrap1/wrap.h
 echo 'wrapped' > $tmp/wrap2/wrap.h
 printf '#include <wrap.h>\n#include <other.h>\n#include <wrap.h>\n' > $tmp/wrap.c
-[ "$( (ulimit -v 1000000; timeout 10 $mucc -I$tmp/wrap0 -I$tmp/wrap1 -I$tmp/wrap2 \
+[ "$( (ulimit -v $(limit 1000000); timeout 10 $mucc -I$tmp/wrap0 -I$tmp/wrap1 -I$tmp/wrap2 \
   -E $tmp/wrap.c) | grep -c wrapped)" = 2 ]
 check '#include_next of a header found before'
 
@@ -563,7 +570,7 @@ check '#include_next of a header found before'
 # whose hidesets name many macros. Hidesets are shared, not copied for
 # each token: this took over 600 MB, and takes 210.
 printf '#include <tgmath.h>\nfloat f;\ndouble g(void) { return cos(sin(tan(f))); }\n' > $tmp/tgmath.c
-(ulimit -v 500000; $mucc -Iinclude -c -o $tmp/tgmath.o $tmp/tgmath.c)
+(ulimit -v $(limit 500000); $mucc -Iinclude -c -o $tmp/tgmath.o $tmp/tgmath.c)
 check 'nested <tgmath.h> macros in bounded memory'
 
 # A default include directory also given with -I is searched once, so
@@ -973,7 +980,7 @@ import resource, subprocess, sys
 subprocess.run(sys.argv[1:], check=True)
 print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' \
   $mucc -c -o $tmp/blob.o $tmp/blob.s 2> $tmp/err) &&
-  [ "$kb" -lt 51200 ] && [ ! -s $tmp/err ] &&
+  { [ $asan ] || [ "$kb" -lt 51200 ]; } && [ ! -s $tmp/err ] &&
   objcopy -O binary --only-section=.rodata $tmp/blob.o $tmp/blob.bin &&
   cmp $tmp/big.bin $tmp/blob.bin
 check ".incbin of 10 MB ($kb KB of memory)"
@@ -986,7 +993,7 @@ import resource, subprocess, sys
 subprocess.run(sys.argv[1:], check=True)
 print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)' \
   $mucc -std=c23 -c -o $tmp/embed.o $tmp/embed.c 2> $tmp/err) &&
-  [ "$kb" -lt 204800 ] && [ ! -s $tmp/err ] &&
+  { [ $asan ] || [ "$kb" -lt 204800 ]; } && [ ! -s $tmp/err ] &&
   objcopy -O binary --only-section=.rodata $tmp/embed.o $tmp/blob.bin &&
   cmp $tmp/big.bin $tmp/blob.bin
 check "#embed of 10 MB ($kb KB of memory)"
@@ -1007,8 +1014,10 @@ done
 
 # Out of memory is an error, not a crash. (mucc reserves memory 64 MB at a
 # time, so it can't start under a 50 MB address space limit.)
-(ulimit -v 51200; $mucc -c -o $tmp/oom.o $tmp/empty.c) 2>&1 | grep -q 'error: out of memory'
-check 'out of memory'
+if [ -z "$asan" ]; then
+  (ulimit -v 51200; $mucc -c -o $tmp/oom.o $tmp/empty.c) 2>&1 | grep -q 'error: out of memory'
+  check 'out of memory'
+fi
 
 # gcc's options that build tools use
 mkdir -p $tmp/opt/q
