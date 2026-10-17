@@ -1,13 +1,17 @@
 #!/bin/bash
 # The speed numbers in the README and on the website, measured so anyone
-# can check them on their own machine. Needs gcc; clang is measured too
-# if it's installed. `make bench` runs it.
+# can check them on their own machine. Needs gcc; clang and tcc are
+# measured too if they're installed. `make bench` runs it.
 #
-#   test/bench.sh [MUCC [RUNS]]   MUCC defaults to build/mucc, RUNS to 7
+#   test/bench.sh [MUCC [RUNS]]   MUCC defaults to build/mucc, the release
+#                                 binary, built by mucc; RUNS to 7
 #
 # 1. Compile speed: each compiler compiles mucc's own source, src/*.c, to
-#    objects one file at a time.
-# 2. Speed of the code made: mucc built by each compiler compiles the
+#    objects one file at a time. (Not tcc, which has no __int128.)
+# 2. With SQLITE3_C set to the path of SQLite's amalgamation, sqlite3.c
+#    (one big file, the usual test of compile speed; from sqlite.org, as
+#    in `make bench SQLITE3_C=~/sqlite3.c`), the same for it, tcc too.
+# 3. Speed of the code made: mucc built by each compiler compiles the
 #    same source. That's a real program (the compiler itself) rather than
 #    a small loop.
 #
@@ -22,16 +26,17 @@ tmp=`mktemp -d /tmp/mucc-bench-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
 cd $src
 
-# time_all NAME...: runs ${cmd[NAME]} once per src/*.c file, with the
-# file's name and an object file appended, RUNS rounds, and sets
-# ${best[NAME]} to the best total, in milliseconds
+# time_all NAME...: runs ${cmd[NAME]} once per file in $files (src/*.c
+# unless set), with the file's name and an object file appended, RUNS
+# rounds, and sets ${best[NAME]} to the best total, in milliseconds
 declare -A cmd best
+files=$(echo src/*.c)
 time_all() {
     local i name t0 t f
     for ((i = 0; i < runs; i++)); do
         for name in "$@"; do
             t0=$(date +%s%N)
-            for f in src/*.c; do
+            for f in $files; do
                 ${cmd[$name]} -c -o $tmp/out.o $f || exit 1
             done
             t=$(( ($(date +%s%N) - t0) / 1000000 ))
@@ -69,15 +74,38 @@ time_all "${names[@]}"
 echo "Compiling src/*.c to objects (lines/s counts the $pp_lines lines"
 echo "mucc -E gives, headers included)"
 echo
-echo "| Compiler       |    Time | Lines/s | mucc is |"
-echo "| -------------- | ------: | ------: | ------: |"
-for n in "${names[@]}"; do
-    printf '| %-14s | %5s s | %7d | %7s |\n' "$n" $(secs ${best[$n]}) \
-        $((pp_lines * 1000 / ${best[$n]})) $(ratio ${best[$n]} ${best[${names[0]}]})
-done
-echo
+table() { # lines, names...
+    local lines=$1 n; shift
+    echo "| Compiler       |    Time | Lines/s | mucc is |"
+    echo "| -------------- | ------: | ------: | ------: |"
+    for n in "$@"; do
+        printf '| %-14s | %5s s | %7d | %7s |\n' "$n" $(secs ${best[$n]}) \
+            $((lines * 1000 / ${best[$n]})) $(ratio ${best[$n]} ${best[$1]})
+    done
+    echo
+}
+table $pp_lines "${names[@]}"
 
-# 2. Speed of the code made: mucc itself, built four ways, each
+# 2. sqlite3.c, if SQLITE3_C names it, with tcc too
+if [ -n "$SQLITE3_C" ]; then
+    [ -f "$SQLITE3_C" ] || { echo "SQLITE3_C: no such file: $SQLITE3_C"; exit 1; }
+    files=$SQLITE3_C
+    best=()
+    names=("mucc $($mucc -dumpversion)")
+    for c in "gcc -O0" "gcc -O2" "clang -O0" "clang -O2" tcc; do
+        command -v ${c%% *} > /dev/null || continue
+        names+=("$c")
+        cmd["$c"]="$c -w"
+    done
+    time_all "${names[@]}"
+    sq_lines=$(wc -l < $SQLITE3_C)
+    echo "Compiling $(basename $SQLITE3_C) ($sq_lines lines) to an object"
+    echo
+    table $sq_lines "${names[@]}"
+    files=$(echo src/*.c)
+fi
+
+# 3. Speed of the code made: mucc itself, built four ways, each
 # compiling src/*.c against the system's headers
 mkdir $tmp/m
 ln -s $src/include $tmp/m/include

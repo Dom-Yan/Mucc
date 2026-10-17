@@ -284,6 +284,7 @@ test-bootstrap: build/mucc
 
 # The speed numbers in the README, measured on this machine (see
 # test/bench.sh). Needs gcc; clang and tcc are measured if installed.
+# SQLITE3_C=path/to/sqlite3.c times SQLite's amalgamation too.
 bench: build/mucc
 	test/bench.sh build/mucc
 
