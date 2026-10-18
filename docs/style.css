@@ -1,31 +1,37 @@
 /* Mucc documentation: a sidebar, a link bar, and pages in the style of
    LLVM's documentation. No scripts, no web fonts. */
 
+/* A gray page, with dark text, and white boxes for code, tables and
+   notes so they stand out from it. */
 :root {
-  --text: #222;
-  --muted: #555;
-  --link: #0b5aa2;
-  --bar: #2f2f2f;
+  --page: #e4e5e7;
+  --text: #1c1c1c;
+  --muted: #444;
+  --link: #0a4f91;
+  --bar: #2b2b2b;
   --bar-text: #f2f2f2;
-  --h2: #3c3c3c;
-  --h3: #e4e4e4;
-  --side: #f3f3f3;
-  --border: #c8c8c8;
-  --code-bg: #f5f5f5;
+  --h2: #3a3a3a;
+  --h3: #cfd1d4;
+  --side: #d6d8db;
+  --here: #bcc6d2;
+  --border: #a9acb0;
+  --box: #fff;
+  --code-bg: #f7f7f7;
+  --inline-code: #d4d6d9;
   --note-bg: #eef4fa;
-  --note-border: #6a9bc8;
+  --note-border: #4f86bb;
   --warn-bg: #fdf4e3;
-  --warn-border: #d39b2c;
+  --warn-border: #c58a17;
 }
 
 * { box-sizing: border-box; }
 
-html { background: #fff; }
+html { background: var(--page); }
 
 body {
   margin: 0;
   color: var(--text);
-  background: #fff;
+  background: var(--page);
   font: 15px/1.55 "Lucida Grande", "Lucida Sans Unicode", Geneva, Verdana, Arial, sans-serif;
 }
 
@@ -57,7 +63,14 @@ a:hover { text-decoration: underline; }
   max-height: 100vh;
   overflow-y: auto;
 }
-.sidebar img { display: block; width: 200px; height: auto; margin: 0 auto 12px; }
+.sidebar .name {
+  display: block;
+  font-size: 26px;
+  font-weight: bold;
+  color: var(--text);
+  letter-spacing: .02em;
+}
+.sidebar .name:hover { text-decoration: none; }
 .sidebar h3 {
   margin: 18px 0 6px;
   padding: 0;
@@ -70,10 +83,10 @@ a:hover { text-decoration: underline; }
 .sidebar ul { list-style: none; margin: 0; padding: 0; }
 .sidebar li { margin: 2px 0; }
 .sidebar li a { display: block; padding: 2px 6px; border-radius: 3px; }
-.sidebar li a.here { background: #dde6ef; color: #000; font-weight: bold; }
+.sidebar li a.here { background: var(--here); color: #000; font-weight: bold; }
 .sidebar .download {
   display: block;
-  margin: 4px 0 0;
+  margin: 12px 0 0;
   padding: 7px 10px;
   text-align: center;
   background: var(--bar);
@@ -82,7 +95,7 @@ a:hover { text-decoration: underline; }
   font-weight: bold;
 }
 .sidebar .download:hover { background: #4a4a4a; text-decoration: none; }
-.sidebar .small { color: var(--muted); font-size: 12px; margin-top: 6px; text-align: center; }
+.sidebar .small { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 
 .content {
   flex: 1 1 auto;
@@ -127,7 +140,7 @@ code, pre, kbd {
   font-family: Consolas, "DejaVu Sans Mono", Menlo, "Liberation Mono", monospace;
   font-size: 13.5px;
 }
-code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+code { background: var(--inline-code); padding: 1px 4px; border-radius: 3px; }
 pre {
   background: var(--code-bg);
   border: 1px solid var(--border);
@@ -142,7 +155,9 @@ table {
   border-collapse: collapse;
   margin: 10px 0 16px;
   font-size: 14px;
+  background: var(--box);
 }
+td code { background: #ececec; }
 th, td {
   border: 1px solid var(--border);
   padding: 5px 9px;
@@ -151,7 +166,7 @@ th, td {
 }
 th { background: var(--h3); }
 td.num, th.num { text-align: right; }
-tr.mucc td { font-weight: bold; background: #f4f8fc; }
+tr.mucc td { font-weight: bold; background: #eaf1f8; }
 .table-wrap { overflow-x: auto; }
 
 /* Notes and warnings */
@@ -162,12 +177,13 @@ tr.mucc td { font-weight: bold; background: #f4f8fc; }
   background: var(--note-bg);
 }
 .warning { border-left-color: var(--warn-border); background: var(--warn-bg); }
+.note code, .warning code { background: #e3e6ea; }
 .note .title, .warning .title { font-weight: bold; display: block; margin-bottom: 2px; }
 
 /* The contents list at the top of a page */
 .toc {
   border: 1px solid var(--border);
-  background: #fafafa;
+  background: var(--box);
   padding: 8px 18px 8px;
   margin: 12px 0 20px;
   display: inline-block;
@@ -187,7 +203,7 @@ tr.mucc td { font-weight: bold; background: #f4f8fc; }
 .card {
   border: 1px solid var(--border);
   padding: 10px 14px;
-  background: #fbfbfb;
+  background: var(--box);
 }
 .card h4 { margin: 0 0 4px; }
 .card p { margin: 0; font-size: 14px; color: #333; }
@@ -213,7 +229,6 @@ img { max-width: 100%; }
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
-  .sidebar img { width: 160px; }
   .content { padding: 6px 16px 32px; }
   .topbar .right { float: none; display: block; }
   .toc { min-width: 0; display: block; }
