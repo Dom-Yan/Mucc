@@ -146,6 +146,19 @@ int main() {
   ASSERT(65467, ({ unsigned char c = 68; unsigned u = (unsigned short)~c; u; }));
   ASSERT(4080, ({ unsigned char c = 255; c << 4; }));
 
+  // Division of constants, computed at compile time
+  ASSERT(16843009, (unsigned long)-1 / 255 >> 32);
+  ASSERT(128, 255 / 2 + 1);
+  ASSERT(-3, -7 / 2);
+  ASSERT(-1, -7 % 2);
+  ASSERT(3, 7 % -4);
+  ASSERT(2147483647, 4294967295u / 2);
+  ASSERT(1, 4294967295u % 2);
+  ASSERT(1431655765, -1u / 3);
+  ASSERT(1431655765, -1ul / 3 >> 32);
+  ASSERT(-2, (char)-5 / 2);
+  ASSERT(-1, -1L / 1);
+
   printf("OK\n");
   return 0;
 }

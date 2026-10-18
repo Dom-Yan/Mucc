@@ -1494,7 +1494,8 @@ static void gen_vector_unary(Node *node) {
 // condition, sizes scaled for pointer arithmetic, and so on. The result
 // must be exactly what the CPU would compute, so each step wraps around
 // to the width of its type, and only operators that can't trap are
-// folded: no division (by zero traps), no shifts by the width or more.
+// folded: no division by zero, nor of the least value by -1, no shifts by
+// the width or more.
 
 bool is_foldable(Node *node) {
   // Integers, and integers cast to a pointer, like NULL: (void *)0.
@@ -1511,6 +1512,15 @@ bool is_foldable(Node *node) {
   case ND_ADD: case ND_SUB: case ND_MUL: case ND_BITAND: case ND_BITOR:
   case ND_BITXOR: case ND_EQ: case ND_NE: case ND_LT: case ND_LE:
     return is_foldable(node->lhs) && is_foldable(node->rhs);
+  case ND_DIV:
+  case ND_MOD: {
+    // Like (size_t)-1 / UCHAR_MAX in musl's string functions, computed
+    // in every pass of their loops if it isn't folded.
+    if (!is_foldable(node->lhs) || !is_foldable(node->rhs))
+      return false;
+    int64_t r = fold(node->rhs);
+    return r != 0 && (node->lhs->ty->is_unsigned || r != -1);
+  }
   case ND_SHL:
   case ND_SHR:
     return is_foldable(node->lhs) && node->rhs->kind == ND_NUM &&
@@ -1558,6 +1568,8 @@ int64_t fold(Node *node) {
   case ND_ADD: return wrap(l + r, ty);
   case ND_SUB: return wrap(l - r, ty);
   case ND_MUL: return wrap(l * r, ty);
+  case ND_DIV: return wrap(is_unsigned ? l / r : (uint64_t)((int64_t)l / (int64_t)r), ty);
+  case ND_MOD: return wrap(is_unsigned ? l % r : (uint64_t)((int64_t)l % (int64_t)r), ty);
   case ND_BITAND: return wrap(l & r, ty);
   case ND_BITOR: return wrap(l | r, ty);
   case ND_BITXOR: return wrap(l ^ r, ty);

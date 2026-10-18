@@ -1108,6 +1108,15 @@ $mucc -o $tmp/opt/absval $tmp/opt/absval.c && $tmp/opt/absval &&
     $mucc -S -o- -ffreestanding $tmp/opt/absval.c | grep -q 'fabsl'
 check 'fabs, fabsf and fabsl without -lm'
 
+# Division of constants is computed at compile time, but not by zero or
+# of the least int by -1: both trap when run.
+echo 'unsigned long f(void) { return (unsigned long)-1 / 255 * (255 / 2 + 1) % 1000; }
+int g(void) { return -7 / 2 + -7 % 2; }
+int z(int x) { return x ? 1 / 0 : 0; }
+int m(int x) { return x ? (-2147483647 - 1) / -1 : 0; }' > $tmp/opt/quot.c
+[ "$($mucc -w -S -o- $tmp/opt/quot.c | grep -c 'div')" = 2 ]
+check 'constant division folded'
+
 # -fvisibility=hidden: definitions are hidden unless the attribute says
 # otherwise; declarations of others' symbols aren't touched.
 printf 'int f(void) { return 1; }\nint x = 2;\n__attribute__((visibility("default"))) int g(void) { return 3; }\nint h(void);\nint k(void) { return h(); }\n' > $tmp/vis.c
