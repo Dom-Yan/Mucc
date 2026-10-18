@@ -156,7 +156,7 @@ int main() {
   ASSERT(1, 4294967295u % 2);
   ASSERT(1431655765, -1u / 3);
   ASSERT(1431655765, -1ul / 3 >> 32);
-  ASSERT(-2, (char)-5 / 2);
+  ASSERT(-2, (signed char)-5 / 2);
   ASSERT(-1, -1L / 1);
 
   printf("OK\n");
