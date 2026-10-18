@@ -207,9 +207,10 @@ build/musl-%/lib/libc.a: mucc runtime/arm64.c
 # build/mucc is mucc with its own headers, musl's headers and musl's
 # libraries and startup files inside it, read from memory, so it needs no
 # files next to it. build/files.s lists them for mucc_files[] in
-# src/main.c: a {path, data, size} entry each, with the bytes put in by
-# .incbin (see src/asm.c), under the path "<mucc>/include/..." or
-# "<mucc>/musl/...", sorted by that path, which mucc binary-searches.
+# src/main.c, under the path "<mucc>/include/..." or "<mucc>/musl/...",
+# sorted by that path, which mucc binary-searches. `mucc -pack`
+# (src/pack.c) makes it from a line `FILE SIZE PATH` for each, and puts
+# them, compressed, in build/files.pack, which it includes by .incbin.
 
 #
 # build/mucc-aarch64 (or -x86_64) is the same for the other CPU, with its
@@ -220,25 +221,11 @@ define files_s
 	( find include -type f -name '*.h' -printf '%p %s\n' | \
 	    sed 's|^\([^ ]*\) .*|& <mucc>/\1|'; \
 	  find $(1)/include $(1)/lib -type f -printf '%p %s\n' | \
-	    sed 's|^$(1)/\([^ ]*\) .*|& <mucc>/musl/\1|' ) | LC_ALL=C sort -k3 | awk '\
-	  BEGIN { for (c = 1; c < 128; c++) ord[sprintf("%c", c)] = c } \
-	  { src[NR] = $$1; size[NR] = $$2; path[NR] = $$3 } \
-	  END { \
-	    print "  .data"; print "  .align 8"; print "  .globl mucc_files"; \
-	    print "mucc_files:"; \
-	    for (i = 1; i <= NR; i++) \
-	      printf "  .quad .Lpath%d\n  .quad .Ldata%d\n  .quad %d\n", i, i, size[i]; \
-	    print "  .quad 0\n  .quad 0\n  .quad 0"; print "  .section .rodata"; \
-	    for (i = 1; i <= NR; i++) { \
-	      printf ".Lpath%d:\n", i; \
-	      for (j = 1; j <= length(path[i]); j++) \
-	        printf "  .byte %d\n", ord[substr(path[i], j, 1)]; \
-	      printf "  .byte 0\n.Ldata%d:\n  .incbin \"%s\"\n", i, src[i]; \
-	    } \
-	  }' > $@
+	    sed 's|^$(1)/\([^ ]*\) .*|& <mucc>/musl/\1|' ) | LC_ALL=C sort -k3 | \
+	  ./mucc -pack $(@:.s=.pack) > $@
 endef
 
-build/files.s: $(MUSL_BUILD)/lib/libc.a $(wildcard include/*.h include/sys/*.h)
+build/files.s: mucc $(MUSL_BUILD)/lib/libc.a $(wildcard include/*.h include/sys/*.h)
 	$(call files_s,$(MUSL_BUILD))
 
 build/files.o: mucc build/files.s
@@ -255,7 +242,7 @@ build/obj/%.o: mucc src/%.c src/mucc.h $(MUSL_BUILD)/lib/libc.a
 	./mucc --libc=mucc -Iinclude -c -o $@ src/$*.c
 
 # The single binary for the other CPU
-build/files-%.s: build/musl-%/lib/libc.a $(wildcard include/*.h include/sys/*.h)
+build/files-%.s: mucc build/musl-%/lib/libc.a $(wildcard include/*.h include/sys/*.h)
 	$(call files_s,build/musl-$*)
 
 build/files-%.o: mucc build/files-%.s

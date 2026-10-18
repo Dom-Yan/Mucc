@@ -20,6 +20,10 @@ Downloads for each release are on the
 
 <h2 id="v1.4.1">Mucc 1.4.1 (not yet released)</h2>
 <ul>
+  <li>Smaller: the single binary is 2.8 MB (was 8.8). Its headers and
+    C library are compressed inside it (<code>mucc -pack</code>) and
+    unpacked as they're read; a link unpacks only the members of
+    <code>libc.a</code> it takes, so it's as fast as before.</li>
   <li>Faster: tokenizing tests a word's first character before calling
     anything, which makes compiling <code>sqlite3.c</code> 8% faster.</li>
   <li>The bundled musl's <code>sqrt</code>, <code>lrint</code>,

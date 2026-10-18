@@ -427,6 +427,9 @@ static uint64_t member_size(unsigned char *hdr) {
   return strtoull((char *)hdr + 48, NULL, 10);
 }
 
+// Reads the symbol index and the long names of an archive, which come
+// before its members (as ar writes them). An embedded one's members are
+// unpacked only when they're taken (see embedded_archive()).
 static void read_archive(char *path, unsigned char *data, size_t size) {
   Archive *ar = calloc(1, sizeof(Archive));
   ar->path = path;
@@ -451,6 +454,9 @@ static void read_archive(char *path, unsigned char *data, size_t size) {
       }
     } else if (!memcmp(hdr, "//              ", 16)) {
       ar->longnames = (char *)body;
+    } else {
+      // The members, which load_member() reads
+      break;
     }
     off += 60 + len + (len & 1);
   }
@@ -466,7 +472,9 @@ static void load_member(Archive *ar, uint64_t off) {
     return;
   hashmap_put(&ar->loaded, key, (void *)1);
 
+  embedded_need(ar->path, off, 60);
   unsigned char *hdr = ar->data + off;
+  embedded_need(ar->path, off + 60, member_size(hdr));
   char name[17] = {0};
   memcpy(name, hdr, 16);
   char *member;
@@ -566,7 +574,9 @@ static void read_script(char *path, char *text, StringArray *lib_paths) {
 // name for messages (a temporary object's source file), or NULL.
 static void read_input(char *path, char *display, StringArray *lib_paths) {
   size_t size;
-  unsigned char *data = read_file(path, &size);
+  unsigned char *data = embedded_archive(path, &size);
+  if (!data)
+    data = read_file(path, &size);
   if (size >= 8 && !memcmp(data, "!<arch>\n", 8))
     read_archive(path, data, size);
   else if (is_elf_object(data, size))

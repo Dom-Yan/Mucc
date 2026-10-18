@@ -46,14 +46,14 @@ fi
 docker rmi -f mucc-distros-scratch > /dev/null 2>&1
 
 # In an empty image, mucc rebuilds itself from src/ with the files it
-# embeds (build/files.s and what it names), and that mucc rebuilds itself
+# embeds (build/files.s and build/files.pack), and that mucc rebuilds itself
 # again: the two must be the same, byte for byte. (MUCC itself differs
 # from them only in its debug info, which names musl's headers by their
 # paths on disk, not "<mucc>/musl/...".)
 if [ -f build/files.s ]; then
     mkdir -p $tmp/m/build
     cp -r src include $tmp/m
-    cp -r build/files.s build/musl $tmp/m/build
+    cp -r build/files.s build/files.pack $tmp/m/build
     srcs=$(ls src/*.c | sed 's/.*/"&", /' | tr -d '\n')
     build='"-o", "NEW", '"$srcs"'"build/files.s"]'
     printf '%s\n' 'FROM scratch' 'COPY mucc /mucc' 'COPY m /m' 'WORKDIR /m' \

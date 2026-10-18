@@ -13,7 +13,8 @@
 //   5 asm.c         assembly text -> ELF object file
 //   6 link.c        object files and archives -> static executable
 //
-// main.c is the driver that runs them; ar.c is `mucc -ar`; diag.c
+// main.c is the driver that runs them; ar.c is `mucc -ar`; pack.c is
+// `mucc -pack`, which compresses the single binary's files; diag.c
 // reports errors and warnings; strings.c, hashmap.c and unicode.c are
 // support code. The target is x86-64 or ARM64
 // (target_arm64), the CPU mucc runs on unless --target= says otherwise;
@@ -733,6 +734,12 @@ bool arm64_put_field(unsigned char *loc, int type, int64_t val);
 int run_ar(int argc, char **argv);
 int run_ranlib(int argc, char **argv);
 
+//---------- pack.c: the single binary's files -------------------------------
+
+int run_pack(int argc, char **argv);
+void unpack(unsigned char *out, char *data, size_t packed, size_t size, int model);
+extern char mucc_blob[];
+
 //---------- link.c: static linker (stage 6) ---------------------------------
 
 bool link_static(StringArray *inputs, StringArray *names, StringArray *lib_paths,
@@ -776,6 +783,8 @@ void hashmap_test(void);
 
 bool file_exists(char *path);
 FILE *open_input_file(char *path);
+unsigned char *embedded_archive(char *path, size_t *size);
+void embedded_need(char *path, size_t off, size_t len);
 bool in_system_header(Token *tok);
 
 extern StringArray include_paths;

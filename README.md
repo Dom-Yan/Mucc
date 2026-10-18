@@ -21,8 +21,8 @@ gcc, no binutils, no system headers.
 | --- | --- |
 | **Compile speed** | 2.7x faster than `gcc -O0` and 1.6x faster than `clang -O0` ([details](#performance)) |
 | **Generated code** | Runs about 15% slower than `gcc -O0` code and about half as fast as `gcc -O2` code |
-| **Size** | One 8.8 MB static binary, with musl and Linux's headers inside ([what's in it](#whats-inside-the-binary)) |
-| **Source** | About 33,000 lines of C in 15 files, small enough to read end to end |
+| **Size** | One 2.8 MB static binary, with musl and Linux's headers inside ([what's in it](#whats-inside-the-binary)) |
+| **Source** | About 35,000 lines of C in 16 files, small enough to read end to end |
 | **Language** | C17 by default, C23 with `-std=c23`, plus the GNU extensions real code uses |
 | **Targets** | x86-64 and ARM64 (AArch64) Linux, natively or cross-compiling either way |
 | **Real programs** | SQLite, Lua, Redis, Tcl, jq, zlib, Git, libpng, QuickJS and TinyCC build with it and pass their own test suites; CPython passes 402 of its 408 |
@@ -432,28 +432,30 @@ The compiler is a pipeline, one stage per file in `src/`:
 | 5 | `asm.c` | assembly to an ELF object |
 | 6 | `link.c` | objects and archives to a static executable |
 
-`main.c` is the driver, `ar.c` is `mucc -ar`, and `diag.c` prints errors
+`main.c` is the driver, `ar.c` is `mucc -ar`, `pack.c` is `mucc -pack`
+(which compresses the single binary's files), and `diag.c` prints errors
 and warnings for every stage. `mucc.h` declares what they share and has a
 guide at its top to where common changes go. Each file is split into
 sections by `//---------- Name ---` lines (`grep -n '^//-------' src/*.c`
 lists them).
 
 The released binary carries its headers (`include/`), musl and Linux's
-headers inside it and reads them from memory. On ARM64,
+headers inside it, compressed (`mucc -pack`, in `src/pack.c`), and reads
+them from memory, unpacking each the first time it's read; a link
+unpacks only the members of `libc.a` it takes. On ARM64,
 `runtime/arm64.c` provides the `long double` and 128-bit routines that
 gcc's libgcc would.
 
 ### What's inside the binary
 
-Of the 8.8 MB of `build/mucc` on x86-64:
+Of the 2.8 MB of the released binary on x86-64:
 
-| Part | Size |
-| --- | ---: |
-| Linux's headers (`<linux/*.h>`, `<asm/*.h>`, ...) | 3.7 MB |
-| musl's `libc.a` and startup files | 3.2 MB |
-| The compiler itself, code and data (with the musl functions it uses) | 1.3 MB |
-| musl's headers | 0.5 MB |
-| mucc's own headers (`include/`) | 0.1 MB |
+| Part | Size | Unpacked |
+| --- | ---: | ---: |
+| The compiler itself, code and data (with the musl functions it uses) | 1.0 MB | |
+| Linux's, musl's and mucc's headers | 0.9 MB | 4.2 MB |
+| musl's `libc.a` and startup files | 0.7 MB | 3.1 MB |
+| The list of those files, with their names | 0.2 MB | |
 
 ## Testing
 

@@ -73,6 +73,18 @@ if [ "$(mucc -dumpmachine)" = "$(uname -m | sed 's/arm64/aarch64/')-linux-gnu" ]
     check '--libc=system'
 fi
 
+# Each file inside it unpacks to the one that was packed (see src/pack.c),
+# where those are: mucc's headers, and the musl it was built with.
+musl=build/musl
+[ "$(mucc -dumpmachine)" = "$(uname -m)-linux-gnu" ] || musl=build/musl-$(mucc -dumpmachine | cut -d- -f1)
+if [ -d $musl/lib ]; then
+    $tmp/alone/mucc -unpack-test $tmp/files &&
+        diff -r include $tmp/files/include > /dev/null &&
+        diff -r $musl/include $tmp/files/musl/include > /dev/null &&
+        diff -r $musl/lib $tmp/files/musl/lib > /dev/null
+    check 'unpacks every file'
+fi
+
 # Embedded headers are no files make could find, so -M leaves them out.
 [ "$(mucc -M $tmp/prog.c | grep -c '<mucc>')" = 0 ]
 check '-M'
