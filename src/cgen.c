@@ -59,34 +59,41 @@ static char *vec_move(int size);
 // %s, %c, %d, %u, %ld, %lu, %+ld, %Lf and %%. Anything else is an
 // internal error.
 
-static void out_bytes(char *s, size_t n) {
+// Makes room for n more bytes in out_buf.
+static void reserve(size_t n) {
   if (out_len + n > out_cap) {
     out_cap = MAX(out_cap * 2, out_len + n + (1 << 20));
     out_buf = realloc(out_buf, out_cap);
     if (!out_buf)
       error("out of memory");
   }
+}
+
+static void out_bytes(char *s, size_t n) {
+  reserve(n);
   memcpy(out_buf + out_len, s, n);
   out_len += n;
 }
 
-static void out_ulong(unsigned long v) {
+// Writes v at q, which has room for it, and returns the end.
+static char *write_ulong(char *q, unsigned long v) {
   char buf[20];
   int i = sizeof(buf);
   do {
     buf[--i] = '0' + v % 10;
     v /= 10;
   } while (v);
-  out_bytes(buf + i, sizeof(buf) - i);
+  while (i < sizeof(buf))
+    *q++ = buf[i++];
+  return q;
 }
 
-static void out_long(long v) {
+static char *write_long(char *q, long v) {
   if (v < 0) {
-    out_bytes("-", 1);
-    out_ulong(-(unsigned long)v);
-  } else {
-    out_ulong(v);
+    *q++ = '-';
+    return write_ulong(q, -(unsigned long)v);
   }
+  return write_ulong(q, v);
 }
 
 // A push not written yet, as "  push %rax\n", or NULL. If the next
@@ -102,61 +109,74 @@ void flush_push(void) {
   }
 }
 
+// The text of a format is copied a byte at a time straight into out_buf:
+// formats are short, and a strchr() and a memcpy() for each piece cost
+// more. ROOM is more than any format's text plus a number, so only a %s
+// needs to make more.
+#define ROOM 1024
+
 void println(char *fmt, ...) {
   flush_push();
   va_list ap;
   va_start(ap, fmt);
 
+  reserve(ROOM);
+  char *q = out_buf + out_len;
+
   for (char *p = fmt; *p;) {
-    // Copy the plain text up to the next '%' in one piece.
-    char *pct = strchr(p, '%');
-    if (!pct) {
-      out_bytes(p, strlen(p));
-      break;
+    if (*p != '%') {
+      *q++ = *p++;
+      continue;
     }
-    out_bytes(p, pct - p);
-    p = pct + 1;
+    p++;
 
     if (*p == '%') {
-      out_bytes("%", 1);
+      *q++ = '%';
       p++;
-    } else if (*p == 's') {
-      char *s = va_arg(ap, char *);
-      out_bytes(s, strlen(s));
-      p++;
+    } else if (*p == 's' || (p[0] == 'L' && p[1] == 'f')) {
+      char *s;
+      if (*p == 's') {
+        s = va_arg(ap, char *);
+        p++;
+      } else {
+        s = format("%Lf", va_arg(ap, long double));
+        p += 2;
+      }
+      size_t n = strlen(s);
+      out_len = q - out_buf;
+      reserve(n + ROOM);
+      q = out_buf + out_len;
+      memcpy(q, s, n);
+      q += n;
     } else if (*p == 'c') {
-      char c = va_arg(ap, int);
-      out_bytes(&c, 1);
+      *q++ = va_arg(ap, int);
       p++;
     } else if (*p == 'd') {
-      out_long(va_arg(ap, int));
+      q = write_long(q, va_arg(ap, int));
       p++;
     } else if (*p == 'u') {
-      out_ulong(va_arg(ap, unsigned));
+      q = write_ulong(q, va_arg(ap, unsigned));
       p++;
     } else if (p[0] == 'l' && p[1] == 'd') {
-      out_long(va_arg(ap, long));
+      q = write_long(q, va_arg(ap, long));
       p += 2;
     } else if (p[0] == 'l' && p[1] == 'u') {
-      out_ulong(va_arg(ap, unsigned long));
+      q = write_ulong(q, va_arg(ap, unsigned long));
       p += 2;
     } else if (p[0] == '+' && p[1] == 'l' && p[2] == 'd') {
       long v = va_arg(ap, long);
       if (v >= 0)
-        out_bytes("+", 1);
-      out_long(v);
+        *q++ = '+';
+      q = write_long(q, v);
       p += 3;
-    } else if (p[0] == 'L' && p[1] == 'f') {
-      char *s = format("%Lf", va_arg(ap, long double));
-      out_bytes(s, strlen(s));
-      p += 2;
     } else {
       unreachable();
     }
   }
 
   va_end(ap);
-  out_bytes("\n", 1);
+  *q++ = '\n';
+  out_len = q - out_buf;
 }
 
 int count(void) {
