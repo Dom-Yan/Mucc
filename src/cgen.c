@@ -44,6 +44,7 @@ static int loc_file;
 static int loc_line;
 
 static void gen_expr(Node *node);
+static void gen_operands(Node *node);
 static void gen_discard(Node *node);
 static void gen_stmt(Node *node);
 static void cast_int128(Type *from, Type *to);
@@ -730,10 +731,11 @@ static void cmp_zero(Type *ty) {
     println("  or %%rdx, %%rcx");
     return;
   default:
+    // (test sets the zero flag as cmp $0 would, in a shorter instruction.)
     if (is_integer(ty) && ty->size <= 4)
-      println("  cmp $0, %%eax");
+      println("  test %%eax, %%eax");
     else
-      println("  cmp $0, %%rax");
+      println("  test %%rax, %%rax");
     return;
   }
 
@@ -1615,7 +1617,7 @@ static bool is_int_load(Node *node) {
 }
 
 // Some operands can be loaded into %rdi with a single instruction: an
-// integer constant that fits in 32 bits, or an integer or pointer local
+// integer constant, or an integer or pointer local
 // variable. For `a + 5` or `a < n`, mucc then computes `a` and loads the
 // right side straight into %rdi, instead of computing the right side,
 // pushing it, computing the left side and popping it back. Neither kind
@@ -1639,13 +1641,10 @@ static char *simple_operand(Node *node) {
       is_int_load(node->lhs) && node->lhs->kind == ND_VAR)
     node = node->lhs;
 
-  // Integer constant (see "Constant folding") that fits in 32 bits, which
-  // mov sign-extends to 64.
+  // Integer constant (see "Constant folding"). One that doesn't fit in
+  // 32 bits is a 10-byte mov (movabs).
   if (is_foldable(node)) {
-    int64_t val = fold(node);
-    if (val != (int32_t)val)
-      return NULL;
-    put_str(put_long(put_str(buf, "  mov $"), val), ", %rdi");
+    put_str(put_long(put_str(buf, "  mov $"), fold(node)), ", %rdi");
     return buf;
   }
 
@@ -2165,6 +2164,72 @@ static bool is_commutative(Node *node) {
   return false;
 }
 
+// Whether a binary operator on `ty` operands works on 64-bit registers.
+static bool is_64bit(Type *ty) {
+  return ty->kind == TY_LONG || ty->base;
+}
+
+// An operand an instruction can take as it is, in place of %rdi: a
+// constant that fits in 32 bits, as `$5`, or a local variable of the
+// operation's width, as its register or stack slot. `is64` is the
+// width, `imm` whether a constant will do. Returns NULL for anything
+// else. The string is overwritten by the next call.
+static char *direct_operand(Node *node, bool is64, bool imm) {
+  static char buf[32];
+
+  // Look through casts that emit no code, as simple_operand() does.
+  if (node->kind == ND_CAST && is_int_or_ptr(node->ty) &&
+      is_int_or_ptr(node->lhs->ty) &&
+      !cast_table[getTypeId(node->lhs->ty)][getTypeId(node->ty)])
+    node = node->lhs;
+
+  if (is_foldable(node)) {
+    // A 32-bit operation needs only the low 32 bits.
+    int64_t val = fold(node);
+    if (!imm || (is64 && val != (int32_t)val))
+      return NULL;
+    put_long(put_str(buf, "$"), is64 ? val : (int32_t)val);
+    return buf;
+  }
+
+  Obj *var = local_scalar(node);
+  if (var && is_int_or_ptr(var->ty) && var->ty->size == (is64 ? 8 : 4))
+    return var_operand(var);
+  return NULL;
+}
+
+// Computes a binary operator's lhs into %rax and returns its rhs as an
+// operand for an instruction with %rax: a direct_operand(), or %rdi. Or,
+// for `a + b` where only a is direct, b into %rax and returns a. Only
+// for operators of two operands that take any of those, as add, cmp
+// and (without constants) imul do.
+static char *gen_direct_operands(Node *node) {
+  bool is64 = is_64bit(node->lhs->ty);
+  bool imm = node->kind != ND_MUL;
+
+  if (direct_operand(node->rhs, is64, imm)) {
+    gen_expr(node->lhs);
+    return direct_operand(node->rhs, is64, imm);
+  }
+  if (is_commutative(node) && !simple_operand(node->rhs) &&
+      direct_operand(node->lhs, is64, imm)) {
+    gen_expr(node->rhs);
+    return direct_operand(node->lhs, is64, imm);
+  }
+  gen_operands(node);
+  return is64 ? "%rdi" : "%edi";
+}
+
+// Compares %rax with `src`, as gen_direct_operands() returned it.
+// Against 0, test sets the same flags as cmp, in a shorter instruction.
+static void gen_cmp(char *src, bool is64) {
+  char *ax = is64 ? "%rax" : "%eax";
+  if (!strcmp(src, "$0"))
+    println("  test %s, %s", ax, ax);
+  else
+    println("  cmp %s, %s", src, ax);
+}
+
 // Computes a binary operator's lhs into %rax and rhs into %rdi (or, for
 // `a + b` where only a is simple, b into %rax and a into %rdi).
 static void gen_operands(Node *node) {
@@ -2183,11 +2248,6 @@ static void gen_operands(Node *node) {
     gen_expr(node->lhs);
     pop("%rdi");
   }
-}
-
-// Whether a binary operator on `ty` operands works on 64-bit registers.
-static bool is_64bit(Type *ty) {
-  return ty->kind == TY_LONG || ty->base;
 }
 
 // The condition code (as in jCC) under which comparison `node` is true,
@@ -2231,11 +2291,7 @@ static void gen_branch(Node *cond, bool when, char *label) {
   case ND_LE:
     if (is_flonum(cond->lhs->ty) || is_int128(cond->lhs->ty))
       break;
-    gen_operands(cond);
-    if (is_64bit(cond->lhs->ty))
-      println("  cmp %%rdi, %%rax");
-    else
-      println("  cmp %%edi, %%eax");
+    gen_cmp(gen_direct_operands(cond), is_64bit(cond->lhs->ty));
     println("  j%s %s", condition(cond, when), label);
     return;
   }
@@ -3090,8 +3146,6 @@ static void gen_expr(Node *node) {
   }
 
   // Binary operators on integers and pointers
-  gen_operands(node);
-
   char *ax, *di, *dx;
 
   if (is_64bit(node->lhs->ty)) {
@@ -3102,6 +3156,26 @@ static void gen_expr(Node *node) {
     ax = "%eax";
     di = "%edi";
     dx = "%edx";
+  }
+
+  // A shift by a constant takes it as it is; the CPU masks the count the
+  // same way either way.
+  if ((node->kind == ND_SHL || node->kind == ND_SHR) && is_foldable(node->rhs) &&
+      fold(node->rhs) >= 0 && fold(node->rhs) < 256) {
+    int64_t n = fold(node->rhs);
+    gen_expr(node->lhs);
+    char *insn = node->kind == ND_SHL ? "shl" : node->lhs->ty->is_unsigned ? "shr" : "sar";
+    println("  %s $%ld, %s", insn, n, ax);
+    return;
+  }
+
+  switch (node->kind) {
+  case ND_ADD: case ND_SUB: case ND_MUL: case ND_BITAND: case ND_BITOR:
+  case ND_BITXOR: case ND_EQ: case ND_NE: case ND_LT: case ND_LE:
+    di = gen_direct_operands(node);
+    break;
+  default:
+    gen_operands(node);
   }
 
   switch (node->kind) {
@@ -3143,7 +3217,7 @@ static void gen_expr(Node *node) {
   case ND_NE:
   case ND_LT:
   case ND_LE:
-    println("  cmp %s, %s", di, ax);
+    gen_cmp(di, is_64bit(node->lhs->ty));
 
     if (node->kind == ND_EQ) {
       println("  sete %%al");

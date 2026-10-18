@@ -1117,6 +1117,15 @@ int m(int x) { return x ? (-2147483647 - 1) / -1 : 0; }' > $tmp/opt/quot.c
 [ "$($mucc -w -S -o- $tmp/opt/quot.c | grep -c 'div')" = 2 ]
 check 'constant division folded'
 
+# x86-64 instructions take a constant or a local variable as an operand
+# in place, instead of one loaded into %rdi or pushed and popped.
+echo 'long f(long x, long y) { return (x + 5) * y - 0x123456789; }
+int g(int x) { return x ? x << 3 : 0; }' > $tmp/opt/operand.c
+s=$($mucc --target=x86_64-linux -S -o- $tmp/opt/operand.c)
+echo "$s" | grep -q 'add \$5, %rax' && echo "$s" | grep -q 'shl \$3, %eax' &&
+  echo "$s" | grep -q 'test %eax, %eax' && ! echo "$s" | grep -q 'push %rax'
+check 'x86-64 operands in place'
+
 # -fvisibility=hidden: definitions are hidden unless the attribute says
 # otherwise; declarations of others' symbols aren't touched.
 printf 'int f(void) { return 1; }\nint x = 2;\n__attribute__((visibility("default"))) int g(void) { return 3; }\nint h(void);\nint k(void) { return h(); }\n' > $tmp/vis.c
