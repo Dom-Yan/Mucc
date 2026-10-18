@@ -44,6 +44,7 @@ static int loc_file;
 static int loc_line;
 
 static void gen_expr(Node *node);
+static char *simple_operand_to(Node *node, int r);
 static void gen_operands(Node *node);
 static void gen_discard(Node *node);
 static void gen_stmt(Node *node);
@@ -1626,6 +1627,11 @@ static bool is_int_load(Node *node) {
 // Returns the instruction that loads `node` into %rdi, or NULL. The
 // string is overwritten by the next call.
 static char *simple_operand(Node *node) {
+  return simple_operand_to(node, 0);
+}
+
+// The same, into argument register `r` (0 for %rdi, 1 for %rsi, ...).
+static char *simple_operand_to(Node *node, int r) {
   static char buf[64];
 
   // Look through casts that emit no code, like int -> unsigned int or
@@ -1644,7 +1650,7 @@ static char *simple_operand(Node *node) {
   // Integer constant (see "Constant folding"). One that doesn't fit in
   // 32 bits is a 10-byte mov (movabs).
   if (is_foldable(node)) {
-    put_str(put_long(put_str(buf, "  mov $"), fold(node)), ", %rdi");
+    put_str(put_str(put_long(put_str(buf, "  mov $"), fold(node)), ", "), argreg64[r]);
     return buf;
   }
 
@@ -1656,8 +1662,8 @@ static char *simple_operand(Node *node) {
   char *insn = var->ty->size == 1 ? (var->ty->is_unsigned ? "  movzbl " : "  movsbl ")
              : var->ty->size == 2 ? (var->ty->is_unsigned ? "  movzwl " : "  movswl ")
              : var->ty->size == 4 ? "  movsxd " : "  mov ";
-  char *dest = var->ty->size <= 2 ? ", %edi" : ", %rdi";
-  put_str(put_str(put_str(buf, insn), var_operand(var)), dest);
+  char *dest = var->ty->size <= 2 ? argreg32[r] : argreg64[r];
+  put_str(put_str(put_str(put_str(buf, insn), var_operand(var)), ", "), dest);
   return buf;
 }
 
@@ -1858,12 +1864,21 @@ static void push_struct(Type *ty) {
   }
 }
 
+// An integer or pointer argument that goes in a register, and is a
+// constant or a local variable, isn't pushed and popped: it's loaded
+// into its register last, just before the call (see simple_operand()).
+static bool is_late_arg(Node *arg) {
+  return !arg->pass_by_stack && is_int_or_ptr(arg->ty) && simple_operand(arg);
+}
+
 static void push_args2(Node *args, bool first_pass) {
   if (!args)
     return;
   push_args2(args->next, first_pass);
 
   if ((first_pass && !args->pass_by_stack) || (!first_pass && args->pass_by_stack))
+    return;
+  if (is_late_arg(args))
     return;
 
   gen_expr(args);
@@ -2738,7 +2753,11 @@ static void gen_expr(Node *node) {
           pop_vec(ty, fp++);
         break;
       default:
-        if (gp < GP_MAX)
+        if (gp >= GP_MAX)
+          break;
+        if (is_late_arg(arg))
+          println("%s", simple_operand_to(arg, gp++));
+        else
           pop(argreg64[gp++]);
       }
     }

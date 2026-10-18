@@ -1126,6 +1126,13 @@ echo "$s" | grep -q 'add \$5, %rax' && echo "$s" | grep -q 'shl \$3, %eax' &&
   echo "$s" | grep -q 'test %eax, %eax' && ! echo "$s" | grep -q 'push %rax'
 check 'x86-64 operands in place'
 
+# Arguments that are constants or local variables go straight into their
+# registers, not pushed and popped.
+echo 'long g(long, int, char *);
+long f(long x, int y, char *p) { return g(x, 7, p); }' > $tmp/opt/args.c
+! $mucc --target=x86_64-linux -S -o- $tmp/opt/args.c | grep -q 'push %rax'
+check 'x86-64 simple arguments loaded last'
+
 # -fvisibility=hidden: definitions are hidden unless the attribute says
 # otherwise; declarations of others' symbols aren't touched.
 printf 'int f(void) { return 1; }\nint x = 2;\n__attribute__((visibility("default"))) int g(void) { return 3; }\nint h(void);\nint k(void) { return h(); }\n' > $tmp/vis.c
