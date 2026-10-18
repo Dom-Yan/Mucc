@@ -43,7 +43,7 @@
 <h1>The Mucc C Compiler</h1>
 <p class="lead">Mucc is a small, fast, self-hosting C compiler toolchain for
 x86-64 and ARM64 Linux. The compiler, preprocessor, assembler, linker,
-archiver, headers and C library are <b>one static file of about 3 MB</b>.
+archiver, headers and C library are <b>one static file of a few megabytes</b>.
 Copy it onto any 64-bit Linux machine, an empty container or a USB stick,
 and it builds working C programs with nothing else installed: no gcc, no
 binutils, no system headers.</p>
@@ -68,6 +68,8 @@ chmod +x mucc
 </div>
 
 <h2 id="news">News<a class="anchor" href="#news">&para;</a></h2>
+<!-- For a release: add it at the top of this list, and give it its
+     entry in changelog.html. Nothing else on the site names a release. -->
 <ul>
   <li><b>In development:</b> the next release is 1.8 times as fast as 1.4.0
     on <code>sqlite3.c</code>, makes code as fast as <code>gcc -O0</code>'s,
@@ -102,17 +104,18 @@ chmod +x mucc
     linked by the one before it, with gcc and binutils made to fail so
     nothing else can take part, and it rebuilds itself to the same bytes.
     No other compiler is needed, ever, to build or use mucc.</li>
-  <li><b>Fast to compile.</b> About <a href="performance.html">4 times faster</a>
-    than <code>gcc -O0</code> and 2 times faster than <code>clang -O0</code>.</li>
+  <li><b>Fast to compile.</b> <a href="performance.html">Several times faster</a>
+    than <code>gcc -O0</code>, and faster than <code>clang -O0</code>.</li>
   <li><b>Two CPUs, either way.</b> It runs on x86-64 and ARM64 and makes
     programs for both: <code>--target=aarch64-linux</code> on an x86-64
     machine, or the other way round.</li>
-  <li><b>Small enough to read.</b> About 35,000 lines of C in 16 files, split
-    into sections, that one person can read from end to end.</li>
+  <li><b>Small enough to read.</b> A few tens of thousands of lines of C, one
+    file per stage, split into sections, that one person can read from end
+    to end.</li>
   <li><b>Real C, for real programs.</b> C17 by default, C23 with
     <code>-std=c23</code>, and the GNU extensions real code uses. SQLite, Lua,
     Redis, Tcl, jq, zlib, Git, libpng, QuickJS and TinyCC build with it and
-    pass their own test suites; CPython passes 402 of its 408.</li>
+    pass their own test suites, and CPython passes nearly all of its.</li>
   <li><b>A drop-in for gcc.</b> It takes gcc's flags, so Makefiles and
     <code>configure</code> scripts work unchanged. Like clang, it says it is
     gcc 4.2.</li>
@@ -122,9 +125,9 @@ chmod +x mucc
 
 <h2 id="at-a-glance">At a Glance<a class="anchor" href="#at-a-glance">&para;</a></h2>
 <div class="table-wrap"><table>
-  <tr><th>Compile speed</th><td>3.9x faster than <code>gcc -O0</code>, 2.3x faster than <code>clang -O0</code> (<a href="performance.html">details</a>)</td></tr>
-  <tr><th>Generated code</th><td>About as fast as <code>gcc -O0</code>'s, two thirds as fast as <code>gcc -O2</code>'s</td></tr>
-  <tr><th>Size</th><td>One 2.8 MB static binary (2.9 MB on ARM64), with musl and Linux's headers inside (<a href="internals.html#what-s-inside-the-binary">what's in it</a>)</td></tr>
+  <tr><th>Compile speed</th><td>Several times faster than <code>gcc -O0</code>, and faster than <code>clang -O0</code> (<a href="performance.html">the numbers</a>)</td></tr>
+  <tr><th>Generated code</th><td>In the range of <code>gcc -O0</code>'s; slower than <code>gcc -O2</code>'s</td></tr>
+  <tr><th>Size</th><td>One static binary of a few megabytes, with musl and Linux's headers inside (<a href="internals.html#what-s-inside-the-binary">what's in it</a>)</td></tr>
   <tr><th>Language</th><td>C17 by default, C23 with <code>-std=c23</code>, plus the GNU extensions real code uses</td></tr>
   <tr><th>Targets</th><td>x86-64 and ARM64 (AArch64) Linux, natively or cross-compiling either way</td></tr>
   <tr><th>Self-hosting</th><td>Each release is built by the one before it, with no gcc or binutils, and rebuilds itself byte for byte</td></tr>

@@ -108,7 +108,7 @@ Support</a>). Code that checks for AVX or NEON with <code>__AVX__</code> or
 gcc.</p>
 
 <h3 id="the-code-mucc-makes-is-slower-than-gcc-s">The code mucc makes is slower than gcc's<a class="anchor" href="#the-code-mucc-makes-is-slower-than-gcc-s">&para;</a></h3>
-<p>It is in the range of <code>gcc -O0</code>'s, about two thirds as fast as
+<p>It is in the range of <code>gcc -O0</code>'s, slower than
 <code>gcc -O2</code>'s (see <a href="performance.html">Performance</a>). With
 the bundled musl, <code>malloc</code> and stdio are slower than glibc's too;
 <code>--libc=system</code> uses glibc's.</p>

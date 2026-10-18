@@ -173,7 +173,7 @@ make CC=mucc        # ./mucc, the compiler
 make libc           # musl, built by mucc
 make build/mucc     # the single binary, as released
 build/mucc --version</code></pre>
-<p>This takes about 15 seconds. It is how releases are built: each one by the
+<p>This takes well under a minute. It is how releases are built: each one by the
 release before it, with gcc and binutils made to fail so nothing else takes
 part (<code>test/bootstrap.sh</code>).</p>
 

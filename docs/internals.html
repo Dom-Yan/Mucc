@@ -103,14 +103,18 @@ inside it. It reads them from memory, as files under the path
 <code>&lt;mucc&gt;/</code>, so it needs nothing next to it.</p>
 
 <h3 id="what-s-inside-the-binary">What's Inside the Binary<a class="anchor" href="#what-s-inside-the-binary">&para;</a></h3>
-<p>Of the 2.8 MB of the released binary on x86-64:</p>
-<div class="table-wrap"><table>
-  <tr><th>Part</th><th class="num">Size</th><th class="num">Unpacked</th></tr>
-  <tr><td>The compiler itself, code and data (with the musl functions it uses)</td><td class="num">1.0 MB</td><td></td></tr>
-  <tr><td>Linux's, musl's and mucc's headers</td><td class="num">0.9 MB</td><td class="num">4.2 MB</td></tr>
-  <tr><td>musl's <code>libc.a</code> and startup files</td><td class="num">0.7 MB</td><td class="num">3.1 MB</td></tr>
-  <tr><td>The list of those files, with their names</td><td class="num">0.2 MB</td><td></td></tr>
-</table></div>
+<ul>
+  <li><b>The compiler itself,</b> code and data (with the musl functions it
+    uses): about a third of the binary.</li>
+  <li><b>Linux's, musl's and mucc's headers,</b> compressed to about a fifth
+    of their size.</li>
+  <li><b>musl's <code>libc.a</code> and startup files,</b> compressed to about
+    a quarter of theirs.</li>
+  <li><b>The list of those files,</b> with their names.</li>
+</ul>
+<p>To see it for a build of your own, <code>make build/mucc</code> prints how
+much the headers and the library pack to, and <code>size build/mucc</code>
+the rest.</p>
 
 <h3 id="how-the-files-are-packed">How the Files Are Packed<a class="anchor" href="#how-the-files-are-packed">&para;</a></h3>
 <p><code>mucc -pack</code> compresses them when the binary is built. The
