@@ -581,6 +581,8 @@ typedef struct {
 typedef struct {
   unsigned char *p;
   long score;
+  int unit;      // which unit it's in, and where: ties are broken by
+  uint32_t off;  // these, the same in every run (not by p, an address)
 } Seg;
 
 static uint64_t gram_at(unsigned char *p) {
@@ -605,7 +607,9 @@ static int by_seg_score(const void *a, const void *b) {
   const Seg *x = a, *y = b;
   if (x->score != y->score)
     return x->score < y->score ? 1 : -1;
-  return x->p < y->p ? -1 : x->p > y->p;
+  if (x->unit != y->unit)
+    return x->unit < y->unit ? -1 : 1;
+  return x->off < y->off ? -1 : x->off > y->off;
 }
 
 static Unit *make_dict_binary(Unit **units, int nunits, int model, size_t max) {
@@ -658,7 +662,7 @@ static Unit *make_dict_binary(Unit **units, int nunits, int model, size_t max) {
         capsegs = MAX(capsegs * 2, 1024);
         segs = realloc(segs, sizeof(Seg) * capsegs);
       }
-      segs[nsegs++] = (Seg){u->data + j, score};
+      segs[nsegs++] = (Seg){u->data + j, score, i, j};
     }
   }
   qsort(segs, nsegs, sizeof(Seg), by_seg_score);
