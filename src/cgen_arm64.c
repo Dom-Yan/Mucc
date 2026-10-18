@@ -53,6 +53,16 @@ static void gen_discard(Node *node);
 static void gen_stmt(Node *node);
 static void cast(Type *from, Type *to);
 
+// A memory operand (see "Memory operands")
+typedef struct {
+  char *base; // "x0", "x29" or a register variable's register
+  int64_t off;
+} MemOp;
+
+static MemOp gen_memop(Node *node);
+static bool free_memop(Node *node, MemOp *m);
+static bool is_simple_load(Type *ty);
+
 // Register `n` for a value of `size` bytes: "x5" for 8, "w5" for less
 static char *reg(int n, int size) {
   return size == 8 ? xreg[n] : wreg[n];
@@ -341,15 +351,15 @@ static void gen_addr(Node *node) {
       addr_of_global(node->var);
     return;
   case ND_DEREF:
-    gen_expr(node->lhs);
+  case ND_MEMBER: {
+    // In one add from its base: s.a.b, or p->a.b with p in a register.
+    MemOp m = gen_memop(node);
+    add_imm("x0", m.base, m.off);
     return;
+  }
   case ND_COMMA:
     gen_discard(node->lhs);
     gen_addr(node->rhs);
-    return;
-  case ND_MEMBER:
-    gen_addr(node->lhs);
-    add_imm("x0", "x0", node->member->offset);
     return;
   case ND_FUNCALL:
     if (node->ret_buffer) {
@@ -1058,22 +1068,135 @@ static Node *simple_operand(Node *node) {
   return NULL;
 }
 
-// Loads simple operand `node` into x1, or w1 if `ty` is 32 bits or less.
-static void load_simple(Node *node, Type *ty) {
+// Loads simple operand `node` into x`r`, or w`r` if `ty` is 32 bits or
+// less.
+static void load_simple_to(Node *node, Type *ty, int r) {
   int size = is_64bit(ty) ? 8 : 4;
   if (is_foldable(node)) {
-    load_imm(reg(1, size), fold(node));
+    load_imm(reg(r, size), fold(node));
     return;
   }
   Obj *var = node->var;
   if (var->reg) {
-    println("  mov %s, %s", reg(1, size), reg(18 + var->reg, size));
+    println("  mov %s, %s", reg(r, size), reg(18 + var->reg, size));
     return;
   }
   char *insn = var->ty->size == 1 ? (var->ty->is_unsigned ? "ldrb" : "ldrsb") :
                var->ty->size == 2 ? (var->ty->is_unsigned ? "ldrh" : "ldrsh") : "ldr";
   int n = MIN(var->ty->size, size);
-  println("  %s %s, %s", insn, reg(1, n), mem("x29", var->offset, n));
+  println("  %s %s, %s", insn, reg(r, n), mem("x29", var->offset, n));
+}
+
+static void load_simple(Node *node, Type *ty) {
+  load_simple_to(node, ty, 1);
+}
+
+//---------- Memory operands -------------------------------------------------
+//
+// An object in memory is loaded or stored from a base register and an
+// offset, as load_from() and store_to() take them: p->x, with p in x19,
+// is `ldr x0, [x19, 8]`, and s.a.b, with s on the stack, is
+// `ldr x0, [x29, 40]`, instead of the address computed into x0 first.
+
+// `p` without casts that emit no code: from one pointer type to another,
+// or from an array to a pointer to its first element (in `a + 1`)
+static Node *skip_noop_casts(Node *p) {
+  while (p->kind == ND_CAST &&
+         ((is_int_or_ptr(p->ty) && is_int_or_ptr(p->lhs->ty) &&
+           is_noop_cast(p->lhs->ty, p->ty)) ||
+          (p->ty->kind == TY_PTR && p->lhs->ty->kind == TY_ARRAY)))
+    p = p->lhs;
+  return p;
+}
+
+// For *(p + n) with a constant n, which p[n] is too: p, and n (scaled to
+// bytes) in *off. Else `p` itself, with *off 0.
+static Node *split_offset(Node *p, int64_t *off) {
+  *off = 0;
+  p = skip_noop_casts(p);
+  if ((p->kind == ND_ADD || p->kind == ND_SUB) && p->lhs->ty->base &&
+      p->lhs->ty->base->kind != TY_VLA && is_foldable(p->rhs)) {
+    *off = p->kind == ND_SUB ? -fold(p->rhs) : fold(p->rhs);
+    return skip_noop_casts(p->lhs);
+  }
+  return p;
+}
+
+// A local variable addressed from x29 (see gen_addr)
+static bool is_frame_var(Node *node) {
+  return node->kind == ND_VAR && node->var->is_local && !node->var->reg &&
+         node->var->ty->kind != TY_VLA && !node->var->is_overaligned;
+}
+
+// The operand of the object `node` if it needs no code at all: a local
+// variable, a member of one, or what a register variable points to (at
+// a constant offset).
+static bool free_memop(Node *node, MemOp *m) {
+  switch (node->kind) {
+  case ND_VAR:
+    if (!is_frame_var(node))
+      return false;
+    *m = (MemOp){"x29", node->var->offset};
+    return true;
+  case ND_MEMBER:
+    if (!free_memop(node->lhs, m))
+      return false;
+    m->off += node->member->offset;
+    return true;
+  case ND_DEREF: {
+    int64_t off;
+    Node *p = split_offset(node->lhs, &off);
+    // An element of an array that is itself such an operand, as a[2] or
+    // p->a[2]
+    if (p->ty->kind == TY_ARRAY) {
+      if (!free_memop(p, m))
+        return false;
+      m->off += off;
+      return true;
+    }
+    Obj *var = local_scalar(p);
+    if (!var || !var->reg || var->ty->kind != TY_PTR)
+      return false;
+    *m = (MemOp){xreg[18 + var->reg], off};
+    return true;
+  }
+  }
+  return false;
+}
+
+// The operand of the object `node`, computing into x0 what it needs.
+static MemOp gen_memop(Node *node) {
+  MemOp m;
+  if (free_memop(node, &m))
+    return m;
+
+  switch (node->kind) {
+  case ND_MEMBER:
+    m = gen_memop(node->lhs);
+    m.off += node->member->offset;
+    return m;
+  case ND_DEREF: {
+    int64_t off;
+    Node *p = split_offset(node->lhs, &off);
+    if (p->ty->kind == TY_ARRAY) {
+      m = gen_memop(p);
+      m.off += off;
+      return m;
+    }
+    gen_expr(p);
+    return (MemOp){"x0", off};
+  }
+  }
+
+  gen_addr(node);
+  return (MemOp){"x0", 0};
+}
+
+// The types loaded and stored as they are in one instruction (with
+// load_from() and store_to())
+static bool is_simple_load(Type *ty) {
+  return (is_integer(ty) && !is_int128(ty)) || ty->kind == TY_PTR ||
+         ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
 }
 
 // The value of `node` if it's a constant that add, sub and cmp take as
@@ -1830,29 +1953,25 @@ static void gen_expr(Node *node) {
       gen_addr(node);
       return;
     }
-    Node *base = node->lhs;
-    char *b = "x0";
-    int64_t off = mem->offset;
-    if (base->kind == ND_VAR && base->var->is_local && base->ty->kind != TY_VLA &&
-        !base->var->is_overaligned) {
-      b = "x29";
-      off += base->var->offset;
-    } else {
-      gen_addr(base);
-    }
+    MemOp m = gen_memop(node);
     // A bit-field's whole unit, not its promoted type (see add_type())
     if (mem->is_bitfield) {
-      load_unit(mem, b, off);
+      load_unit(mem, m.base, m.off);
       extract_bitfield(mem);
     } else {
-      load_from(node->ty, b, off);
+      load_from(node->ty, m.base, m.off);
     }
     atomic_fence(node->ty);
     return;
   }
   case ND_DEREF:
-    gen_expr(node->lhs);
-    load(node->ty);
+    if (is_simple_load(node->ty)) {
+      MemOp m = gen_memop(node);
+      load_from(node->ty, m.base, m.off);
+    } else {
+      gen_expr(node->lhs);
+      load(node->ty);
+    }
     atomic_fence(node->ty);
     return;
   case ND_ADDR:
@@ -1864,6 +1983,19 @@ static void gen_expr(Node *node) {
       gen_expr(node->rhs);
       atomic_fence(node->lhs->ty);
       store_var(node->lhs->var);
+      atomic_fence(node->lhs->ty);
+      return;
+    }
+
+    // Nor does a store to an operand that needs no code, as p->x with p
+    // in a register.
+    MemOp m;
+    if (is_simple_load(node->ty) &&
+        !(node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) &&
+        free_memop(node->lhs, &m)) {
+      gen_expr(node->rhs);
+      atomic_fence(node->lhs->ty);
+      store_to(node->ty, m.base, m.off);
       atomic_fence(node->lhs->ty);
       return;
     }

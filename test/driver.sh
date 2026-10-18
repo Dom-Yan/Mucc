@@ -1140,6 +1140,8 @@ echo 'struct S { long a; struct { int b, c; } in; long arr[4]; };
 long f(struct S *p) { long t[3]; struct S s; s.arr[1] = p->in.c; t[1] = p->arr[2]; return t[1] + s.arr[1]; }' > $tmp/opt/mem.c
 ! $mucc --target=x86_64-linux -S -o- $tmp/opt/mem.c | grep -q 'add \$\|lea '
 check 'x86-64 memory operands'
+! $mucc --target=aarch64-linux -S -o- $tmp/opt/mem.c | grep -q 'add x0, x\(0\|29\), [0-9]'
+check 'ARM64 memory operands'
 
 # -fvisibility=hidden: definitions are hidden unless the attribute says
 # otherwise; declarations of others' symbols aren't touched.
