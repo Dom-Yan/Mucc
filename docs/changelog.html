@@ -24,8 +24,14 @@ Downloads for each release are on the
     C library are compressed inside it (<code>mucc -pack</code>) and
     unpacked as they're read; a link unpacks only the members of
     <code>libc.a</code> it takes, so it's as fast as before.</li>
-  <li>Faster: tokenizing tests a word's first character before calling
-    anything, which makes compiling <code>sqlite3.c</code> 8% faster.</li>
+  <li>Faster: <code>sqlite3.c</code> compiles in 0.50 s (was 0.79), and
+    mucc's own source in 0.41 s (was 0.54). The tokenizer, the
+    preprocessor's lookups and the assembler do less per character, and
+    the code mucc makes is better: constants are folded through division,
+    instructions take constants, local variables and members (with their
+    offsets) as operands in place, and arguments that are constants or
+    local variables go straight into their registers. That code runs
+    about as fast as <code>gcc -O0</code>'s.</li>
   <li>The bundled musl's <code>sqrt</code>, <code>lrint</code>,
     <code>fma</code> and the like are one instruction each on x86-64,
     not portable C: a loop of <code>sqrt</code> and <code>lrint</code>

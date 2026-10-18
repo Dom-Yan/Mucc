@@ -19,8 +19,8 @@ gcc, no binutils, no system headers.
 
 | | |
 | --- | --- |
-| **Compile speed** | 2.7x faster than `gcc -O0` and 1.6x faster than `clang -O0` ([details](#performance)) |
-| **Generated code** | Runs about 15% slower than `gcc -O0` code and about half as fast as `gcc -O2` code |
+| **Compile speed** | 3.9x faster than `gcc -O0` and 2.3x faster than `clang -O0` ([details](#performance)) |
+| **Generated code** | Runs about as fast as `gcc -O0` code and two thirds as fast as `gcc -O2` code |
 | **Size** | One 2.8 MB static binary, with musl and Linux's headers inside ([what's in it](#whats-inside-the-binary)) |
 | **Source** | About 35,000 lines of C in 16 files, small enough to read end to end |
 | **Language** | C17 by default, C23 with `-std=c23`, plus the GNU extensions real code uses |
@@ -310,18 +310,18 @@ ignored. An unknown flag is an error.
 
 The mucc measured here is the release binary (`build/mucc`), which is
 built by mucc itself, as the one you download is. (A mucc built by
-`gcc -O2` compiles about 2.7 times as fast, as the last table shows.)
+`gcc -O2` compiles about 1.9 times as fast, as the last table shows.)
 
 How long each compiler takes to compile mucc's own source (`src/*.c`,
-32,419 lines, 56,573 after preprocessing) to objects:
+34,000 lines, 59,884 after preprocessing) to objects:
 
 | Compiler | Time | Lines per second | mucc is |
 | --- | ---: | ---: | ---: |
-| **mucc 1.4.0** | **0.54 s** | **105,000** | |
-| clang 21 `-O0` | 0.84 s | 67,000 | 1.6x faster |
-| gcc 15 `-O0` | 1.46 s | 39,000 | 2.7x faster |
-| clang 21 `-O2` | 5.27 s | 11,000 | 9.8x faster |
-| gcc 15 `-O2` | 7.72 s | 7,300 | 14x faster |
+| **mucc** | **0.41 s** | **145,000** | |
+| clang 21 `-O0` | 0.92 s | 64,000 | 2.3x faster |
+| gcc 15 `-O0` | 1.58 s | 38,000 | 3.9x faster |
+| clang 21 `-O2` | 5.79 s | 10,000 | 14x faster |
+| gcc 15 `-O2` | 8.40 s | 7,100 | 20x faster |
 
 And SQLite's amalgamation, `sqlite3.c` 3.38.2 (239,379 lines in one
 file), the usual test of compile speed. tcc, the Tiny C Compiler, is much
@@ -330,12 +330,12 @@ compile mucc's own source, which uses `__int128`.)
 
 | Compiler | Time | Lines per second | mucc is |
 | --- | ---: | ---: | ---: |
-| tcc 0.9.27 | 0.05 s | 4,200,000 | 16x slower |
-| **mucc 1.4.0** | **0.79 s** | **302,000** | |
-| clang 21 `-O0` | 0.93 s | 255,000 | 1.2x faster |
-| gcc 15 `-O0` | 2.35 s | 102,000 | 3.0x faster |
-| clang 21 `-O2` | 12.78 s | 19,000 | 16x faster |
-| gcc 15 `-O2` | 16.51 s | 14,000 | 21x faster |
+| tcc 0.9.27 | 0.06 s | 4,000,000 | 8.3x slower |
+| **mucc** | **0.50 s** | **476,000** | |
+| clang 21 `-O0` | 0.96 s | 248,000 | 1.9x faster |
+| gcc 15 `-O0` | 2.41 s | 99,000 | 4.8x faster |
+| clang 21 `-O2` | 12.98 s | 18,000 | 26x faster |
+| gcc 15 `-O2` | 16.93 s | 14,000 | 34x faster |
 
 How fast the code each one makes runs, using mucc itself as the program:
 mucc built four ways, each compiling the same source.
@@ -343,9 +343,9 @@ mucc built four ways, each compiling the same source.
 | mucc built by | Time | Slower than gcc `-O2` by |
 | --- | ---: | ---: |
 | gcc `-O2` | 0.24 s | |
-| gcc `-O0` | 0.37 s | 1.6x |
-| mucc, with glibc (`--libc=system`) | 0.43 s | 1.8x |
-| mucc, with its musl (the default) | 0.64 s | 2.7x |
+| gcc `-O0` | 0.36 s | 1.5x |
+| mucc, with glibc (`--libc=system`) | 0.37 s | 1.5x |
+| mucc, with its musl (the default) | 0.45 s | 1.9x |
 
 Measured on an Intel Core i7-1185G7 laptop under WSL 2 with gcc 15.2,
 clang 21.1 and tcc 0.9.27: real time, best of 7 with the compilers taking
@@ -356,8 +356,8 @@ too if you download the amalgamation from
 `make bench SQLITE3_C=path/to/sqlite3.c`.
 
 In short: mucc compiles faster than gcc and clang, and the code it makes
-is a little slower than theirs at `-O0`. The bundled musl's `malloc` and
-stdio make programs about 1.4x slower than with glibc. For the fastest
+is about as fast as theirs at `-O0`. The bundled musl's `malloc` and
+stdio make programs about 1.2x slower than with glibc. For the fastest
 programs, build with gcc or clang at `-O2`.
 
 ## Build from source
