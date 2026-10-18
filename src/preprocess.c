@@ -101,6 +101,7 @@ static Token *new_eof(Token *tok) {
   Token *t = copy_token(tok);
   t->kind = TK_EOF;
   t->len = 0;
+  t->hash = 0;
   t->at_bol = true;
   return t;
 }
@@ -448,7 +449,7 @@ static CondIncl *push_cond_incl(Token *tok, bool included) {
 static Macro *find_macro(Token *tok) {
   if (tok->kind != TK_IDENT)
     return NULL;
-  return hashmap_get2(&macros, tok->loc, tok->len);
+  return hashmap_get_tok(&macros, tok);
 }
 
 static Macro *add_macro(char *name, bool is_objlike, Token *body) {

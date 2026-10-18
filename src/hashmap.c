@@ -73,17 +73,15 @@ static void rehash(HashMap *map) {
 //---------- Finding entries -------------------------------------------------
 
 // (Another key nearly always has another hash, so the bytes are rarely
-// compared but for the key itself.)
-static bool match(HashEntry *ent, char *key, int keylen, uint32_t hash) {
-  return ent->hash == hash && ent->key && ent->key != TOMBSTONE &&
-         ent->keylen == keylen && memcmp(ent->key, key, keylen) == 0;
-}
+// compared but for the key itself.) A macro: mucc doesn't inline, and
+// this is tried for each bucket a lookup probes.
+#define match(ent, key, keylen, hash)                                  \
+  ((ent)->hash == (hash) && (ent)->key && (ent)->key != TOMBSTONE &&  \
+   (ent)->keylen == (keylen) && memcmp((ent)->key, key, keylen) == 0)
 
-static HashEntry *get_entry(HashMap *map, char *key, int keylen) {
+static HashEntry *get_entry(HashMap *map, char *key, int keylen, uint32_t hash) {
   if (!map->buckets)
     return NULL;
-
-  uint32_t hash = fnv_hash(key, keylen);
 
   // capacity is always a power of two, so `& (capacity - 1)` is `% capacity`
   // without a slow division.
@@ -141,7 +139,17 @@ void *hashmap_get(HashMap *map, char *key) {
 }
 
 void *hashmap_get2(HashMap *map, char *key, int keylen) {
-  HashEntry *ent = get_entry(map, key, keylen);
+  HashEntry *ent = get_entry(map, key, keylen, fnv_hash(key, keylen));
+  return ent ? ent->val : NULL;
+}
+
+// Looks up `tok`'s text. A name is looked up in several tables (is it a
+// macro, a keyword, a typedef, a variable in this scope or the next one
+// out...), and tokens are copied with their hash, so it's computed once.
+void *hashmap_get_tok(HashMap *map, Token *tok) {
+  if (!tok->hash)
+    tok->hash = fnv_hash(tok->loc, tok->len);
+  HashEntry *ent = get_entry(map, tok->loc, tok->len, tok->hash);
   return ent ? ent->val : NULL;
 }
 
@@ -159,7 +167,7 @@ void hashmap_delete(HashMap *map, char *key) {
 }
 
 void hashmap_delete2(HashMap *map, char *key, int keylen) {
-  HashEntry *ent = get_entry(map, key, keylen);
+  HashEntry *ent = get_entry(map, key, keylen, fnv_hash(key, keylen));
   if (ent)
     ent->key = TOMBSTONE;
 }

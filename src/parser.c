@@ -314,7 +314,7 @@ static void leave_scope(void) {
 // The innermost declaration of `tok`'s name, or NULL.
 static VarScope *find_var(Token *tok) {
   for (Scope *sc = scope; sc; sc = sc->next) {
-    VarScope *sc2 = hashmap_get2(&sc->vars, tok->loc, tok->len);
+    VarScope *sc2 = hashmap_get_tok(&sc->vars, tok);
     if (sc2)
       return sc2;
   }
@@ -323,7 +323,7 @@ static VarScope *find_var(Token *tok) {
 
 static Type *find_tag(Token *tok) {
   for (Scope *sc = scope; sc; sc = sc->next) {
-    Type *ty = hashmap_get2(&sc->tags, tok->loc, tok->len);
+    Type *ty = hashmap_get_tok(&sc->tags, tok);
     if (ty)
       return ty;
   }
@@ -3339,7 +3339,7 @@ static bool is_typename(Token *tok) {
   // Before C23, `constexpr` is an ordinary name.
   if (equal(tok, "constexpr") && tok->kind != TK_KEYWORD)
     return find_typedef(tok);
-  return hashmap_get2(&map, tok->loc, tok->len) || find_typedef(tok);
+  return hashmap_get_tok(&map, tok) || find_typedef(tok);
 }
 
 // static-assert = "_Static_assert" "(" const-expr ("," string-literal)? ")" ";"
@@ -9439,6 +9439,7 @@ static Token *new_builtin_token(Token *at, TokenKind kind, char *text) {
   t->file = new_file("<built-in>", at->file->file_no, text);
   t->loc = t->file->contents;
   t->len = strlen(text);
+  t->hash = 0;
   t->origin = at;
   return t;
 }

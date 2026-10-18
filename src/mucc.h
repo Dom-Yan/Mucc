@@ -173,6 +173,8 @@ struct Token {
   bool at_bol : 1;  // True if this token is at beginning of line
   bool has_space : 1; // True if this token follows a space character
   bool has_line : 1;  // #line's difference is added to line_no
+  uint32_t hash;    // The hash of its text once looked up, or 0 (see
+                    // hashmap_get_tok())
   Hideset *hideset; // For macro expansion
   Token *origin;    // If this is expanded from a macro, the original token
 };
@@ -762,6 +764,7 @@ typedef struct {
 
 void *hashmap_get(HashMap *map, char *key);
 void *hashmap_get2(HashMap *map, char *key, int keylen);
+void *hashmap_get_tok(HashMap *map, Token *tok);
 void hashmap_put(HashMap *map, char *key, void *val);
 void hashmap_put2(HashMap *map, char *key, int keylen, void *val);
 void hashmap_delete(HashMap *map, char *key);

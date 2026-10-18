@@ -204,7 +204,7 @@ static bool is_keyword(Token *tok) {
       hashmap_put(&map, c23_kw[i], (void *)1);
   }
 
-  return hashmap_get2(&map, tok->loc, tok->len);
+  return hashmap_get_tok(&map, tok);
 }
 
 //---------- String and character literals -----------------------------------
