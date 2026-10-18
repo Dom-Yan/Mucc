@@ -54,6 +54,10 @@ the tests and send a change, take a look at the
 [Contributing to Mucc](https://dom-yan.github.io/Mucc/contributing.html)
 guide.
 
+##Updates
+Thank you for starring Mucc and watching its development! There is currently a hefty patch coming soon that's going to fix performance issues, cutting down the binary size and some other bugs that were found. I plan to release this late October to early November.   
+
+
 ## License
 
 Mucc is under the [MIT License](LICENSE). It started from Rui Ueyama's
