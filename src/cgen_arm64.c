@@ -1415,20 +1415,28 @@ static void gen_funcall(Node *node) {
   Node **args = calloc(nargs + 1, sizeof(Node *));
   ArgLoc *locs = calloc(nargs + 1, sizeof(ArgLoc));
   int64_t *pos = calloc(nargs + 1, sizeof(int64_t));
+  bool *late = calloc(nargs + 1, sizeof(bool));
 
   ArgState s = {};
   int i = 0;
   for (Node *arg = node->args; arg; arg = arg->next, i++) {
     args[i] = arg;
     locs[i] = classify_arg(&s, arg->ty);
+
+    // An integer or pointer argument that goes in a register, and is a
+    // constant or a local variable, isn't pushed: it's loaded into its
+    // register last, just before the call (see simple_operand()).
+    late[i] = locs[i].kind == ARG_GP && !locs[i].by_ref && locs[i].nregs == 1 &&
+              is_int_or_ptr(arg->ty) && simple_operand(arg);
   }
 
   // Computed right to left, as on x86-64, the first ends at sp. pos[i] is
   // where argument i is, from sp.
   for (i = nargs - 1; i >= 0; i--)
-    push_arg(args[i]);
+    if (!late[i])
+      push_arg(args[i]);
   for (i = 1; i <= nargs; i++)
-    pos[i] = pos[i - 1] + arg_slot(args[i - 1]->ty);
+    pos[i] = pos[i - 1] + (late[i - 1] ? 0 : arg_slot(args[i - 1]->ty));
   int64_t temps = pos[nargs];
 
   // A function called through a pointer: its address goes in x15.
@@ -1466,6 +1474,10 @@ static void gen_funcall(Node *node) {
     ArgLoc *loc = &locs[i];
     int64_t src = out + pos[i];
     if (loc->kind == ARG_GP) {
+      if (late[i]) {
+        load_simple_to(simple_operand(args[i]), args[i]->ty, loc->reg);
+        continue;
+      }
       if (loc->by_ref) {
         add_imm(xreg[loc->reg], "sp", src);
         continue;
@@ -1491,6 +1503,7 @@ static void gen_funcall(Node *node) {
   free(args);
   free(locs);
   free(pos);
+  free(late);
 
   // The bits of x0 above a char, short or _Bool may be anything.
   switch (node->ty->kind) {

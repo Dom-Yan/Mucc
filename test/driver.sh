@@ -1132,6 +1132,8 @@ echo 'long g(long, int, char *);
 long f(long x, int y, char *p) { return g(x, 7, p); }' > $tmp/opt/args.c
 ! $mucc --target=x86_64-linux -S -o- $tmp/opt/args.c | grep -q 'push %rax'
 check 'x86-64 simple arguments loaded last'
+! $mucc --target=aarch64-linux -S -o- $tmp/opt/args.c | grep -q 'str x0, \[sp, -16\]!'
+check 'ARM64 simple arguments loaded last'
 
 # A member, or an element at a constant index, is loaded and stored from
 # its base register (a register variable's, or %rbp) and one displacement,
