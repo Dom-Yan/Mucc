@@ -43,7 +43,7 @@ Type *ty_wchar(void) {
 // format: x87's 80 bits (then zeros) on x86-64, IEEE quadruple precision
 // on ARM64. It's computed from the value, not copied, so it's right
 // whichever of the two mucc's own long double is. (Cross-compiling from
-// x86-64, values are only as precise as x87's; see README.md.)
+// x86-64, values are only as precise as x87's; see docs/language.html.)
 void write_ldouble(char *buf, long double v) {
   memset(buf, 0, 16);
   bool neg = v < 0 || (v == 0 && 1 / v < 0);

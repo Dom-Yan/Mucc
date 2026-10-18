@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="Install mucc, compile your first program, make it your default compiler, and build it from source.">
+<title>Getting Started with Mucc - Mucc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>Getting Started
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html" class="here">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>Getting Started with Mucc</h1>
+<p>This page gets you from nothing to a working mucc: downloading it,
+compiling a first program, making it your default compiler, and building
+mucc itself from source.</p>
+
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#requirements">Requirements</a></li>
+  <li><a href="#installing-mucc">Installing Mucc</a></li>
+  <li><a href="#your-first-program">Your First Program</a></li>
+  <li><a href="#making-mucc-your-default-compiler">Making Mucc Your Default Compiler</a></li>
+  <li><a href="#building-mucc-from-source">Building Mucc from Source</a></li>
+  <li><a href="#directory-layout">Directory Layout</a></li>
+  <li><a href="#next-steps">Next Steps</a></li>
+</ul>
+</div>
+<h2 id="requirements">Requirements<a class="anchor" href="#requirements">&para;</a></h2>
+<ul>
+  <li><b>A 64-bit Linux machine</b>, x86-64 (Intel or AMD) or ARM64: Ubuntu,
+    Debian, Fedora, Arch, Alpine, Raspberry Pi OS, CentOS 7 and later, and
+    others. On Windows, use WSL 2.</li>
+  <li><b>Nothing else.</b> The released binary has its own assembler, linker,
+    headers and C library. <code>curl</code> (or a browser) is only needed to
+    download it.</li>
+</ul>
+<div class="note"><span class="title">Note</span>
+To build mucc from source you also need <code>git</code> and
+<code>make</code>, and a C compiler: mucc itself is enough. See
+<a href="#building-mucc-from-source">Building Mucc from Source</a>.</div>
+
+<h2 id="installing-mucc">Installing Mucc<a class="anchor" href="#installing-mucc">&para;</a></h2>
+<p>Download the binary for your CPU into <code>~/.local/bin</code>:</p>
+<pre><code>mkdir -p ~/.local/bin
+curl -Lo ~/.local/bin/mucc https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-$(uname -m | sed s/arm64/aarch64/)-linux
+chmod +x ~/.local/bin/mucc
+mucc --version</code></pre>
+<p>That downloads <code>mucc-x86_64-linux</code> or <code>mucc-aarch64-linux</code>
+to match your CPU. Each release also has a <code>.sha256</code> file to check
+the download with. It names the file as released, so check it next to a
+copy of that name:</p>
+<pre><code>cd /tmp
+curl -LO https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-$(uname -m)-linux
+curl -LO https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-$(uname -m)-linux.sha256
+sha256sum -c mucc-$(uname -m)-linux.sha256      # mucc-x86_64-linux: OK</code></pre>
+<ul>
+  <li><b><code>mucc: command not found</code>?</b> Open a new terminal, or add
+    <code>export PATH="$HOME/.local/bin:$PATH"</code> to your <code>~/.bashrc</code>.</li>
+  <li><b>To update,</b> run the same <code>curl</code> again.</li>
+  <li><b>To uninstall,</b> <code>rm ~/.local/bin/mucc</code>.</li>
+</ul>
+
+<h2 id="your-first-program">Your First Program<a class="anchor" href="#your-first-program">&para;</a></h2>
+<pre><code>// hello.c
+#include &lt;stdio.h&gt;
+
+int main(void) {
+  printf("hello, world\n");
+  return 0;
+}</code></pre>
+<pre><code>mucc -o hello hello.c
+./hello</code></pre>
+<p><code>hello</code> is a static executable: copy it to any Linux machine
+with the same kind of CPU and it runs there, whatever C library that
+machine has.</p>
+
+<h3 id="a-program-in-several-files">A Program in Several Files<a class="anchor" href="#a-program-in-several-files">&para;</a></h3>
+<pre><code>mucc -c main.c                   # main.o
+mucc -c util.c                   # util.o
+mucc -o prog main.o util.o       # link them
+mucc -o prog main.c util.c       # or all at once</code></pre>
+
+<h3 id="a-static-library">A Static Library<a class="anchor" href="#a-static-library">&para;</a></h3>
+<pre><code>mucc -c a.c b.c
+mucc -ar rcs libfoo.a a.o b.o
+mucc -o prog main.c -L. -lfoo</code></pre>
+
+<h3 id="a-program-for-the-other-cpu">A Program for the Other CPU<a class="anchor" href="#a-program-for-the-other-cpu">&para;</a></h3>
+<pre><code>mucc --target=aarch64-linux -o hello-arm hello.c    # on an x86-64 machine
+file hello-arm                                      # ELF 64-bit LSB executable, ARM aarch64</code></pre>
+<p>Copy <code>hello-arm</code> to a Raspberry Pi or an ARM server and run it
+there.</p>
+<div class="note"><span class="title">Note</span>
+The downloaded binary carries musl for its own CPU only, so this needs a C
+library for the other one: a mucc built from source after
+<code>make libc-aarch64</code> (or <code>make libc-x86_64</code>), or
+<code>--libc=system</code> with Debian and Ubuntu's cross glibc. The
+<a href="user-guide.html#cross-compiling">User Guide</a> has the details.</div>
+
+<h2 id="making-mucc-your-default-compiler">Making Mucc Your Default Compiler<a class="anchor" href="#making-mucc-your-default-compiler">&para;</a></h2>
+<p>Pick the scope you want. Each one is undone by reversing its step.</p>
+
+<h3 id="one-build">One Build<a class="anchor" href="#one-build">&para;</a></h3>
+<p>Most build systems take the compiler as <code>CC</code>:</p>
+<pre><code>make CC=mucc
+./configure CC=mucc AR="mucc -ar" RANLIB="mucc -ranlib"</code></pre>
+
+<h3 id="your-shell">Your Shell<a class="anchor" href="#your-shell">&para;</a></h3>
+<p>Add this to <code>~/.bashrc</code> (or your shell's equivalent), and every
+build that reads <code>$CC</code> uses mucc:</p>
+<pre><code>export CC=mucc AR="mucc -ar" RANLIB="mucc -ranlib"</code></pre>
+
+<h3 id="your-user-as-cc">Your User, as <code>cc</code><a class="anchor" href="#your-user-as-cc">&para;</a></h3>
+<p>Builds that run <code>cc</code> directly use whatever <code>cc</code> is
+first in your <code>PATH</code>. Put mucc there under that name (no
+<code>sudo</code> needed):</p>
+<pre><code>ln -s ~/.local/bin/mucc ~/.local/bin/cc
+hash -r
+cc --version</code></pre>
+<p>Undo with <code>rm ~/.local/bin/cc</code>.</p>
+
+<h3 id="the-whole-system">The Whole System<a class="anchor" href="#the-whole-system">&para;</a></h3>
+<p>On Debian, Ubuntu and their derivatives, install mucc where every user
+can run it and register it as an alternative for <code>cc</code>:</p>
+<pre><code>sudo install -m 755 ~/.local/bin/mucc /usr/local/bin/mucc
+sudo update-alternatives --install /usr/bin/cc cc /usr/local/bin/mucc 100
+cc --version</code></pre>
+<p>Switch back with <code>sudo update-alternatives --config cc</code>, or remove
+it with <code>sudo update-alternatives --remove cc /usr/local/bin/mucc</code>.</p>
+<div class="warning"><span class="title">Keep gcc or clang around</span>
+Anything that needs what mucc doesn't do (C++, sanitizers, LTO) still needs
+gcc or clang, so keep them installed alongside it.</div>
+
+<h2 id="building-mucc-from-source">Building Mucc from Source<a class="anchor" href="#building-mucc-from-source">&para;</a></h2>
+<p>You need <code>git</code> and <code>make</code>, plus a C compiler: either
+mucc itself or gcc.</p>
+
+<h3 id="with-only-mucc-no-gcc">With Only Mucc (No gcc)<a class="anchor" href="#with-only-mucc-no-gcc">&para;</a></h3>
+<p>Install mucc as in <a href="#installing-mucc">Installing Mucc</a>, then:</p>
+<pre><code>git clone https://github.com/Dom-Yan/Mucc.git &amp;&amp; cd Mucc
+make CC=mucc        # ./mucc, the compiler
+make libc           # musl, built by mucc
+make build/mucc     # the single binary, as released
+build/mucc --version</code></pre>
+<p>This takes about 15 seconds. It is how releases are built: each one by the
+release before it, with gcc and binutils made to fail so nothing else takes
+part (<code>test/bootstrap.sh</code>).</p>
+
+<h3 id="with-gcc">With gcc<a class="anchor" href="#with-gcc">&para;</a></h3>
+<pre><code>sudo apt install build-essential git        # Ubuntu, Debian, WSL
+sudo dnf install gcc make git glibc-devel   # Fedora
+sudo pacman -S base-devel git               # Arch
+
+git clone https://github.com/Dom-Yan/Mucc.git &amp;&amp; cd Mucc
+make &amp;&amp; make libc &amp;&amp; make build/mucc</code></pre>
+
+<h3 id="what-the-build-makes">What the Build Makes<a class="anchor" href="#what-the-build-makes">&para;</a></h3>
+<div class="table-wrap"><table>
+  <tr><th>File</th><th>What it is</th></tr>
+  <tr><td><code>./mucc</code></td><td>The compiler, built by your C compiler. It uses the system's glibc by default, and the bundled musl with <code>--libc=mucc</code> after <code>make libc</code>.</td></tr>
+  <tr><td><code>build/musl/</code></td><td>musl, built by mucc, with musl's and Linux's headers (<code>make libc</code>).</td></tr>
+  <tr><td><code>build/mucc</code></td><td>The single binary: mucc built by mucc, with its headers and musl packed inside, as released.</td></tr>
+  <tr><td><code>build/mucc-aarch64</code></td><td>The same for the other CPU (<code>make build/mucc-aarch64</code>, or <code>-x86_64</code> on ARM64).</td></tr>
+</table></div>
+
+<h3 id="installing-what-you-built">Installing What You Built<a class="anchor" href="#installing-what-you-built">&para;</a></h3>
+<p>Either copy the single binary over the downloaded one:</p>
+<pre><code>cp build/mucc ~/.local/bin/mucc</code></pre>
+<p>or install <code>./mucc</code> with its headers and musl:</p>
+<pre><code>make install                        # into /usr/local (needs sudo)
+make install PREFIX=$HOME/.local    # into ~/.local, no sudo
+make uninstall                      # removes it again</code></pre>
+
+<h3 id="notes">Notes<a class="anchor" href="#notes">&para;</a></h3>
+<ul>
+  <li>On WSL 2, clone into your Linux home (<code>~</code>), not
+    <code>/mnt/c</code>. It is much faster.</li>
+  <li><code>cc: not found</code> means there is no C compiler: use
+    <code>make CC=mucc</code> or install gcc.</li>
+</ul>
+
+<h2 id="directory-layout">Directory Layout<a class="anchor" href="#directory-layout">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Directory</th><th>What's in it</th></tr>
+  <tr><td><code>src/</code></td><td>The compiler, one stage per file (see <a href="internals.html">How Mucc Works</a>)</td></tr>
+  <tr><td><code>include/</code></td><td>mucc's own headers (<code>stddef.h</code>, <code>stdarg.h</code>, intrinsics, ...), used before the C library's</td></tr>
+  <tr><td><code>runtime/</code></td><td><code>arm64.c</code>, the <code>long double</code> and 128-bit routines ARM64 code needs</td></tr>
+  <tr><td><code>thirdparty/</code></td><td>musl and Linux's headers, as released by their projects</td></tr>
+  <tr><td><code>test/</code></td><td>The test suite (see <a href="contributing.html#testing">Testing</a>)</td></tr>
+  <tr><td><code>docs/</code></td><td>This website</td></tr>
+</table></div>
+
+<h2 id="next-steps">Next Steps<a class="anchor" href="#next-steps">&para;</a></h2>
+<ul>
+  <li>The <a href="user-guide.html">User Guide</a> covers everyday use.</li>
+  <li>The <a href="options.html">Command-Line Reference</a> lists every option.</li>
+  <li><a href="faq.html">FAQ and Problems</a> answers the common questions.</li>
+</ul>
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
+</body>
+</html>

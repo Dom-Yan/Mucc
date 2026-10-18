@@ -1,6 +1,220 @@
-/* The browser's own look, as plain pages have: only what that lacks. */
-body { margin: 8px; }
-table.speed { border: 1px solid #888; border-spacing: 2px; }
-table.speed td, table.speed th { border: 1px solid #888; padding: 1px 3px; text-align: left; font-weight: normal; }
-pre { margin-left: 2em; }
+/* Mucc documentation: a sidebar, a link bar, and pages in the style of
+   LLVM's documentation. No scripts, no web fonts. */
+
+:root {
+  --text: #222;
+  --muted: #555;
+  --link: #0b5aa2;
+  --bar: #2f2f2f;
+  --bar-text: #f2f2f2;
+  --h2: #3c3c3c;
+  --h3: #e4e4e4;
+  --side: #f3f3f3;
+  --border: #c8c8c8;
+  --code-bg: #f5f5f5;
+  --note-bg: #eef4fa;
+  --note-border: #6a9bc8;
+  --warn-bg: #fdf4e3;
+  --warn-border: #d39b2c;
+}
+
+* { box-sizing: border-box; }
+
+html { background: #fff; }
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: #fff;
+  font: 15px/1.55 "Lucida Grande", "Lucida Sans Unicode", Geneva, Verdana, Arial, sans-serif;
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* The link bar across the top */
+.topbar {
+  background: var(--bar);
+  color: var(--bar-text);
+  padding: 6px 16px;
+  font-size: 13px;
+}
+.topbar a { color: var(--bar-text); }
+.topbar .right { float: right; }
+.topbar .sep { color: #999; padding: 0 4px; }
+
+/* The sidebar and the page beside it */
+.layout { display: flex; align-items: flex-start; }
+
+.sidebar {
+  flex: 0 0 240px;
+  background: var(--side);
+  border-right: 1px solid var(--border);
+  padding: 16px 16px 24px;
+  font-size: 13.5px;
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+.sidebar img { display: block; width: 200px; height: auto; margin: 0 auto 12px; }
+.sidebar h3 {
+  margin: 18px 0 6px;
+  padding: 0;
+  background: none;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 2px 0; }
+.sidebar li a { display: block; padding: 2px 6px; border-radius: 3px; }
+.sidebar li a.here { background: #dde6ef; color: #000; font-weight: bold; }
+.sidebar .download {
+  display: block;
+  margin: 4px 0 0;
+  padding: 7px 10px;
+  text-align: center;
+  background: var(--bar);
+  color: #fff;
+  border-radius: 4px;
+  font-weight: bold;
+}
+.sidebar .download:hover { background: #4a4a4a; text-decoration: none; }
+.sidebar .small { color: var(--muted); font-size: 12px; margin-top: 6px; text-align: center; }
+
+.content {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 980px;
+  padding: 8px 32px 40px;
+}
+
+/* Headings: plain h1; dark bars for sections, light bars below them */
+h1 {
+  font-size: 30px;
+  font-weight: normal;
+  margin: 14px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+h2 {
+  font-size: 19px;
+  background: var(--h2);
+  color: #fff;
+  padding: 5px 10px;
+  margin: 32px 0 12px;
+  font-weight: bold;
+}
+h2 a, h2 a:hover { color: #fff; }
+h3 {
+  font-size: 16px;
+  background: var(--h3);
+  padding: 4px 10px;
+  margin: 24px 0 10px;
+}
+h4 { font-size: 15px; margin: 18px 0 6px; }
+
+/* A heading's own link, shown on hover */
+.anchor { visibility: hidden; margin-left: 6px; font-weight: normal; opacity: .7; }
+h2:hover .anchor, h3:hover .anchor { visibility: visible; }
+
+p, ul, ol { margin: 8px 0 12px; }
+li { margin: 3px 0; }
+
+code, pre, kbd {
+  font-family: Consolas, "DejaVu Sans Mono", Menlo, "Liberation Mono", monospace;
+  font-size: 13.5px;
+}
+code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-left: 4px solid #8a8a8a;
+  padding: 9px 12px;
+  overflow-x: auto;
+  line-height: 1.4;
+}
+pre code { background: none; padding: 0; }
+
+table {
+  border-collapse: collapse;
+  margin: 10px 0 16px;
+  font-size: 14px;
+}
+th, td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: var(--h3); }
+td.num, th.num { text-align: right; }
+tr.mucc td { font-weight: bold; background: #f4f8fc; }
+.table-wrap { overflow-x: auto; }
+
+/* Notes and warnings */
+.note, .warning {
+  padding: 8px 14px;
+  margin: 14px 0;
+  border-left: 4px solid var(--note-border);
+  background: var(--note-bg);
+}
+.warning { border-left-color: var(--warn-border); background: var(--warn-bg); }
+.note .title, .warning .title { font-weight: bold; display: block; margin-bottom: 2px; }
+
+/* The contents list at the top of a page */
+.toc {
+  border: 1px solid var(--border);
+  background: #fafafa;
+  padding: 8px 18px 8px;
+  margin: 12px 0 20px;
+  display: inline-block;
+  min-width: 320px;
+}
+.toc .title { font-weight: bold; }
+.toc ul { margin: 4px 0; padding-left: 20px; }
+.toc li { margin: 1px 0; }
+
+/* Cards for the overview's sections */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+.card {
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  background: #fbfbfb;
+}
+.card h4 { margin: 0 0 4px; }
+.card p { margin: 0; font-size: 14px; color: #333; }
+
+.lead { font-size: 16.5px; }
+
+footer {
+  border-top: 1px solid var(--border);
+  margin-top: 40px;
+  padding-top: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
 img { max-width: 100%; }
+
+/* Narrow screens: the sidebar goes on top */
+@media (max-width: 820px) {
+  .layout { display: block; }
+  .sidebar {
+    position: static;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar img { width: 160px; }
+  .content { padding: 6px 16px 32px; }
+  .topbar .right { float: none; display: block; }
+  .toc { min-width: 0; display: block; }
+}

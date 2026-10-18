@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="Answers to common questions and problems with mucc.">
+<title>Frequently Asked Questions - Mucc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>FAQ and Problems
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html" class="here">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>Frequently Asked Questions</h1>
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#general">General</a></li>
+  <li><a href="#common-problems">Common Problems</a></li>
+  <li><a href="#getting-help">Getting Help</a></li>
+</ul>
+</div>
+<h2 id="general">General<a class="anchor" href="#general">&para;</a></h2>
+
+<h3 id="is-mucc-a-replacement-for-gcc-or-clang">Is mucc a replacement for gcc or clang?<a class="anchor" href="#is-mucc-a-replacement-for-gcc-or-clang">&para;</a></h3>
+<p>For compiling and building C quickly, with nothing installed, yes: it
+takes their flags and builds real programs. For the fastest code, C++,
+sanitizers or other platforms, use gcc or clang. Many people use both:
+mucc while developing, gcc <code>-O2</code> for release builds.</p>
+
+<h3 id="does-it-output-c">Does it output C?<a class="anchor" href="#does-it-output-c">&para;</a></h3>
+<p>No: mucc compiles C into native x86-64 and ARM64 Linux programs, object
+files and libraries, the same kinds of files gcc makes. <code>-S</code>
+shows the assembly it generates.</p>
+
+<h3 id="do-the-programs-it-builds-need-mucc-to-run">Do the programs it builds need mucc to run?<a class="anchor" href="#do-the-programs-it-builds-need-mucc-to-run">&para;</a></h3>
+<p>No. By default they are static executables with musl inside, and run on
+any Linux for their CPU. With <code>--libc=system</code> they use the
+system's glibc, like gcc's programs.</p>
+
+<h3 id="which-version-of-c-should-i-write">Which version of C should I write?<a class="anchor" href="#which-version-of-c-should-i-write">&para;</a></h3>
+<p>C17, the default, is the safest choice: it is what most compilers and
+code target. Use <code>-std=c23</code> for C23's features. See
+<a href="language.html">C Language Support</a>.</p>
+
+<h3 id="why-is-it-so-small">Why is it so small?<a class="anchor" href="#why-is-it-so-small">&para;</a></h3>
+<p>It is one program with no optimizer, and its headers and C library are
+compressed inside it (see <a href="internals.html#the-single-binary">The
+Single Binary</a>).</p>
+
+<h2 id="common-problems">Common Problems<a class="anchor" href="#common-problems">&para;</a></h2>
+
+<h3 id="mucc-command-not-found"><code>mucc: command not found</code><a class="anchor" href="#mucc-command-not-found">&para;</a></h3>
+<p>Open a new terminal, or add <code>export PATH="$HOME/.local/bin:$PATH"</code>
+to your <code>~/.bashrc</code>.</p>
+
+<h3 id="a-library-like-openssl-or-sdl-isn-t-found">A library like OpenSSL or SDL isn't found<a class="anchor" href="#a-library-like-openssl-or-sdl-isn-t-found">&para;</a></h3>
+<p>The bundled musl only links static libraries built for it. Use the
+system's libraries with <code>--libc=system</code>, which needs glibc's
+development files (<code>build-essential</code>) and the library's
+(<code>libssl-dev</code>, ...).</p>
+
+<h3 id="an-unknown-option-is-an-error">An unknown option is an error<a class="anchor" href="#an-unknown-option-is-an-error">&para;</a></h3>
+<p>Mucc accepts and ignores flags that only tune optimization or
+diagnostics, but an option it doesn't know at all is an error, so nothing
+is silently wrong. Please <a href="https://github.com/Dom-Yan/Mucc/issues">report it</a> if gcc takes
+it.</p>
+
+<h3 id="a-program-uses-bitint-nested-functions-avx-or-c">A program uses <code>_BitInt</code>, nested functions, AVX or C++<a class="anchor" href="#a-program-uses-bitint-nested-functions-avx-or-c">&para;</a></h3>
+<p>Mucc doesn't support those (see
+<a href="language.html#what-mucc-does-not-support">What Mucc Does Not
+Support</a>). Code that checks for AVX or NEON with <code>__AVX__</code> or
+<code>__ARM_NEON</code> takes its portable path.</p>
+
+<h3 id="building-on-wsl-2-is-slow">Building on WSL 2 is slow<a class="anchor" href="#building-on-wsl-2-is-slow">&para;</a></h3>
+<p>Clone into your Linux home (<code>~</code>), not <code>/mnt/c</code>.</p>
+
+<h3 id="cc-not-found-when-building-mucc"><code>cc: not found</code> when building mucc<a class="anchor" href="#cc-not-found-when-building-mucc">&para;</a></h3>
+<p>There is no C compiler: build with <code>make CC=mucc</code>, or install
+gcc.</p>
+
+<h3 id="the-code-mucc-makes-is-slower-than-gcc-s">The code mucc makes is slower than gcc's<a class="anchor" href="#the-code-mucc-makes-is-slower-than-gcc-s">&para;</a></h3>
+<p>It is in the range of <code>gcc -O0</code>'s, about two thirds as fast as
+<code>gcc -O2</code>'s (see <a href="performance.html">Performance</a>). With
+the bundled musl, <code>malloc</code> and stdio are slower than glibc's too;
+<code>--libc=system</code> uses glibc's.</p>
+
+<h2 id="getting-help">Getting Help<a class="anchor" href="#getting-help">&para;</a></h2>
+<p>Ask or report on the <a href="https://github.com/Dom-Yan/Mucc/issues">issue tracker</a>.</p>
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
+</body>
+</html>

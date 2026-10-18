@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="Every command-line option mucc acts on.">
+<title>Command-Line Reference - Mucc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>Command-Line Reference
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html" class="here">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>Command-Line Reference</h1>
+<p>The options mucc acts on. Other gcc flags that only tune optimization,
+diagnostics or hardening (<code>-O2</code>, <code>-fstack-protector</code>,
+<code>-flto</code>, <code>-pipe</code>, ...) are accepted and ignored, so
+build scripts that pass them work. An unknown flag is an error.</p>
+
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#output">Output</a></li>
+  <li><a href="#preprocessor">Preprocessor</a></li>
+  <li><a href="#language">Language</a></li>
+  <li><a href="#warnings">Warnings</a></li>
+  <li><a href="#code-generation">Code Generation</a></li>
+  <li><a href="#assembler">Assembler</a></li>
+  <li><a href="#linking">Linking</a></li>
+  <li><a href="#information">Information</a></li>
+  <li><a href="#tools">Tools</a></li>
+</ul>
+</div>
+<h2 id="output">Output<a class="anchor" href="#output">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>What it does</th></tr>
+  <tr><td><code>-o <i>file</i></code></td><td>Output file</td></tr>
+  <tr><td><code>-c</code></td><td>Compile and assemble, don't link: one <code>.o</code> per input</td></tr>
+  <tr><td><code>-S</code></td><td>Stop after generating assembly</td></tr>
+  <tr><td><code>-E</code></td><td>Preprocess only, to stdout (or <code>-o</code>)</td></tr>
+  <tr><td><code>-fsyntax-only</code></td><td>Check the code, write nothing</td></tr>
+  <tr><td><code>-x c</code>, <code>-x assembler</code>, <code>-x assembler-with-cpp</code>, <code>-x none</code></td><td>The type of the inputs that follow</td></tr>
+</table></div>
+
+<h2 id="preprocessor">Preprocessor<a class="anchor" href="#preprocessor">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>What it does</th></tr>
+  <tr><td><code>-I</code>, <code>-isystem</code>, <code>-iquote</code>, <code>-idirafter</code>, <code>-nostdinc</code></td><td>Include directories</td></tr>
+  <tr><td><code>-D</code>, <code>-U</code>, <code>-include</code>, <code>-imacros</code></td><td>Macros</td></tr>
+  <tr><td><code>-dM -E</code></td><td>Print every macro defined at the end</td></tr>
+  <tr><td><code>-Wp,<i>a</i>,<i>b</i></code></td><td>Pass options to the preprocessor</td></tr>
+  <tr><td><code>-M</code>, <code>-MM</code>, <code>-MD</code>, <code>-MMD</code>, <code>-MF</code>, <code>-MT</code>, <code>-MQ</code>, <code>-MP</code>, <code>-MG</code></td><td>Dependency files</td></tr>
+</table></div>
+
+<h2 id="language">Language<a class="anchor" href="#language">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>What it does</th></tr>
+  <tr><td><code>-std=</code></td><td>C standard: <code>c89</code>, <code>c99</code>, <code>c11</code>, <code>c17</code> (the default), <code>c23</code>, and their <code>gnu*</code> forms</td></tr>
+  <tr><td><code>-funsigned-char</code>, <code>-fsigned-char</code></td><td>Whether plain <code>char</code> is unsigned</td></tr>
+  <tr><td><code>-fno-builtin</code>, <code>-ffreestanding</code></td><td><code>fabs</code>, <code>fabsf</code> and <code>fabsl</code> are calls, not builtins</td></tr>
+  <tr><td><code>-fcommon</code>, <code>-fno-common</code>, <code>-fvisibility=</code></td><td>Symbols</td></tr>
+</table></div>
+
+<h2 id="warnings">Warnings<a class="anchor" href="#warnings">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>What it does</th></tr>
+  <tr><td><code>-Wall</code>, <code>-W<i>name</i></code>, <code>-Wno-<i>name</i></code></td><td>Turn warnings on or off</td></tr>
+  <tr><td><code>-Werror</code>, <code>-Werror=<i>name</i></code></td><td>Make warnings errors</td></tr>
+  <tr><td><code>-w</code></td><td>No warnings</td></tr>
+</table></div>
+
+<h2 id="code-generation">Code Generation<a class="anchor" href="#code-generation">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>What it does</th></tr>
+  <tr><td><code>-g</code>, <code>-g0</code></td><td>Debug info (DWARF) on or off</td></tr>
+  <tr><td><code>-fpic</code>, <code>-fPIC</code>, <code>-fno-pic</code></td><td>Position-independent code</td></tr>
+  <tr><td><code>--target=</code>, <code>-target</code></td><td>Build for x86-64 or ARM64 (any GNU triple)</td></tr>
+  <tr><td><code>-msse3</code> to <code>-msse4.2</code>, <code>-maes</code>, <code>-mpclmul</code>, <code>-mpopcnt</code></td><td>Define gcc's macros for these extensions (<code>__SSE4_2__</code> and those before it, ...), so code takes its paths for them. The code mucc makes doesn't change.</td></tr>
+  <tr><td><code>-march=</code>, <code>-mtune=</code>, <code>-mcpu=</code></td><td>Accepted, and change nothing: mucc only emits instructions every x86-64 (or ARMv8-A) CPU has, <code>-march=native</code> included</td></tr>
+</table></div>
+
+<h2 id="assembler">Assembler<a class="anchor" href="#assembler">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>What it does</th></tr>
+  <tr><td><code>-Wa,<i>a</i>,<i>b</i></code>, <code>-Xassembler <i>a</i></code></td><td>Pass options to <code>as</code>. The built-in assembler takes none: it ignores <code>--noexecstack</code>, <code>-g</code> and <code>--64</code> quietly and warns about others.</td></tr>
+  <tr><td><code>-fno-integrated-as</code></td><td>Use the system's <code>as</code></td></tr>
+  <tr><td><code>-fno-as-fallback</code></td><td>Never use the system's <code>as</code>, even for what the built-in one doesn't know</td></tr>
+</table></div>
+
+<h2 id="linking">Linking<a class="anchor" href="#linking">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>What it does</th></tr>
+  <tr><td><code>-L</code>, <code>-l</code></td><td>Library directories and libraries</td></tr>
+  <tr><td><code>-static</code>, <code>-shared</code>, <code>-r</code>, <code>-s</code></td><td>Static or shared output, relocatable output, strip</td></tr>
+  <tr><td><code>-pthread</code>, <code>-rdynamic</code></td><td>Threads, and exporting symbols for <code>dlopen</code>ed modules</td></tr>
+  <tr><td><code>-nostdlib</code>, <code>-nostartfiles</code>, <code>-nodefaultlibs</code></td><td>Leave out the C library or the startup files</td></tr>
+  <tr><td><code>-Wl,<i>a</i>,<i>b</i></code>, <code>-Xlinker <i>a</i></code></td><td>Pass options to the linker</td></tr>
+  <tr><td><code>-fuse-ld=</code></td><td>Use the system's <code>ld</code>, as <code>-fuse-ld=bfd</code></td></tr>
+  <tr><td><code>--libc=mucc</code>, <code>--libc=system</code></td><td>Which C library (see <a href="user-guide.html#the-two-c-libraries">the User Guide</a>)</td></tr>
+</table></div>
+
+<h2 id="information">Information<a class="anchor" href="#information">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Option</th><th>What it does</th></tr>
+  <tr><td><code>--version</code>, <code>-dumpversion</code>, <code>-dumpmachine</code></td><td>Version and target</td></tr>
+  <tr><td><code>-v</code>, <code>-###</code></td><td>Show what mucc runs</td></tr>
+  <tr><td><code>-print-search-dirs</code>, <code>-print-file-name=</code>, <code>-print-multiarch</code></td><td>Where mucc looks for things</td></tr>
+</table></div>
+
+<h2 id="tools">Tools<a class="anchor" href="#tools">&para;</a></h2>
+<p>As the first argument:</p>
+<div class="table-wrap"><table>
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr><td><code>mucc -ar</code></td><td>The archiver, like GNU <code>ar</code>: <code>r</code>, <code>q</code>, <code>d</code> and <code>t</code>, with <code>c</code>, <code>s</code>, <code>S</code>, <code>u</code>, <code>D</code> and <code>v</code></td></tr>
+  <tr><td><code>mucc -ranlib</code></td><td>Rewrite an archive's symbol index</td></tr>
+  <tr><td><code>mucc -pack</code></td><td>Compress the files the single binary carries (used by the build; see <a href="internals.html#the-single-binary">How Mucc Works</a>)</td></tr>
+</table></div>
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="The design of mucc: the compiler pipeline, the single binary and its packed files, and how it builds itself.">
+<title>How Mucc Works - Mucc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>How Mucc Works
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html" class="here">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>How Mucc Works</h1>
+<p>How mucc is put together: the compiler pipeline, the single binary, and
+how mucc builds itself. The code itself is the final reference; each file
+starts with what it does, and <code>src/mucc.h</code> has a guide to where
+common changes go.</p>
+
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#the-pipeline">The Pipeline</a></li>
+  <li><a href="#the-single-binary">The Single Binary</a></li>
+  <li><a href="#how-mucc-builds-itself">How Mucc Builds Itself</a></li>
+  <li><a href="#arm64">ARM64</a></li>
+</ul>
+</div>
+<h2 id="the-pipeline">The Pipeline<a class="anchor" href="#the-pipeline">&para;</a></h2>
+<p>The compiler is a pipeline, one stage per file in <code>src/</code>:</p>
+<div class="table-wrap"><table>
+  <tr><th>Stage</th><th>File</th><th>Does</th></tr>
+  <tr><td>1</td><td><code>token.c</code></td><td>source text to tokens</td></tr>
+  <tr><td>2</td><td><code>preprocess.c</code></td><td>macros, <code>#include</code>, <code>#if</code></td></tr>
+  <tr><td>3</td><td><code>parser.c</code>, <code>type.c</code></td><td>tokens to a typed syntax tree</td></tr>
+  <tr><td>4</td><td><code>cgen.c</code>, <code>cgen_arm64.c</code></td><td>syntax tree to x86-64 or ARM64 assembly</td></tr>
+  <tr><td>5</td><td><code>asm.c</code></td><td>assembly to an ELF object</td></tr>
+  <tr><td>6</td><td><code>link.c</code></td><td>objects and archives to a static executable</td></tr>
+</table></div>
+<p>Around them:</p>
+<ul>
+  <li><code>main.c</code> is the driver: it parses the command line and runs
+    the stages, and holds the table of files built into the binary.</li>
+  <li><code>ar.c</code> is <code>mucc -ar</code>, the archiver.</li>
+  <li><code>pack.c</code> is <code>mucc -pack</code>, which compresses the
+    single binary's files, and the code that unpacks them.</li>
+  <li><code>diag.c</code> prints errors and warnings for every stage.</li>
+  <li><code>strings.c</code>, <code>hashmap.c</code> and <code>unicode.c</code>
+    are support code.</li>
+  <li><code>mucc.h</code> declares what they share.</li>
+</ul>
+<p>Each file is split into sections by <code>//---------- Name ---</code>
+lines; <code>grep -n '^//-------' src/*.c</code> lists them all.</p>
+
+<h3 id="code-generation">Code Generation<a class="anchor" href="#code-generation">&para;</a></h3>
+<p>The code generators walk the syntax tree and write assembly text. Values
+are computed into one register (<code>%rax</code>, or <code>x0</code> on
+ARM64), with the stack for temporaries, and improved where it pays:</p>
+<ul>
+  <li>local variables whose address is never taken live in callee-saved
+    registers;</li>
+  <li>integer expressions of constants are folded, division included;</li>
+  <li>constants, local variables, and members or elements at constant
+    offsets are used as instruction operands in place;</li>
+  <li>a call's arguments that are constants or variables are loaded straight
+    into their registers;</li>
+  <li>comparisons jump on the CPU's flags directly.</li>
+</ul>
+
+<h2 id="the-single-binary">The Single Binary<a class="anchor" href="#the-single-binary">&para;</a></h2>
+<p>The released binary, <code>build/mucc</code>, is mucc built by mucc and
+linked statically against musl, with its own headers
+(<code>include/</code>), musl's headers and library, and Linux's headers
+inside it. It reads them from memory, as files under the path
+<code>&lt;mucc&gt;/</code>, so it needs nothing next to it.</p>
+
+<h3 id="what-s-inside-the-binary">What's Inside the Binary<a class="anchor" href="#what-s-inside-the-binary">&para;</a></h3>
+<p>Of the 2.8 MB of the released binary on x86-64:</p>
+<div class="table-wrap"><table>
+  <tr><th>Part</th><th class="num">Size</th><th class="num">Unpacked</th></tr>
+  <tr><td>The compiler itself, code and data (with the musl functions it uses)</td><td class="num">1.0 MB</td><td></td></tr>
+  <tr><td>Linux's, musl's and mucc's headers</td><td class="num">0.9 MB</td><td class="num">4.2 MB</td></tr>
+  <tr><td>musl's <code>libc.a</code> and startup files</td><td class="num">0.7 MB</td><td class="num">3.1 MB</td></tr>
+  <tr><td>The list of those files, with their names</td><td class="num">0.2 MB</td><td></td></tr>
+</table></div>
+
+<h3 id="how-the-files-are-packed">How the Files Are Packed<a class="anchor" href="#how-the-files-are-packed">&para;</a></h3>
+<p><code>mucc -pack</code> compresses them when the binary is built. The
+format is deflate's, simplified:</p>
+<ul>
+  <li><b>LZ77:</b> a file is literal bytes and copies of earlier bytes,
+    found by an optimal parse (the cheapest coding of each prefix, in
+    bits).</li>
+  <li><b>Shared Huffman codes:</b> the codes aren't in each file but shared
+    by all the files of a kind: one model for the headers, one for the
+    library. Most headers are too small to carry their own.</li>
+  <li><b>A dictionary for each model:</b> bytes a file is packed as if it
+    came after, so its copies can come from there too. For the headers it
+    is the lines most of them share (license comments, include guards);
+    for the library, the stretches of code and tables most members share.</li>
+</ul>
+<p>Each file is packed by itself, so mucc unpacks only those it reads, the
+first time it reads them. <code>libc.a</code> is packed a member at a time,
+and a link unpacks only the members it takes, so linking is as fast as with
+the library unpacked. The packer is plain C, built by mucc: the toolchain
+needs no compression tools.</p>
+
+<h3 id="updating-musl-or-linux-s-headers">Updating musl or Linux's Headers<a class="anchor" href="#updating-musl-or-linux-s-headers">&para;</a></h3>
+<p>Both live as released, in <code>thirdparty/</code>. Replace them with a
+newer release and rebuild: the packer learns its models and dictionaries
+from whatever files are there, so nothing is tuned to one version.
+<code>test/single.sh</code> checks every packed file unpacks to the one
+that went in.</p>
+
+<h2 id="how-mucc-builds-itself">How Mucc Builds Itself<a class="anchor" href="#how-mucc-builds-itself">&para;</a></h2>
+<p>Mucc is fully self-hosted: no other compiler or tool is needed to build
+it.</p>
+<ol>
+  <li><b>Stage 1:</b> <code>make CC=mucc</code> builds <code>./mucc</code>
+    with an installed mucc (the last release), or with gcc.</li>
+  <li><b>The C library:</b> <code>make libc</code> builds musl with
+    <code>./mucc</code>.</li>
+  <li><b>The single binary:</b> <code>make build/mucc</code> compiles mucc
+    again with <code>./mucc</code>, links it against that musl, and packs the
+    headers and library into it.</li>
+</ol>
+<p><code>make test-bootstrap</code> proves it: it builds all of this with
+<code>build/mucc</code> alone, in a copy of the tree, with gcc,
+<code>as</code>, <code>ld</code>, <code>ar</code> and the rest replaced by
+commands that fail, and checks the result is <code>build/mucc</code> again,
+byte for byte. CI runs it on x86-64 and ARM64. Each release is built this
+way by the one before it, which is why <code>src/</code> may only use C the
+latest release compiles.</p>
+
+<h2 id="arm64">ARM64<a class="anchor" href="#arm64">&para;</a></h2>
+<p><code>cgen_arm64.c</code> makes ARM64 code, and <code>asm.c</code> and
+<code>link.c</code> handle ARM64 objects and relocations as well as
+x86-64's. ARM64 has no instructions for 128-bit <code>long double</code>
+arithmetic, so <code>runtime/arm64.c</code> provides the routines that
+gcc's libgcc would, in the bundled musl's <code>libmucc.a</code>.</p>
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
+</body>
+</html>

@@ -1,5 +1,5 @@
 #!/bin/bash
-# The speed numbers in the README and on the website, measured so anyone
+# The speed numbers on the website (docs/performance.html), measured so anyone
 # can check them on their own machine. Needs gcc; clang and tcc are
 # measured too if they're installed. `make bench` runs it.
 #

@@ -4,21 +4,62 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<meta name="description" content="Releases and notable changes in Mucc, a small C compiler for x86-64 and ARM64 Linux.">
-<title>Mucc changelog</title>
+<meta name="description" content="Releases and notable changes in Mucc.">
+<title>Changelog - Mucc</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
-<p><a href="./">Mucc C Compiler</a></p>
-
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>Changelog
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html" class="here">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
 <h1>Changelog</h1>
 <p>Releases and notable changes, newest first, taken from the
 <a href="https://github.com/Dom-Yan/Mucc/commits/main">commit history</a>.
 Downloads for each release are on the
 <a href="https://github.com/Dom-Yan/Mucc/releases">releases page</a>.</p>
 
-<h2 id="v1.4.1">Mucc 1.4.1 (not yet released)</h2>
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#v1.4.1">Mucc 1.4.1 (not yet released)</a></li>
+  <li><a href="#v1.4.0">Mucc 1.4.0 (October 14, 2026)</a></li>
+  <li><a href="#v1.3.0">Mucc 1.3.0 (October 8, 2026)</a></li>
+  <li><a href="#v1.2.1">Mucc 1.2.1 (October 7, 2026)</a></li>
+  <li><a href="#v1.2.0">Mucc 1.2.0 (October 7, 2026)</a></li>
+  <li><a href="#v1.1.0">Mucc 1.1.0 (October 1, 2026)</a></li>
+  <li><a href="#v1.0.1">Mucc 1.0.1 (September 29, 2026)</a></li>
+  <li><a href="#v1.0.0">Mucc 1.0.0 (September 29, 2026)</a></li>
+  <li><a href="#development-before-1-0">Development before 1.0</a></li>
+</ul>
+</div>
+<h2 id="v1.4.1">Mucc 1.4.1 (not yet released)<a class="anchor" href="#v1.4.1">&para;</a></h2>
 <ul>
   <li>Smaller: the single binary is 2.8 MB (was 8.8). Its headers and
     C library are compressed inside it (<code>mucc -pack</code>) and
@@ -79,7 +120,7 @@ Downloads for each release are on the
     amalgamation too, with tcc if it's installed.</li>
 </ul>
 
-<h2 id="v1.4.0">Mucc 1.4.0 (October 14, 2026)</h2>
+<h2 id="v1.4.0">Mucc 1.4.0 (October 14, 2026)<a class="anchor" href="#v1.4.0">&para;</a></h2>
 <ul>
   <li>64-bit ARM (AArch64) Linux: mucc runs there and makes programs for
     it, with its own assembler, linker and runtime library and the
@@ -106,7 +147,7 @@ Downloads for each release are on the
   <li>Memory leaks in the hash tables are fixed.</li>
 </ul>
 
-<h2 id="v1.3.0">Mucc 1.3.0 (October 8, 2026)</h2>
+<h2 id="v1.3.0">Mucc 1.3.0 (October 8, 2026)<a class="anchor" href="#v1.3.0">&para;</a></h2>
 <ul>
   <li>Fixes for wrong code: a file-scope struct or union set from a
     compound literal (<code>T x = (T){...};</code>) was all zeros; a VLA
@@ -153,14 +194,14 @@ Downloads for each release are on the
     line count.</li>
 </ul>
 
-<h2 id="v1.2.1">Mucc 1.2.1 (October 7, 2026)</h2>
+<h2 id="v1.2.1">Mucc 1.2.1 (October 7, 2026)<a class="anchor" href="#v1.2.1">&para;</a></h2>
 <ul>
   <li>The first release built by mucc alone: 1.2.0 compiled, assembled
     and linked it, with gcc and binutils made to fail. Otherwise as
     1.2.0.</li>
 </ul>
 
-<h2 id="v1.2.0">Mucc 1.2.0 (October 7, 2026)</h2>
+<h2 id="v1.2.0">Mucc 1.2.0 (October 7, 2026)<a class="anchor" href="#v1.2.0">&para;</a></h2>
 <ul>
   <li><code>-g</code>: DWARF debug info, so gdb's <code>print</code>,
     <code>ptype</code>, <code>info locals</code> and <code>bt</code> show
@@ -233,7 +274,7 @@ Downloads for each release are on the
     <code>&lt;stdbit.h&gt;</code> added.</li>
 </ul>
 
-<h2 id="v1.1.0">Mucc 1.1.0 (October 1, 2026)</h2>
+<h2 id="v1.1.0">Mucc 1.1.0 (October 1, 2026)<a class="anchor" href="#v1.1.0">&para;</a></h2>
 <ul>
   <li>Fixes: atomics' fetch operations return the value from before, and
     atomic stores are sequentially consistent; an enum with no negative
@@ -262,14 +303,14 @@ Downloads for each release are on the
     binary in an empty root and run on every change.</li>
 </ul>
 
-<h2 id="v1.0.1">Mucc 1.0.1 (September 29, 2026)</h2>
+<h2 id="v1.0.1">Mucc 1.0.1 (September 29, 2026)<a class="anchor" href="#v1.0.1">&para;</a></h2>
 <ul>
   <li><code>mucc --version</code> prints the version.</li>
   <li>A shorter README, with instructions to build mucc from source using
     only mucc, without gcc.</li>
 </ul>
 
-<h2 id="v1.0.0">Mucc 1.0.0 (September 29, 2026)</h2>
+<h2 id="v1.0.0">Mucc 1.0.0 (September 29, 2026)<a class="anchor" href="#v1.0.0">&para;</a></h2>
 <p>The first release: a single static binary with its headers and musl
 inside, which needs nothing else installed.</p>
 <ul>
@@ -280,7 +321,7 @@ inside, which needs nothing else installed.</p>
     to update and uninstall.</li>
 </ul>
 
-<h2>Development before 1.0</h2>
+<h2 id="development-before-1-0">Development before 1.0<a class="anchor" href="#development-before-1-0">&para;</a></h2>
 <dl class="news">
   <dt>September 28, 2026</dt>
   <dd>
@@ -343,9 +384,15 @@ inside, which needs nothing else installed.</p>
     </ul>
   </dd>
 </dl>
-
-<hr>
-<p>Copyright (c) 2026 Dom-Yan and Rei</p>
-
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
 </body>
 </html>

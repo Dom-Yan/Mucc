@@ -5,7 +5,7 @@
 # it up): it must compile mucc's own sources into the same objects as
 # ./mucc --target= does, and pass the language tests, with test/common
 # built by it too, against that musl. Running there, it's exact in long
-# double as cross-compiling isn't (see README.md).
+# double as cross-compiling isn't (see docs/language.html).
 target=$1
 mucc=./mucc
 dir=stage2-$target

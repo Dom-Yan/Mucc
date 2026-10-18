@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="Which C mucc compiles: the standards, the GNU extensions, builtins, and what it does not support.">
+<title>C Language Support - Mucc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>C Language Support
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html" class="here">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>C Language Support</h1>
+<p>Mucc compiles C: C17 by default, C23 with <code>-std=c23</code>, and the
+GNU extensions real code uses. Its target is simple to state: any C
+program that gcc compiles for Linux should compile with mucc and do the
+same thing. Where it doesn't, that is a bug, unless it is listed under
+<a href="#what-mucc-does-not-support">What Mucc Does Not Support</a>.</p>
+
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#standards">Standards</a></li>
+  <li><a href="#c-features">C Features</a></li>
+  <li><a href="#gnu-extensions">GNU Extensions</a></li>
+  <li><a href="#builtins">Builtins</a></li>
+  <li><a href="#predefined-macros">Predefined Macros</a></li>
+  <li><a href="#what-mucc-does-not-support">What Mucc Does Not Support</a></li>
+  <li><a href="#programs-known-to-work">Programs Known to Work</a></li>
+</ul>
+</div>
+<h2 id="standards">Standards<a class="anchor" href="#standards">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th><code>-std=</code></th><th>What you get</th></tr>
+  <tr><td><code>c89</code>, <code>c99</code>, <code>c11</code></td><td>The older standards. They differ from C17 mostly in what's missing: each later one only adds to the one before it.</td></tr>
+  <tr><td><code>c17</code> (the default)</td><td>C17, the C most code is written in today, with the GNU extensions</td></tr>
+  <tr><td><code>c23</code></td><td>C23: <code>constexpr</code>, <code>typeof</code>, <code>#embed</code>, <code>nullptr</code>, <code>bool</code>, <code>true</code> and <code>false</code> as keywords, attributes in <code>[[...]]</code>, <code>__VA_OPT__</code>, binary literals, digit separators, and the rest of what C23 adds, except <code>_BitInt</code></td></tr>
+  <tr><td><code>gnu89</code> ... <code>gnu23</code></td><td>The same; the GNU extensions are always on</td></tr>
+</table></div>
+
+<h2 id="c-features">C Features<a class="anchor" href="#c-features">&para;</a></h2>
+<ul>
+  <li>Everything in C99 and C11: variable-length arrays, designated
+    initializers, compound literals, <code>_Generic</code>,
+    <code>_Static_assert</code>, <code>_Alignas</code>, <code>_Noreturn</code>,
+    anonymous structs and unions, flexible array members.</li>
+  <li><code>_Atomic</code> and <code>&lt;stdatomic.h&gt;</code>, and threads
+    (<code>&lt;threads.h&gt;</code>, <code>&lt;pthread.h&gt;</code>), with
+    <code>_Thread_local</code>.</li>
+  <li>Complex numbers (<code>_Complex</code>, <code>&lt;complex.h&gt;</code>),
+    and <code>long double</code> (80-bit on x86-64, 128-bit on ARM64).</li>
+  <li>Bit fields, including packed and <code>__int128</code> ones.</li>
+  <li>K&amp;R function definitions.</li>
+</ul>
+
+<h2 id="gnu-extensions">GNU Extensions<a class="anchor" href="#gnu-extensions">&para;</a></h2>
+<ul>
+  <li>Statement expressions <code>({ ... })</code>, <code>typeof</code>,
+    <code>__auto_type</code>, the <code>?:</code> with no middle operand,
+    case ranges, labels as values (<code>&amp;&amp;label</code>,
+    <code>goto *p</code>), zero-length arrays, empty structs.</li>
+  <li><code>__int128</code> and <code>unsigned __int128</code>.</li>
+  <li>Inline <code>asm</code>, basic and extended, with operands, constraints,
+    clobbers and <code>asm goto</code>.</li>
+  <li>Attributes: <code>packed</code>, <code>aligned</code>,
+    <code>section</code>, <code>weak</code>, <code>alias</code>,
+    <code>visibility</code>, <code>constructor</code>,
+    <code>destructor</code>, <code>cleanup</code>, <code>format</code>,
+    <code>noreturn</code>, <code>unused</code>, <code>vector_size</code>,
+    <code>transparent_union</code>, and more. Unknown attributes only warn.</li>
+  <li>Vector types (<code>vector_size</code>) of 4, 8 or 16 bytes, and SSE
+    intrinsics up to SSE4.2 (<code>&lt;immintrin.h&gt;</code>).</li>
+  <li><code>#pragma once</code>, <code>#pragma pack</code>,
+    <code>#pragma GCC diagnostic</code>, <code>#include_next</code>.</li>
+</ul>
+
+<h2 id="builtins">Builtins<a class="anchor" href="#builtins">&para;</a></h2>
+<p>gcc's builtins that real code uses: <code>__builtin_expect</code>,
+<code>__builtin_unreachable</code>, <code>__builtin_constant_p</code>,
+<code>__builtin_offsetof</code>, <code>__builtin_types_compatible_p</code>,
+<code>__builtin_choose_expr</code>, the overflow checks
+(<code>__builtin_add_overflow</code> and the rest), the bit counts
+(<code>__builtin_clz</code>, <code>ctz</code>, <code>popcount</code>, ...),
+byte swaps, <code>__builtin_va_*</code>, <code>__builtin_alloca</code>,
+the <code>__atomic_*</code> and <code>__sync_*</code> families, and others.
+<code>fabs</code>, <code>fabsf</code> and <code>fabsl</code> are builtins
+too, so they need no <code>-lm</code>.</p>
+
+<h2 id="predefined-macros">Predefined Macros<a class="anchor" href="#predefined-macros">&para;</a></h2>
+<p>Mucc defines what gcc does for the target, so code finds what it
+expects: <code>__GNUC__</code> (4, as clang says), <code>__STDC_VERSION__</code>,
+<code>__x86_64__</code> or <code>__aarch64__</code>, <code>__linux__</code>,
+<code>__LP64__</code>, <code>__SIZEOF_*__</code>, <code>__CHAR_UNSIGNED__</code>
+on ARM64, and the rest. <code>mucc -dM -E - &lt; /dev/null</code> lists them
+all.</p>
+
+<h2 id="what-mucc-does-not-support">What Mucc Does Not Support<a class="anchor" href="#what-mucc-does-not-support">&para;</a></h2>
+<ul>
+  <li><b>Platforms:</b> only x86-64 and ARM64 Linux (on Windows, WSL 2). No
+    macOS, native Windows, or 32-bit targets.</li>
+  <li><b>Optimization:</b> none beyond register allocation and constant
+    folding. Generated code is in the range of <code>gcc -O0</code>, not
+    <code>-O2</code>. No LTO, PGO or <code>-march</code> tuning.</li>
+  <li><b>Language:</b> C only, no C++. No <code>_BitInt</code>, nested
+    functions, <code>__label__</code>, VLAs inside structs or integer
+    <code>_Complex</code>. No AVX or NEON intrinsics (code that checks
+    <code>__AVX__</code> or <code>__ARM_NEON</code> takes its portable path).</li>
+  <li><b>Bundled musl:</b> static programs only, so no shared libraries or
+    <code>dlopen</code> (use <code>--libc=system</code>). Its
+    <code>malloc</code> and stdio are slower than glibc's, and its locale
+    support is basic.</li>
+  <li><b>Tooling:</b> no sanitizers, coverage or profiling. Shared libraries
+    (<code>-shared</code>) and Intel-syntax assembly use the system's
+    <code>ld</code> and <code>as</code>.</li>
+  <li><b>Diagnostics:</b> it rejects the common mistakes but is not a strict
+    checker; some invalid programs gcc rejects are accepted. See the
+    <a href="https://github.com/Dom-Yan/Mucc/issues">open issues</a>.</li>
+</ul>
+
+<h3 id="the-details">The Details<a class="anchor" href="#the-details">&para;</a></h3>
+<ul>
+  <li>Cross-compiling from x86-64 to ARM64, <code>long double</code> constants
+    are only as precise as x86-64's own <code>long double</code> (64 bits of
+    mantissa, not ARM64's 113). At run time, and in a mucc that runs on
+    ARM64, they are exact.</li>
+  <li>Implicit function declarations are errors, as C99 and later require.</li>
+  <li>gcc attributes that change what a program does but that mucc doesn't
+    implement are errors rather than silently ignored: <code>ifunc</code>,
+    <code>naked</code>, <code>target</code>, <code>target_clones</code>,
+    <code>symver</code>, <code>weakref</code>, <code>retain</code>,
+    <code>copy</code>, <code>noinit</code>, <code>persistent</code>,
+    <code>scalar_storage_order</code> and <code>hardbool</code>.</li>
+  <li>Vectors must be 4, 8 or 16 bytes.</li>
+  <li>No unwind tables (<code>.eh_frame</code>): fine for C, but
+    <code>.cfi_*</code> directives in assembly are dropped.</li>
+  <li>Objects from gcc that call libgcc's helpers (complex multiplication,
+    128-bit division) need gcc's <code>libgcc.a</code> to link. (On ARM64, the
+    bundled musl comes with those.)</li>
+  <li>With the bundled musl, threads get 128 KB stacks unless a program asks
+    for more, and <code>iconv</code> differs from glibc's in small ways.</li>
+  <li><code>-O0</code> to <code>-O3</code> and other flags that only tune
+    optimization, diagnostics or hardening are accepted and ignored. An
+    unknown flag is an error.</li>
+</ul>
+
+<h2 id="programs-known-to-work">Programs Known to Work<a class="anchor" href="#programs-known-to-work">&para;</a></h2>
+<p>These build with mucc and pass their own test suites
+(<code>test/thirdparty/</code>):</p>
+<div class="table-wrap"><table>
+  <tr><th>With the bundled musl</th><td>SQLite, Lua, Redis, Tcl, jq, zlib</td></tr>
+  <tr><th>With the system's glibc</th><td>Git, libpng, QuickJS, TinyCC, and CPython (402 of its 408 tests)</td></tr>
+  <tr><th>And</th><td>mucc itself, which rebuilds itself byte for byte</td></tr>
+</table></div>
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
+</body>
+</html>

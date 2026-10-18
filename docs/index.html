@@ -3,178 +3,168 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Mucc is a small, fast, self-hosting C compiler for x86-64 and ARM64 Linux, in one static file that needs nothing else installed.">
-<title>Mucc C Compiler</title>
+<meta name="color-scheme" content="light">
+<meta name="description" content="Mucc is a small, fast, self-hosting C compiler toolchain for x86-64 and ARM64 Linux, in one static file that needs nothing else installed.">
+<title>The Mucc C Compiler - Mucc</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a>
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./" class="here">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>The Mucc C Compiler</h1>
+<p class="lead">Mucc is a small, fast, self-hosting C compiler toolchain for
+x86-64 and ARM64 Linux. The compiler, preprocessor, assembler, linker,
+archiver, headers and C library are <b>one static file of about 3 MB</b>.
+Copy it onto any 64-bit Linux machine, an empty container or a USB stick,
+and it builds working C programs with nothing else installed: no gcc, no
+binutils, no system headers.</p>
 
-<img src="logo.svg" width="240" height="96" alt="mucc">
-<h1>Mucc C Compiler</h1>
+<pre><code>curl -Lo mucc https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-$(uname -m)-linux
+chmod +x mucc
+./mucc -o hello hello.c &amp;&amp; ./hello</code></pre>
 
-<h2>News</h2>
-<p>[October 14, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.4.0">Mucc
-1.4.0</a> runs on and makes programs for 64-bit ARM Linux (the Raspberry
-Pi 4 and 5, Asahi Linux, ARM servers) as well as x86-64, natively or
-with <code>--target=</code>, starts several times faster, and fixes the
-bugs a deep review found. See the <a href="changelog.html">changelog</a>.
-October 8, 2026: <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.3.0">Mucc
-1.3.0</a> fixes every wrong-code bug, the crash and the rejected valid
-code an outside test of 1.2.1 found, and needs no system <code>as</code>
-or <code>ld</code> for <code>-Xlinker</code> or for assembly files that
-use GNU as's common directives (<code>.macro</code>, <code>.rept</code>,
-<code>.p2align</code>, ...).
-<a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.2.1">Mucc
-1.2.1</a> was the first release built by mucc alone.]</p>
+<div class="cards">
+  <div class="card"><h4><a href="getting-started.html">Getting Started</a></h4>
+    <p>Install mucc, build your first program, make it your default compiler, or build it from source.</p></div>
+  <div class="card"><h4><a href="user-guide.html">User Guide</a></h4>
+    <p>Compiling and linking, the two C libraries, cross-compiling, libraries, assembly and debugging.</p></div>
+  <div class="card"><h4><a href="options.html">Command-Line Reference</a></h4>
+    <p>Every option mucc acts on, and the gcc flags it accepts.</p></div>
+  <div class="card"><h4><a href="language.html">C Language Support</a></h4>
+    <p>C17 and C23, the GNU extensions, builtins, and what mucc does not do.</p></div>
+  <div class="card"><h4><a href="performance.html">Performance</a></h4>
+    <p>How fast mucc compiles next to gcc, clang and tcc, and how fast its code runs.</p></div>
+  <div class="card"><h4><a href="internals.html">How Mucc Works</a></h4>
+    <p>The pipeline, the single binary and its packed files, and how mucc builds itself.</p></div>
+</div>
 
-<h2>Features</h2>
+<h2 id="news">News<a class="anchor" href="#news">&para;</a></h2>
 <ul>
-  <li><b>ONE FILE!</b> The compiler, preprocessor, assembler, linker, headers
-    and C library (musl) are one static program of about 2.8 MB (1.0 MB of
-    it the compiler, the rest Linux's headers and musl, compressed). Copy it onto
-    any x86-64 or ARM64 Linux machine, an empty container or a USB stick, and build C
-    programs with nothing else installed: no gcc, no binutils, no system
-    headers.</li>
-  <li><b>FAST!</b> It compiles and assembles about 2.7 times
-    <a href="#speed">faster</a> than <code>gcc -O0</code> and 1.6 times
-    faster than <code>clang -O0</code>.</li>
-  <li><b>REAL C!</b> C17 by default, C23 with <code>-std=c23</code>, and the
-    GNU extensions real code uses. SQLite, Lua, Redis, Tcl, jq and zlib
-    build with it and pass their own test suites with the bundled musl;
-    CPython, Git, libpng, QuickJS and TinyCC do with the system's glibc.
-    Mucc of course compiles itself, byte for byte.</li>
-  <li><b>DEBUGGABLE!</b> <code>-g</code> lets gdb show variables, types and
-    lines, and <code>-Wall</code>, <code>-Werror</code> and
-    <code>-Wno-</code><i>name</i> work as with gcc.</li>
-  <li><b>BUILT BY ITSELF!</b> Each release is compiled, assembled and
-    linked by the one before it, with gcc and binutils nowhere in sight,
-    and comes out the same bytes on any machine.</li>
-  <li><b>SMALL!</b> About 33,000 lines of C, in sections, that one person can
-    read from end to end.</li>
-  <li><b>ITS OWN TOOLCHAIN!</b> Its assembler takes hand-written
-    assembly with GNU as's common directives (<code>.macro</code>,
-    <code>.rept</code>, <code>.p2align</code>, ...), its linker makes static
-    programs, and <code>mucc -ar</code> makes static libraries.</li>
-  <li>It takes gcc's flags (<code>-c</code>, <code>-S</code>, <code>-E</code>,
-    <code>-o</code>, <code>-I</code>, <code>-D</code>, <code>-l</code>,
-    <code>-std=</code> and the rest), so build scripts work unchanged. Like
-    clang, it says it is gcc 4.2.</li>
+  <li><b>In development:</b> the next release is 1.8 times as fast as 1.4.0
+    on <code>sqlite3.c</code>, makes code as fast as <code>gcc -O0</code>'s,
+    and is <b>2.8 MB</b> instead of 8.8, with its headers and C library
+    compressed inside it. It also fixes 17 reported bugs. See the
+    <a href="changelog.html">changelog</a>.</li>
+  <li><b>October 14, 2026:</b> <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.4.0">Mucc 1.4.0</a>
+    runs on and makes programs for 64-bit ARM Linux (the Raspberry Pi 4 and
+    5, Asahi Linux, ARM servers) as well as x86-64, natively or with
+    <code>--target=</code>, starts several times faster, and fixes the bugs a
+    deep review found.</li>
+  <li><b>October 8, 2026:</b> <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.3.0">Mucc 1.3.0</a>
+    fixes every wrong-code bug, the crash and the rejected valid code an
+    outside test of 1.2.1 found, and needs no system <code>as</code> or
+    <code>ld</code> for <code>-Xlinker</code> or for assembly that uses GNU
+    as's common directives.</li>
+  <li><a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.2.1">Mucc 1.2.1</a> was the first release
+    built by mucc alone.</li>
 </ul>
-<p>The <a href="https://github.com/Dom-Yan/Mucc#readme">README</a> is the
-full guide: how to use mucc day to day, every option, and what it
-doesn't do.</p>
 
-<h2 id="speed">Compilation Speed</h2>
-<p>Compilation speed for mucc's own source. There are 34,000 lines; 59,884
-lines (1.3 MBytes) are compiled because the same headers are included in
-many files. Mucc is about <b>3.9 times</b> faster than GCC <code>-O0</code>,
-2.3 times faster than Clang <code>-O0</code>, and 20 times faster than GCC
-<code>-O2</code>. The Mucc measured is the release binary, which Mucc
-built.</p>
-<table class="speed">
-  <tr><th>Compiler</th><th>Time(s)</th><th>lines/second</th><th>MBytes/second</th></tr>
-  <tr><td>Mucc</td><td>0.41</td><td>145000</td><td>3.2</td></tr>
-  <tr><td>Clang 21.1 -O0</td><td>0.92</td><td>64000</td><td>1.4</td></tr>
-  <tr><td>GCC 15.2 -O0</td><td>1.58</td><td>38000</td><td>0.82</td></tr>
-  <tr><td>Clang 21.1 -O2</td><td>5.79</td><td>10000</td><td>0.22</td></tr>
-  <tr><td>GCC 15.2 -O2</td><td>8.40</td><td>7100</td><td>0.15</td></tr>
-</table>
-<p>And SQLite's amalgamation, <code>sqlite3.c</code> 3.38.2, 239,379 lines
-in one file. TinyCC, which writes machine code directly in one pass, is
-far faster; it can't compile Mucc's own source, which uses
-<code>__int128</code>.</p>
-<table class="speed">
-  <tr><th>Compiler</th><th>Time(s)</th><th>lines/second</th></tr>
-  <tr><td>TinyCC 0.9.27</td><td>0.06</td><td>4000000</td></tr>
-  <tr><td>Mucc</td><td>0.50</td><td>476000</td></tr>
-  <tr><td>Clang 21.1 -O0</td><td>0.96</td><td>248000</td></tr>
-  <tr><td>GCC 15.2 -O0</td><td>2.41</td><td>99000</td></tr>
-  <tr><td>Clang 21.1 -O2</td><td>12.98</td><td>18000</td></tr>
-  <tr><td>GCC 15.2 -O2</td><td>16.93</td><td>14000</td></tr>
-</table>
-<p>Measures were done on an Intel Core i7-1185G7 laptop under WSL 2, one
-file at a time, best of 7, with the compilers taking turns. Real time is
-measured. Compilation time includes compilation and assembly. Code that
-mucc generates runs about as fast as code from <code>gcc -O0</code>
-with glibc (<code>--libc=system</code>), and about 1.2 times slower
-with the bundled musl: for the fastest programs, use gcc or clang. Run
-<code>make bench</code> to measure all of this on your own machine.</p>
-
-<h2 id="download">Download</h2>
-<p>The latest release is at
-<a href="https://github.com/Dom-Yan/Mucc/releases/latest">github.com/Dom-Yan/Mucc/releases/latest</a>.
-To install it on any x86-64 or ARM64 Linux (Ubuntu, Debian, Fedora, Arch,
-Alpine, WSL 2, Raspberry Pi OS and others):</p>
-<pre>mkdir -p ~/.local/bin
-curl -Lo ~/.local/bin/mucc https://github.com/Dom-Yan/Mucc/releases/latest/download/mucc-$(uname -m)-linux
-chmod +x ~/.local/bin/mucc
-mucc -o hello hello.c &amp;&amp; ./hello</pre>
-<p>Programs are linked statically against the musl inside mucc, so they run
-on any Linux for that CPU. To make programs for the other CPU, add
-<code>--target=aarch64-linux</code> or <code>--target=x86_64-linux</code>.
-To use the system's glibc and shared libraries
-instead, add <code>--libc=system</code>. Building mucc from source, with
-only mucc, is explained in the
-<a href="https://github.com/Dom-Yan/Mucc#build-from-source">README</a>.</p>
-
-<h2>What it doesn't do</h2>
+<h2 id="what-makes-mucc-different">What Makes Mucc Different<a class="anchor" href="#what-makes-mucc-different">&para;</a></h2>
 <ul>
-  <li>Run anywhere but 64-bit Intel, AMD or ARM Linux (on Windows, WSL 2),
-    or make programs for anything else.</li>
-  <li>Optimize beyond register allocation and constant folding: use gcc or
-    clang where performance is crucial.</li>
-  <li>Some invalid programs that gcc rejects are accepted: it isn't a strict
-    checker. The <a href="https://github.com/Dom-Yan/Mucc/issues">issue
-    tracker</a> lists the known bugs.</li>
-  <li>C++, <code>_BitInt</code>, gcc's nested functions, AVX and later
-    vector instructions, or Intel-syntax assembly without the system's
-    <code>as</code>.</li>
+  <li><b>One file is the whole toolchain.</b> Most compilers need a separate
+    assembler and linker (binutils), and the system's C library and
+    headers. Mucc carries its own of each: its assembler, its linker, its
+    archiver (<code>mucc -ar</code>), musl, and musl's and Linux's headers,
+    compressed inside the binary and read from memory.</li>
+  <li><b>Programs that run anywhere.</b> By default it links statically
+    against its own musl, so what it builds runs on any Linux for that CPU,
+    old or new, glibc or not.</li>
+  <li><b>Fully self-hosted.</b> Each release is compiled, assembled and
+    linked by the one before it, with gcc and binutils made to fail so
+    nothing else can take part, and it rebuilds itself to the same bytes.
+    No other compiler is needed, ever, to build or use mucc.</li>
+  <li><b>Fast to compile.</b> About <a href="performance.html">4 times faster</a>
+    than <code>gcc -O0</code> and 2 times faster than <code>clang -O0</code>.</li>
+  <li><b>Two CPUs, either way.</b> It runs on x86-64 and ARM64 and makes
+    programs for both: <code>--target=aarch64-linux</code> on an x86-64
+    machine, or the other way round.</li>
+  <li><b>Small enough to read.</b> About 35,000 lines of C in 16 files, split
+    into sections, that one person can read from end to end.</li>
+  <li><b>Real C, for real programs.</b> C17 by default, C23 with
+    <code>-std=c23</code>, and the GNU extensions real code uses. SQLite, Lua,
+    Redis, Tcl, jq, zlib, Git, libpng, QuickJS and TinyCC build with it and
+    pass their own test suites; CPython passes 402 of its 408.</li>
+  <li><b>A drop-in for gcc.</b> It takes gcc's flags, so Makefiles and
+    <code>configure</code> scripts work unchanged. Like clang, it says it is
+    gcc 4.2.</li>
+  <li><b>Debuggable.</b> <code>-g</code> writes DWARF that gdb understands, and
+    errors point at the line and column like gcc's.</li>
+</ul>
+
+<h2 id="at-a-glance">At a Glance<a class="anchor" href="#at-a-glance">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th>Compile speed</th><td>3.9x faster than <code>gcc -O0</code>, 2.3x faster than <code>clang -O0</code> (<a href="performance.html">details</a>)</td></tr>
+  <tr><th>Generated code</th><td>About as fast as <code>gcc -O0</code>'s, two thirds as fast as <code>gcc -O2</code>'s</td></tr>
+  <tr><th>Size</th><td>One 2.8 MB static binary (2.9 MB on ARM64), with musl and Linux's headers inside (<a href="internals.html#what-s-inside-the-binary">what's in it</a>)</td></tr>
+  <tr><th>Language</th><td>C17 by default, C23 with <code>-std=c23</code>, plus the GNU extensions real code uses</td></tr>
+  <tr><th>Targets</th><td>x86-64 and ARM64 (AArch64) Linux, natively or cross-compiling either way</td></tr>
+  <tr><th>Self-hosting</th><td>Each release is built by the one before it, with no gcc or binutils, and rebuilds itself byte for byte</td></tr>
+  <tr><th>License</th><td>MIT</td></tr>
+</table></div>
+
+<h2 id="what-it-doesn-t-do">What It Doesn't Do<a class="anchor" href="#what-it-doesn-t-do">&para;</a></h2>
+<p>Use gcc or clang if you need any of these:</p>
+<ul>
+  <li>Platforms other than 64-bit Intel, AMD or ARM Linux (on Windows, use WSL 2).</li>
+  <li>Optimization beyond register allocation and constant folding: its
+    code is in the range of <code>gcc -O0</code>'s.</li>
+  <li>C++. Mucc compiles C only.</li>
   <li>Shared libraries and <code>dlopen</code> with the bundled musl: use
     <code>--libc=system</code> for those.</li>
+  <li>Sanitizers, coverage or profiling.</li>
 </ul>
-<p>The README's
-<a href="https://github.com/Dom-Yan/Mucc#limitations">Limitations</a> has
-the full list.</p>
+<p><a href="language.html#what-mucc-does-not-support">C Language Support</a>
+has the full list.</p>
 
-<h2>Want to help?</h2>
-<p>Here are some suggestions:</p>
+<h2 id="links">Links<a class="anchor" href="#links">&para;</a></h2>
 <ul>
-  <li>Report bugs on the <a href="https://github.com/Dom-Yan/Mucc/issues">issue
-    tracker</a>, with a small C file that shows the problem, or pick one of
-    the open issues and fix it.</li>
-  <li>Send fixes as <a href="https://github.com/Dom-Yan/Mucc/pulls">pull
-    requests</a>. Run <code>make test-all</code> first, add a test for each
-    fix, and make sure you have read and understood every line you
-    send.</li>
+  <li><a href="https://github.com/Dom-Yan/Mucc">The git repository</a>, with the
+    <a href="https://github.com/Dom-Yan/Mucc/releases">releases</a> and the <a href="changelog.html">changelog</a></li>
+  <li><a href="https://github.com/rui314/chibicc">chibicc</a>, the small C compiler mucc grew from</li>
+  <li><a href="https://musl.libc.org/">musl</a>, the C library inside mucc</li>
+  <li><a href="https://bellard.org/tcc/">TinyCC</a>, the Tiny C Compiler</li>
+  <li><a href="https://gcc.gnu.org/">GCC</a>, <a href="https://clang.llvm.org/">Clang</a>
+    and the <a href="https://llvm.org/">LLVM Compiler Infrastructure</a>, whose
+    documentation this site's look follows</li>
 </ul>
-
-<h2>Links</h2>
-<ul>
-  <li><a href="https://github.com/Dom-Yan/Mucc">git repository</a></li>
-  <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a> and the
-    <a href="changelog.html">changelog</a></li>
-  <li><a href="https://bellard.org/tcc/">TinyCC</a> - The Tiny C Compiler,
-    this page's model</li>
-  <li><a href="https://github.com/rui314/chibicc">chibicc</a> - The small C
-    compiler mucc grew from</li>
-  <li><a href="https://musl.libc.org/">musl</a> - The C library inside
-    mucc</li>
-  <li><a href="https://gcc.gnu.org/">The GNU C Compiler</a></li>
-  <li><a href="https://clang.llvm.org/">Clang</a> and the
-    <a href="https://llvm.org/">LLVM Compiler Infrastructure</a></li>
-</ul>
-
-<h2>License</h2>
-<p>Mucc is distributed under the
-<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>,
-as is musl, the C library inside it.</p>
-
-<hr>
+<footer>
 <p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
-trademarks of Dom-Yan.</p>
-<hr>
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
 <p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
 <a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
-
+</footer>
+</main>
+</div>
 </body>
 </html>

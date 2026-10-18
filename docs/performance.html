@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="How fast mucc compiles compared with gcc, clang and tcc, and how fast the code it makes runs.">
+<title>Performance - Mucc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>Performance
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html" class="here">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>Performance</h1>
+<p>Mucc is built to compile fast. The mucc measured here is the release
+binary, which mucc built, as the one you download is. (A mucc built by
+<code>gcc -O2</code> compiles about 1.9 times as fast again, as the last
+table shows.)</p>
+
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#compiling-mucc-s-own-source">Compiling Mucc's Own Source</a></li>
+  <li><a href="#compiling-sqlite">Compiling SQLite</a></li>
+  <li><a href="#how-fast-mucc-s-code-runs">How Fast Mucc's Code Runs</a></li>
+  <li><a href="#how-the-numbers-were-measured">How the Numbers Were Measured</a></li>
+  <li><a href="#why-it-s-fast">Why It's Fast</a></li>
+</ul>
+</div>
+<h2 id="compiling-mucc-s-own-source">Compiling Mucc's Own Source<a class="anchor" href="#compiling-mucc-s-own-source">&para;</a></h2>
+<p>How long each compiler takes to compile <code>src/*.c</code> to objects:
+34,000 lines, 59,884 after preprocessing (the same headers are included in
+many files).</p>
+<div class="table-wrap"><table>
+  <tr><th>Compiler</th><th class="num">Time</th><th class="num">Lines per second</th><th class="num">Mucc is</th></tr>
+  <tr class="mucc"><td>Mucc</td><td class="num">0.41 s</td><td class="num">145,000</td><td></td></tr>
+  <tr><td>Clang 21.1 <code>-O0</code></td><td class="num">0.92 s</td><td class="num">64,000</td><td class="num">2.3x faster</td></tr>
+  <tr><td>GCC 15.2 <code>-O0</code></td><td class="num">1.58 s</td><td class="num">38,000</td><td class="num">3.9x faster</td></tr>
+  <tr><td>Clang 21.1 <code>-O2</code></td><td class="num">5.79 s</td><td class="num">10,000</td><td class="num">14x faster</td></tr>
+  <tr><td>GCC 15.2 <code>-O2</code></td><td class="num">8.40 s</td><td class="num">7,100</td><td class="num">20x faster</td></tr>
+</table></div>
+
+<h2 id="compiling-sqlite">Compiling SQLite<a class="anchor" href="#compiling-sqlite">&para;</a></h2>
+<p>SQLite's amalgamation, <code>sqlite3.c</code> 3.38.2 (239,379 lines in one
+file), the usual test of compile speed. TinyCC is much faster still: it
+writes machine code directly, in one pass, and doesn't make assembly. (It
+can't compile mucc's own source, which uses <code>__int128</code>.)</p>
+<div class="table-wrap"><table>
+  <tr><th>Compiler</th><th class="num">Time</th><th class="num">Lines per second</th><th class="num">Mucc is</th></tr>
+  <tr><td>TinyCC 0.9.27</td><td class="num">0.06 s</td><td class="num">4,000,000</td><td class="num">8.3x slower</td></tr>
+  <tr class="mucc"><td>Mucc</td><td class="num">0.50 s</td><td class="num">476,000</td><td></td></tr>
+  <tr><td>Clang 21.1 <code>-O0</code></td><td class="num">0.96 s</td><td class="num">248,000</td><td class="num">1.9x faster</td></tr>
+  <tr><td>GCC 15.2 <code>-O0</code></td><td class="num">2.41 s</td><td class="num">99,000</td><td class="num">4.8x faster</td></tr>
+  <tr><td>Clang 21.1 <code>-O2</code></td><td class="num">12.98 s</td><td class="num">18,000</td><td class="num">26x faster</td></tr>
+  <tr><td>GCC 15.2 <code>-O2</code></td><td class="num">16.93 s</td><td class="num">14,000</td><td class="num">34x faster</td></tr>
+</table></div>
+
+<h2 id="how-fast-mucc-s-code-runs">How Fast Mucc's Code Runs<a class="anchor" href="#how-fast-mucc-s-code-runs">&para;</a></h2>
+<p>Mucc itself as the program: mucc built four ways, each compiling the same
+source.</p>
+<div class="table-wrap"><table>
+  <tr><th>Mucc built by</th><th class="num">Time</th><th class="num">Slower than gcc <code>-O2</code> by</th></tr>
+  <tr><td>gcc <code>-O2</code></td><td class="num">0.24 s</td><td></td></tr>
+  <tr><td>gcc <code>-O0</code></td><td class="num">0.36 s</td><td class="num">1.5x</td></tr>
+  <tr class="mucc"><td>mucc, with glibc (<code>--libc=system</code>)</td><td class="num">0.37 s</td><td class="num">1.5x</td></tr>
+  <tr class="mucc"><td>mucc, with its musl (the default)</td><td class="num">0.45 s</td><td class="num">1.9x</td></tr>
+</table></div>
+<p>So the code mucc makes runs about as fast as <code>gcc -O0</code>'s. The
+bundled musl's <code>malloc</code> and stdio make programs about 1.2 times
+slower than with glibc. For the fastest programs, build with gcc or clang
+at <code>-O2</code>.</p>
+
+<h2 id="how-the-numbers-were-measured">How the Numbers Were Measured<a class="anchor" href="#how-the-numbers-were-measured">&para;</a></h2>
+<p>On an Intel Core i7-1185G7 laptop under WSL 2, with gcc 15.2, clang 21.1
+and tcc 0.9.27: real time, best of 7 with the compilers taking turns, one
+file at a time. Compilation time includes compilation and assembly.</p>
+<p>Your numbers will differ. Measure them on your own machine with:</p>
+<pre><code>make bench                                  # mucc's own source
+make bench SQLITE3_C=path/to/sqlite3.c      # and SQLite's amalgamation</code></pre>
+<p>Download the amalgamation from <a href="https://sqlite.org/download.html">sqlite.org</a>.
+<code>test/bench.sh</code> measures clang and tcc too if they're installed.</p>
+
+<h2 id="why-it-s-fast">Why It's Fast<a class="anchor" href="#why-it-s-fast">&para;</a></h2>
+<ul>
+  <li><b>One process, no pipes.</b> The preprocessor, compiler, assembler and
+    linker run in one program, passing text and objects in memory.</li>
+  <li><b>Simple, linear passes.</b> Each stage reads its input once. There is
+    no intermediate representation to optimize over.</li>
+  <li><b>Tuned where the time goes.</b> Tokens hash their names once, the
+    tokenizer and assembler look characters up in tables, assembly lines
+    are written straight into one buffer, and memory comes from an arena
+    in huge pages.</li>
+  <li><b>Code that runs fast enough.</b> Constants are folded, instructions
+    take constants, variables and members as operands in place, and
+    arguments go straight into registers: mucc compiles its own code, so
+    better code makes mucc faster too.</li>
+</ul>
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
+</body>
+</html>

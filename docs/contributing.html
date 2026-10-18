@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="How to report bugs, run the tests, and send changes to mucc.">
+<title>Contributing to Mucc - Mucc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>Contributing
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html" class="here">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>Contributing to Mucc</h1>
+<p>Bug reports and pull requests are welcome. The
+<a href="https://github.com/Dom-Yan/Mucc/issues">open issues</a> are a good place to start.</p>
+
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#reporting-a-bug">Reporting a Bug</a></li>
+  <li><a href="#testing">Testing</a></li>
+  <li><a href="#sending-a-change">Sending a Change</a></li>
+  <li><a href="#license">License</a></li>
+</ul>
+</div>
+<h2 id="reporting-a-bug">Reporting a Bug<a class="anchor" href="#reporting-a-bug">&para;</a></h2>
+<p>Open an <a href="https://github.com/Dom-Yan/Mucc/issues">issue</a> with:</p>
+<ul>
+  <li>the smallest C file that shows the problem;</li>
+  <li>the command you ran, and <code>mucc --version</code>;</li>
+  <li>what mucc did, and what gcc does with the same file.</li>
+</ul>
+
+<h2 id="testing">Testing<a class="anchor" href="#testing">&para;</a></h2>
+<pre><code>make test        # language, driver, error, assembler, linker and gdb tests
+make test-all    # plus self-hosting, musl, the single binary, and cross-compiling
+make difftest    # random programs, compared against gcc
+make bench       # the numbers in Performance</code></pre>
+<p>The tests need gcc and glibc's headers (<code>build-essential</code>),
+since they also check <code>--libc=system</code>, and difftest compares
+against gcc. With <code>gdb</code>, <code>qemu-user-binfmt</code> and
+<code>binutils-aarch64-linux-gnu</code> installed they also cover debugging
+and ARM64.</p>
+<p>The suite has 57 test programs with 2,793 assertions, 8 programs written
+from scratch for Linux, over 300 checks of errors and warnings, and the
+assembler compared byte for byte with GNU as on 114 programs.</p>
+
+<h3 id="differential-testing">Differential Testing<a class="anchor" href="#differential-testing">&para;</a></h3>
+<p><code>make difftest N=2000</code> generates random programs with no
+undefined behavior, compiles each with mucc and with gcc, and compares what
+they print. Any difference is a bug. For ARM64, under qemu:</p>
+<pre><code>GCC='aarch64-linux-gnu-gcc -static' \
+  MUCC='./mucc --target=aarch64-linux --libc=mucc' test/difftest.sh 2000</code></pre>
+
+<h3 id="real-programs">Real Programs<a class="anchor" href="#real-programs">&para;</a></h3>
+<p><code>test/thirdparty/*.sh</code> each download a real program, build it
+with mucc and run its own test suite. On Ubuntu, Alpine, Fedora and CentOS
+7, with no C compiler, binutils or C headers installed, CI has the single
+binary build zlib, Lua, Tcl, SQLite and mucc, and run their tests.</p>
+
+<h2 id="sending-a-change">Sending a Change<a class="anchor" href="#sending-a-change">&para;</a></h2>
+<ul>
+  <li>Run <code>make test-all</code> before sending a change, and add a test
+    for each fix (<code>test/*.c</code> for the language,
+    <code>test/errors.sh</code> for diagnostics,
+    <code>test/driver.sh</code> for options).</li>
+  <li><code>src/</code> may only use C that the latest release compiles,
+    since each release is built by the one before it.</li>
+  <li>Changes should make mucc faster, smaller, clearer or more correct. A
+    change to the code mucc makes should pass <code>make difftest N=2000</code>.</li>
+  <li>A change meant to make mucc faster should say by how much, measured.</li>
+  <li>AI tools are fine if you have read and understood every line you
+    submit. AI agents should read <a href="https://github.com/Dom-Yan/Mucc/blob/main/AGENTS.md">AGENTS.md</a>.</li>
+</ul>
+<p>A note on AI: it was used in this project to help automate tests and to
+write some of the comments that explain the logic.</p>
+
+<h2 id="license">License<a class="anchor" href="#license">&para;</a></h2>
+<p>Mucc is under the <a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>. It
+started from Rui Ueyama's <a href="https://github.com/rui314/chibicc">chibicc</a>.
+musl, in <code>thirdparty/musl/</code>, is MIT too.</p>
+<p>Linux's headers, in <code>thirdparty/linux-headers/</code>, are GPL-2.0
+WITH Linux-syscall-note. That note says programs that use the kernel
+through them aren't derived works of it, so they don't change the license
+of mucc or of the programs it builds.</p>
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
+</body>
+</html>

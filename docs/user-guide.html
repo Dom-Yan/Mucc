@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="description" content="Using mucc day to day: compiling and linking, the two C libraries, cross-compiling, libraries, assembly and debugging.">
+<title>Mucc User Guide - Mucc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="right"><a href="https://github.com/Dom-Yan/Mucc">GitHub</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/releases/latest">Download</a><span class="sep">|</span><a href="https://github.com/Dom-Yan/Mucc/issues">Report a bug</a></span>
+  <a href="./">Mucc Home</a><span class="sep">|</span><a href="getting-started.html">Documentation</a><span class="sep">&raquo;</span>User Guide
+</div>
+<div class="layout">
+<nav class="sidebar">
+  <a href="./"><img src="logo.svg" width="240" height="96" alt="mucc"></a>
+  <a class="download" href="https://github.com/Dom-Yan/Mucc/releases/latest">Download Mucc</a>
+  <div class="small">x86-64 and ARM64 Linux, about 3 MB</div>
+  <h3>Documentation</h3>
+  <ul>
+    <li><a href="./">Overview</a></li>
+    <li><a href="getting-started.html">Getting Started</a></li>
+    <li><a href="user-guide.html" class="here">User Guide</a></li>
+    <li><a href="options.html">Command-Line Reference</a></li>
+    <li><a href="language.html">C Language Support</a></li>
+    <li><a href="performance.html">Performance</a></li>
+    <li><a href="internals.html">How Mucc Works</a></li>
+    <li><a href="contributing.html">Contributing</a></li>
+    <li><a href="faq.html">FAQ and Problems</a></li>
+    <li><a href="changelog.html">Changelog</a></li>
+  </ul>
+  <h3>Project</h3>
+  <ul>
+    <li><a href="https://github.com/Dom-Yan/Mucc">Source code</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/releases">Releases</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/issues">Issues</a></li>
+    <li><a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+</nav>
+<main class="content">
+<h1>Mucc User Guide</h1>
+<p>Mucc takes gcc's command-line flags, so most commands you'd type for gcc
+work unchanged. This guide covers what is particular to mucc.</p>
+
+<div class="toc"><span class="title">Contents</span>
+<ul>
+  <li><a href="#compiling-and-linking">Compiling and Linking</a></li>
+  <li><a href="#the-two-c-libraries">The Two C Libraries</a></li>
+  <li><a href="#cross-compiling">Cross-Compiling</a></li>
+  <li><a href="#static-libraries">Static Libraries</a></li>
+  <li><a href="#assembly">Assembly</a></li>
+  <li><a href="#debugging">Debugging</a></li>
+  <li><a href="#warnings-and-errors">Warnings and Errors</a></li>
+  <li><a href="#dependency-files">Dependency Files</a></li>
+  <li><a href="#using-mucc-in-build-systems">Using Mucc in Build Systems</a></li>
+</ul>
+</div>
+<h2 id="compiling-and-linking">Compiling and Linking<a class="anchor" href="#compiling-and-linking">&para;</a></h2>
+<pre><code>mucc -o prog main.c util.c         # compile and link
+mucc -c main.c                     # compile only: main.o
+mucc -o prog main.o util.o         # link objects
+mucc -S main.c                     # assembly: main.s
+mucc -E main.c                     # preprocess to stdout
+mucc -fsyntax-only main.c          # check, write nothing
+mucc -std=c23 -o prog prog.c       # C23 (c89, c99, c11, c17 and gnu* too)</code></pre>
+<p>Optimization flags like <code>-O2</code> are accepted and ignored, so build
+scripts that pass them work. Mucc always does the same register allocation
+and constant folding.</p>
+
+<h2 id="the-two-c-libraries">The Two C Libraries<a class="anchor" href="#the-two-c-libraries">&para;</a></h2>
+<div class="table-wrap"><table>
+  <tr><th></th><th><code>--libc=mucc</code> (the default)</th><th><code>--libc=system</code></th></tr>
+  <tr><th>C library</th><td>musl, built into mucc</td><td>the system's glibc</td></tr>
+  <tr><th>Linking</th><td>static</td><td>dynamic, as gcc does (<code>-static</code> for static)</td></tr>
+  <tr><th>Needs on the machine</th><td>nothing</td><td>glibc's development files (<code>build-essential</code>)</td></tr>
+  <tr><th>Programs run on</th><td>any Linux for that CPU</td><td>machines with a compatible glibc</td></tr>
+  <tr><th>Shared libraries, <code>dlopen</code></th><td>no</td><td>yes</td></tr>
+</table></div>
+<p>Use the default for portable tools. Use <code>--libc=system</code> for
+programs that link the system's shared libraries (OpenSSL, SDL, GTK, ...),
+load plugins with <code>dlopen</code>, or need glibc's faster
+<code>malloc</code> and stdio:</p>
+<pre><code>mucc -o tool tool.c                              # portable, static, musl
+mucc --libc=system -o app app.c -lssl -lcrypto   # with system libraries</code></pre>
+<p><code>-lm</code>, <code>-lpthread</code>, <code>-ldl</code> and <code>-lrt</code>
+work with either: with musl they are part of the C library.</p>
+
+<h2 id="cross-compiling">Cross-Compiling<a class="anchor" href="#cross-compiling">&para;</a></h2>
+<pre><code>mucc --target=aarch64-linux -o hello-arm hello.c   # on an x86-64 machine
+mucc --target=x86_64-linux -o hello-x86 hello.c    # on an ARM64 machine</code></pre>
+<p>Any GNU triple for either CPU works, and so does clang's <code>-target</code>.
+As with gcc on ARM64, plain <code>char</code> is unsigned there and
+<code>long double</code> is 128-bit.</p>
+<ul>
+  <li>The released binary carries musl for its own CPU only. To cross-compile
+    against musl, build from source and run <code>make libc-aarch64</code>
+    (or <code>make libc-x86_64</code>).</li>
+  <li>With <code>--libc=system</code>, mucc uses Debian and Ubuntu's cross
+    glibc (<code>sudo apt install gcc-aarch64-linux-gnu</code>).</li>
+  <li>Programs for the other CPU run there, or here under
+    <code>qemu-user</code>.</li>
+</ul>
+
+<h2 id="static-libraries">Static Libraries<a class="anchor" href="#static-libraries">&para;</a></h2>
+<pre><code>mucc -c a.c b.c
+mucc -ar rcs libfoo.a a.o b.o      # like GNU ar; mucc -ranlib too
+mucc -o prog main.c -L. -lfoo</code></pre>
+<p>Archives are deterministic (dates, owners and modes are fixed), and
+objects and archives from gcc and mucc link together either way.</p>
+
+<h2 id="assembly">Assembly<a class="anchor" href="#assembly">&para;</a></h2>
+<p><code>.s</code> files go through mucc's own assembler, and <code>.S</code>
+files through the preprocessor first. It handles:</p>
+<ul>
+  <li>AT&amp;T syntax for x86-64, with SSE up to SSE4.2;</li>
+  <li>ARM64's base, floating-point and common NEON instructions;</li>
+  <li>GNU as's common directives: <code>.macro</code>, <code>.rept</code>,
+    <code>.p2align</code>, <code>.incbin</code>, <code>.section</code>, and
+    the rest that compilers and hand-written assembly use.</li>
+</ul>
+<p>Anything it doesn't know is handed to the system's <code>as</code> if there
+is one; <code>-fno-as-fallback</code> makes that an error instead. Inline
+<code>asm</code>, with operands, works as with gcc.</p>
+
+<h2 id="debugging">Debugging<a class="anchor" href="#debugging">&para;</a></h2>
+<pre><code>mucc -g -o prog prog.c
+gdb ./prog</code></pre>
+<p><code>-g</code> writes DWARF that gdb understands: variables, types, lines
+and source files. Without <code>-g</code>, as with gcc, objects carry no
+paths, so they are the same bytes built in any directory. Functions have
+their sizes in the symbol table, so profilers like <code>perf</code> can tell which
+function an address is in.</p>
+
+<h2 id="warnings-and-errors">Warnings and Errors<a class="anchor" href="#warnings-and-errors">&para;</a></h2>
+<p>Errors and warnings point at the line and column, with the source line
+under them, like gcc's. These work as with gcc:</p>
+<ul>
+  <li><code>-Wall</code>, <code>-Werror</code>,
+    <code>-W<i>name</i></code>, <code>-Wno-<i>name</i></code> and <code>-w</code>;</li>
+  <li><code>#pragma GCC diagnostic</code> push, pop, warning, error and ignored.</li>
+</ul>
+<p>Warnings on by default include <code>-Woverflow</code>
+(<code>char c = 300</code>), <code>-Wimplicit-int</code> and
+<code>-Wformat</code>. A call to an undeclared function is an error, as C99
+and later require.</p>
+
+<h2 id="dependency-files">Dependency Files<a class="anchor" href="#dependency-files">&para;</a></h2>
+<p>The <code>-M</code> family works as with gcc, for Makefiles that track
+headers:</p>
+<pre><code>mucc -MMD -MP -c main.c      # main.o and main.d</code></pre>
+<p>Headers built into the binary aren't files make could find, so they are
+left out of the lists.</p>
+
+<h2 id="using-mucc-in-build-systems">Using Mucc in Build Systems<a class="anchor" href="#using-mucc-in-build-systems">&para;</a></h2>
+<p>Most build systems take the compiler from <code>CC</code>, and the
+archiver from <code>AR</code>:</p>
+<ul>
+  <li><b>make:</b> <code>make CC=mucc</code></li>
+  <li><b>autoconf:</b> <code>./configure CC=mucc AR="mucc -ar" RANLIB="mucc -ranlib"</code></li>
+</ul>
+<p>Mucc says it is gcc 4.2 (<code>__GNUC__</code> is 4), as clang does, so
+code written for gcc takes its gcc paths, and checks for newer gcc features
+fall back.</p>
+<footer>
+<p>Copyright (c) 2026 Dom-Yan and Rei. Mucc&trade; and Dom-Yan&trade; are
+trademarks of Dom-Yan. Mucc is distributed under the
+<a href="https://github.com/Dom-Yan/Mucc/blob/main/LICENSE">MIT License</a>, as is musl, the C library
+inside it.</p>
+<p>Dom-Yan - <a href="https://github.com/Dom-Yan">https://github.com/Dom-Yan</a> -
+<a href="https://dom-yan.github.io/Mucc/">https://dom-yan.github.io/Mucc/</a></p>
+</footer>
+</main>
+</div>
+</body>
+</html>
