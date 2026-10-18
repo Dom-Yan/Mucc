@@ -53,6 +53,18 @@ static void cast_vector(Type *from, Type *to);
 static char *high_half(char *addr);
 static char *vec_move(int size);
 
+// A memory operand (see "Memory operands")
+typedef struct {
+  char *base; // "%rax", "%rbp" or a register variable's register
+  int64_t disp;
+} MemOp;
+
+static MemOp gen_memop(Node *node);
+static char *memop_text(char *buf, MemOp m);
+static bool is_disp(int64_t val);
+static bool is_simple_load(Type *ty);
+static bool free_memop(Node *node, MemOp *m);
+
 //---------- Output and stack helpers ----------------------------------------
 
 // Every line of assembly goes through println(). It used to call glibc's
@@ -333,20 +345,34 @@ static void gen_addr(Node *node) {
     // Global variable
     println("  lea %s(%%rip), %%rax", node->var->name);
     return;
-  case ND_DEREF:
-    gen_expr(node->lhs);
+  case ND_DEREF: {
+    char buf[64];
+    MemOp m = gen_memop(node);
+    if (strcmp(m.base, "%rax"))
+      println("  lea %s, %%rax", memop_text(buf, m));
+    else if (m.disp)
+      println("  add $%ld, %%rax", m.disp);
     return;
+  }
   case ND_COMMA:
     gen_discard(node->lhs);
     gen_addr(node->rhs);
     return;
   case ND_MEMBER:
-    gen_addr(node->lhs);
+    // In one lea from its base: s.a.b, or p->a.b with p in a register.
+    if (is_disp(node->member->offset)) {
+      char buf[64];
+      MemOp m = gen_memop(node);
+      if (strcmp(m.base, "%rax"))
+        println("  lea %s, %%rax", memop_text(buf, m));
+      else if (m.disp)
+        println("  add $%ld, %%rax", m.disp);
+      return;
+    }
     // add takes a 32-bit immediate: a larger offset, in a struct of more
     // than 2 GiB, goes through %rdx.
-    if (node->member->offset == (int32_t)node->member->offset) {
-      println("  add $%ld, %%rax", node->member->offset);
-    } else {
+    gen_addr(node->lhs);
+    {
       println("  mov $%ld, %%rdx", node->member->offset);
       println("  add %%rdx, %%rax");
     }
@@ -1667,6 +1693,146 @@ static char *simple_operand_to(Node *node, int r) {
   return buf;
 }
 
+//---------- Memory operands -------------------------------------------------
+//
+// An object in memory is used as an operand of the instruction that
+// loads or stores it, as a base register and a displacement: p->x, with
+// p in %rbx, is `mov 8(%rbx), %rax`, and s.a.b, with s on the stack, is
+// `mov -40(%rbp), %rax`, instead of the address computed into %rax
+// first. A displacement takes 32 bits.
+
+static bool is_disp(int64_t val) {
+  return val == (int32_t)val;
+}
+
+static char *memop_text(char *buf, MemOp m) {
+  put_str(put_str(put_str(m.disp ? put_long(buf, m.disp) : buf, "("), m.base), ")");
+  return buf;
+}
+
+// `p` without casts that emit no code: from one pointer type to another,
+// or from an array to a pointer to its first element (in `a + 1`)
+static Node *skip_noop_casts(Node *p) {
+  while (p->kind == ND_CAST &&
+         ((is_int_or_ptr(p->ty) && is_int_or_ptr(p->lhs->ty) &&
+           !cast_table[getTypeId(p->lhs->ty)][getTypeId(p->ty)]) ||
+          (p->ty->kind == TY_PTR && p->lhs->ty->kind == TY_ARRAY)))
+    p = p->lhs;
+  return p;
+}
+
+// For *(p + n) with a constant n, which p[n] is too: p, and n (scaled to
+// bytes) in *disp. Else `p` itself, with *disp 0.
+static Node *split_offset(Node *p, int64_t *disp) {
+  *disp = 0;
+  p = skip_noop_casts(p);
+  if ((p->kind == ND_ADD || p->kind == ND_SUB) && p->lhs->ty->base &&
+      p->lhs->ty->base->kind != TY_VLA && is_foldable(p->rhs)) {
+    int64_t n = fold(p->rhs);
+    if (p->kind == ND_SUB)
+      n = -n;
+    if (is_disp(n)) {
+      *disp = n;
+      return skip_noop_casts(p->lhs);
+    }
+  }
+  return p;
+}
+
+// A local variable addressed from %rbp (see gen_addr)
+static bool is_frame_var(Node *node) {
+  return node->kind == ND_VAR && node->var->is_local && !node->var->reg &&
+         node->var->ty->kind != TY_VLA && !node->var->is_overaligned;
+}
+
+// The operand of the object `node` if it needs no code at all: a local
+// variable, a member of one, or what a register variable points to (at
+// a constant offset).
+static bool free_memop(Node *node, MemOp *m) {
+  switch (node->kind) {
+  case ND_VAR:
+    if (!is_frame_var(node))
+      return false;
+    *m = (MemOp){"%rbp", node->var->offset};
+    return true;
+  case ND_MEMBER:
+    if (!free_memop(node->lhs, m) || !is_disp(m->disp + node->member->offset))
+      return false;
+    m->disp += node->member->offset;
+    return true;
+  case ND_DEREF: {
+    int64_t disp;
+    Node *p = split_offset(node->lhs, &disp);
+    // An element of an array that is itself such an operand, as a[2] or
+    // p->a[2]
+    if (p->ty->kind == TY_ARRAY) {
+      if (!free_memop(p, m) || !is_disp(m->disp + disp))
+        return false;
+      m->disp += disp;
+      return true;
+    }
+    Obj *var = local_scalar(p);
+    if (!var || !var->reg || var->ty->kind != TY_PTR)
+      return false;
+    *m = (MemOp){regs64[var->reg - 1], disp};
+    return true;
+  }
+  }
+  return false;
+}
+
+// The operand of the object `node`, computing into %rax what it needs.
+static MemOp gen_memop(Node *node) {
+  MemOp m;
+  if (free_memop(node, &m))
+    return m;
+
+  switch (node->kind) {
+  case ND_MEMBER: {
+    m = gen_memop(node->lhs);
+    if (is_disp(m.disp + node->member->offset)) {
+      m.disp += node->member->offset;
+      return m;
+    }
+    // A member more than 2 GiB from where the struct is: its address,
+    // with the offset through %rdx (add takes 32 bits).
+    char buf[64];
+    if (strcmp(m.base, "%rax") || m.disp)
+      println("  lea %s, %%rax", memop_text(buf, m));
+    println("  mov $%ld, %%rdx", node->member->offset);
+    println("  add %%rdx, %%rax");
+    return (MemOp){"%rax", 0};
+  }
+  case ND_DEREF: {
+    int64_t disp;
+    Node *p = split_offset(node->lhs, &disp);
+    if (p->ty->kind == TY_ARRAY) {
+      m = gen_memop(p);
+      if (is_disp(m.disp + disp)) {
+        m.disp += disp;
+        return m;
+      }
+      char buf[64];
+      println("  lea %s, %%rax", memop_text(buf, m));
+      m = (MemOp){"%rax", 0};
+    } else {
+      gen_expr(p);
+    }
+    return (MemOp){"%rax", disp};
+  }
+  }
+
+  gen_addr(node);
+  return (MemOp){"%rax", 0};
+}
+
+// The types load_from() and store_to() take a memory operand for as it
+// is, in one instruction
+static bool is_simple_load(Type *ty) {
+  return (is_integer(ty) && !is_int128(ty)) || ty->kind == TY_PTR ||
+         ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
+}
+
 //---------- Function calls (System V ABI) -----------------------------------
 
 // Structs or unions equal or smaller than 16 bytes are passed
@@ -2500,15 +2666,8 @@ static void gen_expr(Node *node) {
           load_from(node->ty, "(%rax)");
       }
     } else {
-      char addr[32];
-      Node *base = node->lhs;
-      if (base->kind == ND_VAR && base->var->is_local && base->ty->kind != TY_VLA &&
-          !base->var->is_overaligned) {
-        put_str(put_long(addr, base->var->offset + mem->offset), "(%rbp)");
-      } else {
-        gen_addr(base);
-        put_str(put_long(addr, mem->offset), "(%rax)");
-      }
+      char addr[64];
+      memop_text(addr, gen_memop(node));
       // A bit-field's whole unit, not its promoted type (see add_type())
       if (mem->is_bitfield)
         load_bitfield_unit(mem, addr);
@@ -2521,6 +2680,11 @@ static void gen_expr(Node *node) {
     return;
   }
   case ND_DEREF:
+    if (is_simple_load(node->ty)) {
+      char addr[64];
+      load_from(node->ty, memop_text(addr, gen_memop(node)));
+      return;
+    }
     gen_expr(node->lhs);
     load(node->ty);
     return;
@@ -2534,6 +2698,20 @@ static void gen_expr(Node *node) {
       store_to(node->ty, var_operand(node->lhs->var));
       if (node->lhs->ty->is_atomic)
         println("  mfence"); // see below
+      return;
+    }
+
+    // Nor does a store to an operand that needs no code, as p->x with p
+    // in a register.
+    MemOp m;
+    if (is_simple_load(node->ty) &&
+        !(node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) &&
+        free_memop(node->lhs, &m)) {
+      char addr[64];
+      gen_expr(node->rhs);
+      store_to(node->ty, memop_text(addr, m));
+      if (node->lhs->ty->is_atomic)
+        println("  mfence");
       return;
     }
 

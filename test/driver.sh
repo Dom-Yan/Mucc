@@ -1133,6 +1133,14 @@ long f(long x, int y, char *p) { return g(x, 7, p); }' > $tmp/opt/args.c
 ! $mucc --target=x86_64-linux -S -o- $tmp/opt/args.c | grep -q 'push %rax'
 check 'x86-64 simple arguments loaded last'
 
+# A member, or an element at a constant index, is loaded and stored from
+# its base register (a register variable's, or %rbp) and one displacement,
+# without its address computed first.
+echo 'struct S { long a; struct { int b, c; } in; long arr[4]; };
+long f(struct S *p) { long t[3]; struct S s; s.arr[1] = p->in.c; t[1] = p->arr[2]; return t[1] + s.arr[1]; }' > $tmp/opt/mem.c
+! $mucc --target=x86_64-linux -S -o- $tmp/opt/mem.c | grep -q 'add \$\|lea '
+check 'x86-64 memory operands'
+
 # -fvisibility=hidden: definitions are hidden unless the attribute says
 # otherwise; declarations of others' symbols aren't touched.
 printf 'int f(void) { return 1; }\nint x = 2;\n__attribute__((visibility("default"))) int g(void) { return 3; }\nint h(void);\nint k(void) { return h(); }\n' > $tmp/vis.c
