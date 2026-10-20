@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml/badge.svg)](https://github.com/Dom-Yan/Mucc/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Dom-Yan/Mucc)](https://github.com/Dom-Yan/Mucc/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License: Mucc](https://img.shields.io/badge/license-Mucc_License-blue)](LICENSE)
 
 Welcome to the Mucc project!
 
@@ -60,8 +60,16 @@ Thank you for starring Mucc and watching its development! There is currently a h
 
 ## License
 
-Mucc is under the [MIT License](LICENSE). It started from Rui Ueyama's
-[chibicc](https://github.com/rui314/chibicc). musl, in
-`thirdparty/musl/`, is MIT too. Linux's headers, in
-`thirdparty/linux-headers/`, are GPL-2.0 WITH Linux-syscall-note, which
-leaves the license of Mucc and of the programs it builds unchanged.
+Copyright (c) 2026 Dom-Yan. Mucc is under the [Mucc License](LICENSE):
+anyone may use, change, share and sell it, for any purpose, at no cost,
+as long as they credit Dom-Yan ("Based on Mucc by Dom-Yan"), keep "Mucc"
+in the name of anything made from it, and never present it as their own
+work, whether it was copied by hand or rewritten with an AI tool.
+Programs you build with mucc are yours, with no conditions. Releases up
+to 1.4.0 were MIT.
+
+Mucc started from Rui Ueyama's [chibicc](https://github.com/rui314/chibicc),
+whose MIT notice is kept in the license. musl, in `thirdparty/musl/`, is
+MIT. Linux's headers, in `thirdparty/linux-headers/`, are GPL-2.0 WITH
+Linux-syscall-note, which leaves the license of Mucc and of the programs
+it builds unchanged.
