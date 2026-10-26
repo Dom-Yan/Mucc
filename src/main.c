@@ -464,17 +464,103 @@ static void usage(int status) {
   exit(status);
 }
 
+static bool opt_v; // -v: print the version (and with no inputs, only that)
+static StringArray idirafter; // -idirafter's and -isystem's, added to
+static StringArray isystem;   // include_paths once all are read
+
+// Options that only set a flag, to true or (as -fno-common) false. One
+// that does more is in parse_args().
+static struct {
+  char *name;
+  bool *flag;
+  bool value;
+} flag_options[] = {
+  {"-###", &opt_hash_hash_hash, true},
+  {"-v", &opt_v, true},
+  {"-cc1", &opt_cc1, true},
+  {"-cc1-obj", &opt_cc1_obj, true},
+  {"-cc1-asm", &opt_asm_cpp, true},
+  {"-c", &opt_c, true},
+  {"-S", &opt_S, true},
+  {"-E", &opt_E, true},
+  {"-P", &opt_P, true},
+  {"-dM", &opt_dM, true},
+  {"-M", &opt_M, true},
+  {"-MP", &opt_MP, true},
+  {"-MG", &opt_MG, true},
+  {"-w", &opt_w, true},
+  {"-nostdinc", &opt_nostdinc, true},
+  {"-fsyntax-only", &opt_syntax_only, true},
+  {"-print-search-dirs", &opt_print_search_dirs, true},
+  {"-fcommon", &opt_fcommon, true},
+  {"-fno-common", &opt_fcommon, false},
+  {"-fpic", &opt_fpic, true},
+  {"-fPIC", &opt_fpic, true},
+  {"-fno-pic", &opt_fpic, false},
+  {"-fno-PIC", &opt_fpic, false},
+  {"-funsigned-char", &opt_funsigned_char, true},
+  {"-fsigned-char", &opt_funsigned_char, false},
+  {"-fintegrated-as", &opt_integrated_as, true},
+  {"-fno-integrated-as", &opt_integrated_as, false},
+  {"-fas-fallback", &opt_as_fallback, true},
+  {"-fno-as-fallback", &opt_as_fallback, false},
+  // Linking without the C library's startup files (crt1.o, ...) or its
+  // libraries, for programs that bring their own _start
+  {"-r", &opt_r, true},
+  {"-nostartfiles", &opt_nostartfiles, true},
+  {"-nodefaultlibs", &opt_nodefaultlibs, true},
+};
+
+// Options followed by an argument, as `-MF file`, which they set `str`
+// to or add to `list`
+static struct {
+  char *name;
+  char **str;
+  StringArray *list;
+} arg_options[] = {
+  {"-MF", &opt_MF},
+  {"-cc1-input", &base_file},
+  {"-cc1-output", &output_file},
+  {"-include", NULL, &opt_include},
+  {"-imacros", NULL, &opt_imacros},
+  {"-iquote", NULL, &iquote_paths},
+  {"-idirafter", NULL, &idirafter},
+  // -isystem dir: searched after the -I directories, as a system
+  // directory, whose headers get no warnings
+  {"-isystem", NULL, &isystem},
+  {"-Xassembler", NULL, &as_extra_args},
+};
+
+// The index of `arg` in arg_options[], or -1
+static int find_arg_option(char *arg) {
+  for (int i = 0; i < sizeof(arg_options) / sizeof(*arg_options); i++)
+    if (!strcmp(arg, arg_options[i].name))
+      return i;
+  return -1;
+}
+
+// Sets the flag if `arg` is in flag_options[]
+static bool set_flag_option(char *arg) {
+  for (int i = 0; i < sizeof(flag_options) / sizeof(*flag_options); i++) {
+    if (!strcmp(arg, flag_options[i].name)) {
+      *flag_options[i].flag = flag_options[i].value;
+      return true;
+    }
+  }
+  return false;
+}
+
+// True if `arg` is an option followed by its argument: arg_options[], or
+// one parse_args() reads itself
 static bool take_arg(char *arg) {
   char *x[] = {
-    "-o", "-I", "-L", "-D", "-U", "-idirafter", "-isystem", "-include", "-x",
-    "-MF", "-MT", "-Xlinker", "-imacros", "-iquote", "-Xassembler", "--param",
-    "-target",
+    "-o", "-I", "-L", "-D", "-U", "-x", "-MT", "-Xlinker", "--param", "-target",
   };
 
   for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
     if (!strcmp(arg, x[i]))
       return true;
-  return false;
+  return find_arg_option(arg) != -1;
 }
 
 static void define(char *str) {
@@ -771,13 +857,16 @@ static void parse_args(int argc, char **argv) {
       if (!argv[++i])
         usage(1);
 
-  StringArray idirafter = {};
-  StringArray isystem = {};
-  bool opt_v = false;
-
   for (int i = 1; i < argc; i++) {
-    if (!strcmp(argv[i], "-###")) {
-      opt_hash_hash_hash = true;
+    if (set_flag_option(argv[i]))
+      continue;
+
+    int k = find_arg_option(argv[i]);
+    if (k != -1) {
+      if (arg_options[k].str)
+        *arg_options[k].str = argv[++i];
+      else
+        strarray_push(arg_options[k].list, argv[++i]);
       continue;
     }
 
@@ -800,18 +889,6 @@ static void parse_args(int argc, char **argv) {
       exit(0);
     }
 
-    // Prints the version, as configure scripts ask for. With no input
-    // files, that's all.
-    if (!strcmp(argv[i], "-v")) {
-      opt_v = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-cc1")) {
-      opt_cc1 = true;
-      continue;
-    }
-
     if (!strcmp(argv[i], "--help"))
       usage(0);
 
@@ -830,21 +907,6 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
-    if (!strcmp(argv[i], "-S")) {
-      opt_S = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fcommon")) {
-      opt_fcommon = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fno-common")) {
-      opt_fcommon = false;
-      continue;
-    }
-
     if (!strncmp(argv[i], "-fvisibility=", 13)) {
       char *v = argv[i] + 13;
       if (strcmp(v, "default") && strcmp(v, "hidden") && strcmp(v, "protected") &&
@@ -860,21 +922,6 @@ static void parse_args(int argc, char **argv) {
       continue;
     if (is_target_option(argv[i])) {
       i += argv[i][1] == 't';
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-c")) {
-      opt_c = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-E")) {
-      opt_E = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-P")) {
-      opt_P = true;
       continue;
     }
 
@@ -904,11 +951,6 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
-    if (!strcmp(argv[i], "-include")) {
-      strarray_push(&opt_include, argv[++i]);
-      continue;
-    }
-
     if (!strcmp(argv[i], "-x")) {
       opt_x = parse_opt_x(argv[++i]);
       continue;
@@ -932,11 +974,6 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
-    if (!strcmp(argv[i], "-Xassembler")) {
-      strarray_push(&as_extra_args, argv[++i]);
-      continue;
-    }
-
     // -Wa,ARG,...: -Xassembler ARG for each ARG, split at commas, as with
     // -Wl,. (Before -W, the warning options, below.)
     if (!strncmp(argv[i], "-Wa,", 4)) {
@@ -957,21 +994,6 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-s")) {
       strarray_push(&ld_extra_args, "-s");
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-M")) {
-      opt_M = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-MF")) {
-      opt_MF = argv[++i];
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-MP")) {
-      opt_MP = true;
       continue;
     }
 
@@ -1007,99 +1029,9 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
-    if (!strcmp(argv[i], "-MG")) {
-      opt_MG = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-dM")) {
-      opt_dM = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-imacros")) {
-      strarray_push(&opt_imacros, argv[++i]);
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-iquote")) {
-      strarray_push(&iquote_paths, argv[++i]);
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-nostdinc")) {
-      opt_nostdinc = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fsyntax-only")) {
-      opt_syntax_only = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-print-search-dirs")) {
-      opt_print_search_dirs = true;
-      continue;
-    }
-
     // --param name=value tunes optimizations.
     if (!strcmp(argv[i], "--param")) {
       i++;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fpic") || !strcmp(argv[i], "-fPIC")) {
-      opt_fpic = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fno-pic") || !strcmp(argv[i], "-fno-PIC")) {
-      opt_fpic = false;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-funsigned-char") || !strcmp(argv[i], "-fsigned-char")) {
-      opt_funsigned_char = argv[i][2] == 'u';
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-cc1-input")) {
-      base_file = argv[++i];
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-cc1-output")) {
-      output_file = argv[++i];
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-cc1-obj")) {
-      opt_cc1_obj = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-cc1-asm")) {
-      opt_asm_cpp = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fintegrated-as")) {
-      opt_integrated_as = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fno-integrated-as")) {
-      opt_integrated_as = false;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fas-fallback")) {
-      opt_as_fallback = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-fno-as-fallback")) {
-      opt_as_fallback = false;
       continue;
     }
 
@@ -1110,18 +1042,6 @@ static void parse_args(int argc, char **argv) {
 
     if (!strncmp(argv[i], "--libc=", 7)) {
       set_libc(argv[i] + 7);
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-idirafter")) {
-      strarray_push(&idirafter, argv[++i]);
-      continue;
-    }
-
-    // -isystem dir: searched after the -I directories, as a system
-    // directory, whose headers get no warnings
-    if (!strcmp(argv[i], "-isystem")) {
-      strarray_push(&isystem, argv[++i]);
       continue;
     }
 
@@ -1149,11 +1069,6 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
-    if (!strcmp(argv[i], "-w")) {
-      opt_w = true;
-      continue;
-    }
-
     if (!strncmp(argv[i], "-Wp,", 4)) {
       parse_wp(argv[i] + 4);
       continue;
@@ -1167,25 +1082,8 @@ static void parse_args(int argc, char **argv) {
       continue;
     }
 
-    // Linking without the C library's startup files (crt1.o, ...) or its
-    // libraries, for programs that bring their own _start.
-    if (!strcmp(argv[i], "-r")) {
-      opt_r = true;
-      continue;
-    }
-
     if (!strcmp(argv[i], "-nostdlib")) {
       opt_nostartfiles = opt_nodefaultlibs = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-nostartfiles")) {
-      opt_nostartfiles = true;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "-nodefaultlibs")) {
-      opt_nodefaultlibs = true;
       continue;
     }
 

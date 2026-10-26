@@ -533,6 +533,18 @@ $mucc -nostdlib -static -o $tmp/nostdlib $tmp/nostdlib.c
 $tmp/nostdlib; [ $? -eq 7 ]
 check -nostdlib
 
+# -nostartfiles is half of it: no crt1.o, so the program's own _start
+rm -f $tmp/nostdlib
+$mucc -nostartfiles -static -o $tmp/nostdlib $tmp/nostdlib.c
+$tmp/nostdlib; [ $? -eq 7 ]
+check -nostartfiles
+
+# -nodefaultlibs, the other half: no C library, so puts is undefined
+printf 'int puts(const char *);\nint main(void) { puts("x"); }\n' > $tmp/nolibs.c
+! $mucc -nodefaultlibs -o $tmp/nolibs $tmp/nolibs.c 2> /dev/null &&
+  $mucc -o $tmp/nolibs $tmp/nolibs.c
+check -nodefaultlibs
+
 echo 'extern int bar; int foo() { return bar; }' | $mucc -fPIC -xc -c -o $tmp/foo.o -
 cc -shared -o $tmp/foo.so $tmp/foo.o
 echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/main.c
