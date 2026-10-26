@@ -13,6 +13,8 @@
 #   test/difftest.sh [count] [first-seed]      e.g. test/difftest.sh 500
 #   test/difftest.sh --check-ub [count]        check the generator itself
 #
+# It tests one program per CPU at a time; JOBS=N sets how many.
+#
 # --check-ub runs gcc's build under its sanitizers instead. They trap on
 # undefined behavior at run time, so this proves the generator only makes
 # valid programs.
@@ -39,35 +41,52 @@ tmp=$(mktemp -d /tmp/mucc-difftest-XXXXXX)
 trap 'rm -rf $tmp' EXIT
 mkdir -p difftest-failures
 
+# fail MESSAGE: seed $s failed; $t is its directory. Each failure leaves
+# a file in $tmp/failed, which the end counts.
 fail() {
-  cp $tmp/t.c difftest-failures/$s.c
+  cp $t/t.c difftest-failures/$s.c
   echo "seed $s: $1 (saved difftest-failures/$s.c)"
-  failures=$((failures + 1))
+  touch $tmp/failed/$s
 }
 
-failures=0
-for ((s = seed; s < seed + count; s++)); do
-  python3 test/gen_random.py $s > $tmp/t.c
+# test_one SEED: generates, builds, runs and compares one program, in a
+# directory of its own, so several can run at once
+test_one() {
+  local s=$1 t=$tmp/$1 gcc_rc mucc_rc
+  mkdir $t
+  python3 test/gen_random.py $s > $t/t.c
 
   if $check_ub; then
     gcc -w -O0 -fsanitize=undefined,float-cast-overflow,address \
-      -fno-sanitize-recover=all -o $tmp/san $tmp/t.c || { fail "gcc can't compile it"; continue; }
-    timeout 10 $tmp/san > /dev/null 2> $tmp/err || { fail "undefined behavior: $(grep -m1 'runtime error' $tmp/err)"; continue; }
-    continue
+      -fno-sanitize-recover=all -o $t/san $t/t.c || { fail "gcc can't compile it"; return; }
+    timeout 10 $t/san > /dev/null 2> $t/err || { fail "undefined behavior: $(grep -m1 'runtime error' $t/err)"; return; }
+    rm -rf $t
+    return
   fi
 
-  $gcc -w -O0 -o $tmp/gcc $tmp/t.c || { fail "gcc can't compile it (generator bug)"; continue; }
-  $mucc -o $tmp/mucc $tmp/t.c 2> $tmp/err || { fail "mucc can't compile it: $(head -1 $tmp/err)"; continue; }
+  $gcc -w -O0 -o $t/gcc $t/t.c || { fail "gcc can't compile it (generator bug)"; return; }
+  $mucc -o $t/mucc $t/t.c 2> $t/err || { fail "mucc can't compile it: $(head -1 $t/err)"; return; }
 
-  timeout 10 $tmp/gcc > $tmp/gcc.out; gcc_rc=$?
-  timeout 10 $tmp/mucc > $tmp/mucc.out; mucc_rc=$?
+  timeout 10 $t/gcc > $t/gcc.out; gcc_rc=$?
+  timeout 10 $t/mucc > $t/mucc.out; mucc_rc=$?
 
   if [ $gcc_rc != $mucc_rc ]; then
     fail "exit code: gcc $gcc_rc, mucc $mucc_rc"
-  elif ! cmp -s $tmp/gcc.out $tmp/mucc.out; then
-    fail "output differs at line $(cmp $tmp/gcc.out $tmp/mucc.out | grep -o 'line [0-9]*' | cut -d' ' -f2)"
+  elif ! cmp -s $t/gcc.out $t/mucc.out; then
+    fail "output differs at line $(cmp $t/gcc.out $t/mucc.out | grep -o 'line [0-9]*' | cut -d' ' -f2)"
   fi
-done
+  rm -rf $t
+}
 
+# One program per CPU at a time (JOBS=1 for one at a time)
+njobs=${JOBS:-$(nproc)}
+mkdir $tmp/failed
+for ((s = seed; s < seed + count; s++)); do
+  while [ $(jobs -rp | wc -l) -ge $njobs ]; do wait -n; done
+  test_one $s &
+done
+wait
+
+failures=$(ls $tmp/failed | wc -l)
 echo "difftest: $count programs (seeds $seed-$((seed + count - 1))), $failures failed"
 [ $failures = 0 ]

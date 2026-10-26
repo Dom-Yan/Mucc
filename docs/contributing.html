@@ -70,10 +70,14 @@
 </ul>
 
 <h2 id="testing">Testing<a class="anchor" href="#testing">&para;</a></h2>
-<pre><code>make test        # language, driver, error, assembler, linker and gdb tests
-make test-all    # plus self-hosting, musl, the single binary, and cross-compiling
+<pre><code>make -j test     # language, driver, error, assembler, linker and gdb tests
+make t T=arith   # one of them: test/arith.c (T=errors.sh: test/errors.sh)
+make -j check    # the tests and a short difftest, while working
+make -j test-all # plus self-hosting, musl, the single binary, and cross-compiling
 make difftest    # random programs, compared against gcc
 make bench       # the numbers in Performance</code></pre>
+<p>With <code>-j</code> the tests run at once. Each prints one line, and
+all it printed only if it fails.</p>
 <p>The tests need gcc and glibc's headers (<code>build-essential</code>),
 since they also check <code>--libc=system</code>, and difftest compares
 against gcc. With <code>gdb</code>, <code>qemu-user-binfmt</code> and

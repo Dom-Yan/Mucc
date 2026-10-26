@@ -76,21 +76,37 @@ test/%$(X).exe: mucc test/%.c $(COMMON)
 test/common.musl.o: mucc test/common $(MUSL_BUILD)/lib/libc.a
 	./mucc --libc=mucc -c -o $@ -xc test/common
 
-# The scripts get the mucc to test as one argument, `$(1) --libc=...`.
-test_scripts=\
-	test/driver.sh "$(1) --libc=$(LIBC)" && \
-	test/errors.sh "$(1) --libc=$(LIBC)" && \
-	test/asm.sh "$(1) --libc=$(LIBC)" && \
-	test/link.sh "$(1) --libc=$(LIBC)" && \
-	test/attribute-layout.sh "$(1) --libc=$(LIBC)" && \
-	test/libgcc.sh "$(1) --libc=$(LIBC)" && \
-	test/intrin.sh "$(1) --libc=$(LIBC)" && \
-	test/debug.sh "$(1) --libc=$(LIBC)" && \
-	test/ar.sh $(1)
+# Each test program and test script is a target of its own, so `make -j
+# test` runs them all at once. Each prints one line, and all it printed
+# only if it fails. `make t T=NAME` runs one: test/NAME.c, or with
+# T=NAME.sh, test/NAME.sh.
+SCRIPTS=driver errors asm link attribute-layout libgcc intrin debug ar
 
-test: $(TESTS)
-	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	$(call test_scripts,./mucc)
+# $(call run,COMMAND,NAME) runs a test and says if it passed
+run=@out=$$($(1) 2>&1) && echo "$(2): passed" || \
+  { printf '%s\n' "$$out"; echo "$(2): FAILED"; exit 1; }
+
+# The scripts get the mucc to test as one argument, `MUCC --libc=...`
+# (test/ar.sh, just MUCC).
+script_arg="$(1)$(if $(filter ar,$(2)),, --libc=$(LIBC))"
+
+test: $(TESTS:%=%.run) $(SCRIPTS:%=script/%)
+
+%.exe.run: %.exe
+	$(call run,./$<,$<)
+
+# (Kept, or make would delete them after running them, and build them all
+# again next time.)
+.SECONDARY: $(TESTS) $(TESTS:test/%=$(S2)/test/%)
+
+script/%: mucc
+	$(call run,test/$*.sh $(call script_arg,./mucc,$*),test/$*.sh)
+
+t: $(if $(filter %.sh,$(T)),script/$(T:.sh=),test/$(T)$(X).exe.run)
+
+# `make check` is what to run while working: the tests and a short
+# differential test. `make test-all` before sending a change.
+check: test difftest
 
 # test-libc runs its own `make libc` into $(MUSL_BUILD), which test-single
 # and test-programs build from too, so they wait for it: with `make -j`,
@@ -130,9 +146,10 @@ $(S2)/test/%$(X).exe: $(S2)/mucc test/%.c
 	./$(S2)/mucc --libc=$(LIBC) -Iinclude -Itest $(call test_flags,$*) -c -o $(S2)/test/$*.o test/$*.c
 	$(call link_test,./$(S2)/mucc,$(S2)/test/$*.o)
 
-test-stage2: $(TESTS:test/%=$(S2)/test/%)
-	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	$(call test_scripts,./$(S2)/mucc)
+test-stage2: $(TESTS:test/%=$(S2)/test/%.run) $(SCRIPTS:%=$(S2)/script/%)
+
+$(S2)/script/%: $(S2)/mucc
+	$(call run,test/$*.sh $(call script_arg,./$(S2)/mucc,$*),$(S2) test/$*.sh)
 
 # Stage 3 (mucc compiled by the mucc that was compiled by mucc)
 #
@@ -315,5 +332,5 @@ clean:
 	rm -f $(filter-out $(ASM_SOURCES),$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
-.PHONY: test clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
+.PHONY: test t check clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
   test-libc test-single test-programs test-bootstrap test-cross bench
