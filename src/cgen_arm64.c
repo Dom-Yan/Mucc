@@ -1884,6 +1884,170 @@ static void gen_overflow(Node *node) {
   println("  cset w0, ne");
 }
 
+// An assignment, whose value is what was stored
+static void gen_assign(Node *node) {
+  // Storing to a local scalar needs no address computation.
+  if (local_scalar(node->lhs)) {
+    gen_expr(node->rhs);
+    atomic_fence(node->lhs->ty);
+    store_var(node->lhs->var);
+    atomic_fence(node->lhs->ty);
+    return;
+  }
+
+  // Nor does a store to an operand that needs no code, as p->x with p
+  // in a register.
+  MemOp m;
+  if (is_simple_load(node->ty) &&
+      !(node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) &&
+      free_memop(node->lhs, &m)) {
+    gen_expr(node->rhs);
+    atomic_fence(node->lhs->ty);
+    store_to(node->ty, m.base, m.off);
+    atomic_fence(node->lhs->ty);
+    return;
+  }
+
+  gen_addr(node->lhs);
+  push();
+  gen_expr(node->rhs);
+  if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
+    store_bitfield(node->lhs->member);
+    return;
+  }
+  atomic_fence(node->lhs->ty);
+  store(node->ty);
+  atomic_fence(node->lhs->ty);
+}
+
+// Binary operators on floating-point operands: the right side in v1,
+// the left in v0
+static void gen_float_binary(Node *node) {
+  gen_expr(node->rhs);
+  push_fp();
+  gen_expr(node->lhs);
+  pop_fp(1);
+
+  // A long double's operators are calls; a comparison returns an int
+  // that compares with 0 as the operands do (and doesn't for a NaN).
+  if (node->lhs->ty->kind == TY_LDOUBLE) {
+    switch (node->kind) {
+    case ND_ADD: call_rt("__addtf3"); return;
+    case ND_SUB: call_rt("__subtf3"); return;
+    case ND_MUL: call_rt("__multf3"); return;
+    case ND_DIV: call_rt("__divtf3"); return;
+    case ND_EQ:
+    case ND_NE:
+    case ND_LT:
+    case ND_LE: {
+      char *name = node->kind == ND_EQ ? "__eqtf2" : node->kind == ND_NE ? "__netf2" :
+                   node->kind == ND_LT ? "__lttf2" : "__letf2";
+      call_rt(name);
+      println("  cmp w0, 0");
+      println("  cset w0, %s", int_cond(node->kind, false));
+      return;
+    }
+    }
+    error_tok(node->tok, "invalid expression");
+  }
+
+  char r = fp_letter(node->lhs->ty->size);
+  switch (node->kind) {
+  case ND_ADD: println("  fadd %c0, %c0, %c1", r, r, r); return;
+  case ND_SUB: println("  fsub %c0, %c0, %c1", r, r, r); return;
+  case ND_MUL: println("  fmul %c0, %c0, %c1", r, r, r); return;
+  case ND_DIV: println("  fdiv %c0, %c0, %c1", r, r, r); return;
+  case ND_EQ:
+  case ND_NE:
+  case ND_LT:
+  case ND_LE:
+    // As gcc does: == and != compare quietly; < and <= raise "invalid"
+    // for a NaN.
+    println("  %s %c0, %c1",
+            node->kind == ND_LT || node->kind == ND_LE ? "fcmpe" : "fcmp", r, r);
+    println("  cset w0, %s", fp_cond(node->kind));
+    return;
+  }
+  error_tok(node->tok, "invalid expression");
+}
+
+// Binary operators on integers and pointers. A constant right side is
+// an immediate where it can be.
+static void gen_int_binary(Node *node) {
+  char *r0 = x0_or_w0(node->lhs->ty);
+  char *r1 = is_64bit(node->lhs->ty) ? "x1" : "w1";
+  bool u = node->lhs->ty->is_unsigned;
+  int64_t imm = imm12(node->rhs);
+
+  switch (node->kind) {
+  case ND_ADD:
+  case ND_SUB:
+    if (imm < 0)
+      break;
+    gen_expr(node->lhs);
+    println("  %s %s, %s, %ld", node->kind == ND_ADD ? "add" : "sub", r0, r0, imm);
+    return;
+  case ND_EQ:
+  case ND_NE:
+  case ND_LT:
+  case ND_LE:
+    gen_compare(node);
+    println("  cset w0, %s", int_cond(node->kind, u));
+    return;
+  case ND_SHL:
+  case ND_SHR:
+    if (is_foldable(node->rhs) && fold(node->rhs) >= 0 &&
+        fold(node->rhs) < node->lhs->ty->size * 8 && node->lhs->ty->size >= 4) {
+      gen_expr(node->lhs);
+      println("  %s %s, %s, %ld", node->kind == ND_SHL ? "lsl" : u ? "lsr" : "asr", r0, r0,
+              fold(node->rhs));
+      return;
+    }
+    break;
+  }
+
+  gen_operands(node);
+
+  switch (node->kind) {
+  case ND_ADD:
+    println("  add %s, %s, %s", r0, r0, r1);
+    return;
+  case ND_SUB:
+    println("  sub %s, %s, %s", r0, r0, r1);
+    return;
+  case ND_MUL:
+    println("  mul %s, %s, %s", r0, r0, r1);
+    return;
+  case ND_DIV:
+    println("  %s %s, %s, %s", u ? "udiv" : "sdiv", r0, r0, r1);
+    return;
+  case ND_MOD: {
+    // x - x / y * y
+    char *r2 = is_64bit(node->lhs->ty) ? "x2" : "w2";
+    println("  %s %s, %s, %s", u ? "udiv" : "sdiv", r2, r0, r1);
+    println("  msub %s, %s, %s, %s", r0, r2, r1, r0);
+    return;
+  }
+  case ND_BITAND:
+    println("  and %s, %s, %s", r0, r0, r1);
+    return;
+  case ND_BITOR:
+    println("  orr %s, %s, %s", r0, r0, r1);
+    return;
+  case ND_BITXOR:
+    println("  eor %s, %s, %s", r0, r0, r1);
+    return;
+  case ND_SHL:
+    println("  lsl %s, %s, %s", r0, r0, r1);
+    return;
+  case ND_SHR:
+    println("  %s %s, %s, %s", u ? "lsr" : "asr", r0, r0, r1);
+    return;
+  }
+
+  error_tok(node->tok, "invalid expression");
+}
+
 // Generates code for expression `node`, which leaves its value in x0 (an
 // integer, a pointer, or a struct's address), v0 (a float, double, long
 // double or vector) or x0:x1 (an __int128).
@@ -1898,7 +2062,8 @@ static void gen_expr(Node *node) {
   // gen_expr() has three parts, in this order: the node kinds that aren't
   // binary operators (this switch: values, memory, ?:, && and ||, calls,
   // builtins and atomics), then binary operators on floating-point
-  // operands, then binary operators on integers and pointers.
+  // operands (gen_float_binary()), then binary operators on integers and
+  // pointers (gen_int_binary()).
   switch (node->kind) {
   case ND_NULL_EXPR:
     return;
@@ -1998,38 +2163,7 @@ static void gen_expr(Node *node) {
     gen_addr(node->lhs);
     return;
   case ND_ASSIGN:
-    // Storing to a local scalar needs no address computation.
-    if (local_scalar(node->lhs)) {
-      gen_expr(node->rhs);
-      atomic_fence(node->lhs->ty);
-      store_var(node->lhs->var);
-      atomic_fence(node->lhs->ty);
-      return;
-    }
-
-    // Nor does a store to an operand that needs no code, as p->x with p
-    // in a register.
-    MemOp m;
-    if (is_simple_load(node->ty) &&
-        !(node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) &&
-        free_memop(node->lhs, &m)) {
-      gen_expr(node->rhs);
-      atomic_fence(node->lhs->ty);
-      store_to(node->ty, m.base, m.off);
-      atomic_fence(node->lhs->ty);
-      return;
-    }
-
-    gen_addr(node->lhs);
-    push();
-    gen_expr(node->rhs);
-    if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
-      store_bitfield(node->lhs->member);
-      return;
-    }
-    atomic_fence(node->lhs->ty);
-    store(node->ty);
-    atomic_fence(node->lhs->ty);
+    gen_assign(node);
     return;
   case ND_STMT_EXPR: {
     // The value of the last statement, if it's an expression, is the
@@ -2191,55 +2325,9 @@ static void gen_expr(Node *node) {
     return;
   }
 
-  // Binary operators on floating-point operands: the right side in v1,
-  // the left in v0
   if (is_flonum(node->lhs->ty)) {
-    gen_expr(node->rhs);
-    push_fp();
-    gen_expr(node->lhs);
-    pop_fp(1);
-
-    // A long double's operators are calls; a comparison returns an int
-    // that compares with 0 as the operands do (and doesn't for a NaN).
-    if (node->lhs->ty->kind == TY_LDOUBLE) {
-      switch (node->kind) {
-      case ND_ADD: call_rt("__addtf3"); return;
-      case ND_SUB: call_rt("__subtf3"); return;
-      case ND_MUL: call_rt("__multf3"); return;
-      case ND_DIV: call_rt("__divtf3"); return;
-      case ND_EQ:
-      case ND_NE:
-      case ND_LT:
-      case ND_LE: {
-        char *name = node->kind == ND_EQ ? "__eqtf2" : node->kind == ND_NE ? "__netf2" :
-                     node->kind == ND_LT ? "__lttf2" : "__letf2";
-        call_rt(name);
-        println("  cmp w0, 0");
-        println("  cset w0, %s", int_cond(node->kind, false));
-        return;
-      }
-      }
-      error_tok(node->tok, "invalid expression");
-    }
-
-    char r = fp_letter(node->lhs->ty->size);
-    switch (node->kind) {
-    case ND_ADD: println("  fadd %c0, %c0, %c1", r, r, r); return;
-    case ND_SUB: println("  fsub %c0, %c0, %c1", r, r, r); return;
-    case ND_MUL: println("  fmul %c0, %c0, %c1", r, r, r); return;
-    case ND_DIV: println("  fdiv %c0, %c0, %c1", r, r, r); return;
-    case ND_EQ:
-    case ND_NE:
-    case ND_LT:
-    case ND_LE:
-      // As gcc does: == and != compare quietly; < and <= raise "invalid"
-      // for a NaN.
-      println("  %s %c0, %c1",
-              node->kind == ND_LT || node->kind == ND_LE ? "fcmpe" : "fcmp", r, r);
-      println("  cset w0, %s", fp_cond(node->kind));
-      return;
-    }
-    error_tok(node->tok, "invalid expression");
+    gen_float_binary(node);
+    return;
   }
 
   if (is_int128(node->lhs->ty)) {
@@ -2247,80 +2335,7 @@ static void gen_expr(Node *node) {
     return;
   }
 
-  // Binary operators on integers and pointers. A constant right side is
-  // an immediate where it can be.
-  char *r0 = x0_or_w0(node->lhs->ty);
-  char *r1 = is_64bit(node->lhs->ty) ? "x1" : "w1";
-  bool u = node->lhs->ty->is_unsigned;
-  int64_t imm = imm12(node->rhs);
-
-  switch (node->kind) {
-  case ND_ADD:
-  case ND_SUB:
-    if (imm < 0)
-      break;
-    gen_expr(node->lhs);
-    println("  %s %s, %s, %ld", node->kind == ND_ADD ? "add" : "sub", r0, r0, imm);
-    return;
-  case ND_EQ:
-  case ND_NE:
-  case ND_LT:
-  case ND_LE:
-    gen_compare(node);
-    println("  cset w0, %s", int_cond(node->kind, u));
-    return;
-  case ND_SHL:
-  case ND_SHR:
-    if (is_foldable(node->rhs) && fold(node->rhs) >= 0 &&
-        fold(node->rhs) < node->lhs->ty->size * 8 && node->lhs->ty->size >= 4) {
-      gen_expr(node->lhs);
-      println("  %s %s, %s, %ld", node->kind == ND_SHL ? "lsl" : u ? "lsr" : "asr", r0, r0,
-              fold(node->rhs));
-      return;
-    }
-    break;
-  }
-
-  gen_operands(node);
-
-  switch (node->kind) {
-  case ND_ADD:
-    println("  add %s, %s, %s", r0, r0, r1);
-    return;
-  case ND_SUB:
-    println("  sub %s, %s, %s", r0, r0, r1);
-    return;
-  case ND_MUL:
-    println("  mul %s, %s, %s", r0, r0, r1);
-    return;
-  case ND_DIV:
-    println("  %s %s, %s, %s", u ? "udiv" : "sdiv", r0, r0, r1);
-    return;
-  case ND_MOD: {
-    // x - x / y * y
-    char *r2 = is_64bit(node->lhs->ty) ? "x2" : "w2";
-    println("  %s %s, %s, %s", u ? "udiv" : "sdiv", r2, r0, r1);
-    println("  msub %s, %s, %s, %s", r0, r2, r1, r0);
-    return;
-  }
-  case ND_BITAND:
-    println("  and %s, %s, %s", r0, r0, r1);
-    return;
-  case ND_BITOR:
-    println("  orr %s, %s, %s", r0, r0, r1);
-    return;
-  case ND_BITXOR:
-    println("  eor %s, %s, %s", r0, r0, r1);
-    return;
-  case ND_SHL:
-    println("  lsl %s, %s, %s", r0, r0, r1);
-    return;
-  case ND_SHR:
-    println("  %s %s, %s, %s", u ? "lsr" : "asr", r0, r0, r1);
-    return;
-  }
-
-  error_tok(node->tok, "invalid expression");
+  gen_int_binary(node);
 }
 
 //---------- asm statements with operands ------------------------------------

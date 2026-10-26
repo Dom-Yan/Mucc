@@ -2572,664 +2572,355 @@ void emit_function_loc(Obj *fn) {
     emit_loc(fn->tok);
 }
 
-// Generates code for expression `node`, which leaves its value in %rax
-// (an integer, a pointer, or a struct's address), %xmm0 (a float, double
-// or vector), %rdx:%rax (an __int128) or on the x87 stack (a long double).
-static void gen_expr(Node *node) {
-  emit_loc(node->tok);
-
-  if (node->kind != ND_NUM && is_foldable(node)) {
-    println("  mov $%ld, %%rax", fold(node));
-    return;
-  }
-
-  // gen_expr() has three parts, in this order: the node kinds that aren't
-  // binary operators (this switch: values, memory, ?:, && and ||, calls,
-  // builtins and atomics), then binary operators on floating-point
-  // operands, then binary operators on integers and pointers.
-  switch (node->kind) {
-  case ND_NULL_EXPR:
-    return;
-  case ND_NUM: {
-    switch (node->ty->kind) {
-    case TY_FLOAT: {
-      union { float f32; uint32_t u32; } u = { *node->fval };
-      println("  mov $%u, %%eax  # float %Lf", u.u32, *node->fval);
-      println("  movq %%rax, %%xmm0");
-      return;
-    }
-    case TY_DOUBLE: {
-      union { double f64; uint64_t u64; } u = { *node->fval };
-      println("  mov $%lu, %%rax  # double %Lf", u.u64, *node->fval);
-      println("  movq %%rax, %%xmm0");
-      return;
-    }
-    case TY_LDOUBLE: {
-      uint64_t u64[2];
-      write_ldouble((char *)u64, *node->fval);
-      println("  mov $%lu, %%rax  # long double %Lf", u64[0], *node->fval);
-      println("  mov %%rax, -16(%%rsp)");
-      println("  mov $%lu, %%rax", u64[1]);
-      println("  mov %%rax, -8(%%rsp)");
-      println("  fldt -16(%%rsp)");
-      return;
-    }
-    }
-
-    println("  mov $%ld, %%rax", node->val);
-    if (is_int128(node->ty))
-      println("  cqo");
-    return;
-  }
-  case ND_NEG:
-    gen_expr(node->lhs);
-    if (is_vector(node->ty)) {
-      gen_vector_unary(node);
-      return;
-    }
-
-    switch (node->ty->kind) {
-    case TY_FLOAT:
-      println("  mov $1, %%rax");
-      println("  shl $31, %%rax");
-      println("  movq %%rax, %%xmm1");
-      println("  xorps %%xmm1, %%xmm0");
-      return;
-    case TY_DOUBLE:
-      println("  mov $1, %%rax");
-      println("  shl $63, %%rax");
-      println("  movq %%rax, %%xmm1");
-      println("  xorpd %%xmm1, %%xmm0");
-      return;
-    case TY_LDOUBLE:
-      println("  fchs");
-      return;
-    case TY_INT128:
-      neg128("%rax", "%rdx");
-      return;
-    }
-
-    println("  neg %%rax");
-    return;
-  case ND_VAR:
-    if (local_scalar(node)) {
-      load_from(node->ty, var_operand(node->var));
-      return;
-    }
-    gen_addr(node);
-    load(node->ty);
-    return;
-  case ND_MEMBER: {
-    Member *mem = node->member;
-
-    // A scalar member is loaded from base + offset in one instruction,
-    // e.g. `mov 8(%rax), %rax` for p->x, or `mov -24(%rbp), %rax` for
-    // s.x when s is a local struct.
-    if (is_aggregate(node->ty) || mem->offset != (int32_t)mem->offset) {
-      gen_addr(node);
-      if (!is_aggregate(node->ty)) {
-        if (mem->is_bitfield)
-          load_bitfield_unit(mem, "(%rax)");
-        else
-          load_from(node->ty, "(%rax)");
-      }
-    } else {
-      char addr[64];
-      memop_text(addr, gen_memop(node));
-      // A bit-field's whole unit, not its promoted type (see add_type())
-      if (mem->is_bitfield)
-        load_bitfield_unit(mem, addr);
-      else
-        load_from(node->ty, addr);
-    }
-
-    if (mem->is_bitfield)
-      extract_bitfield(mem);
-    return;
-  }
-  case ND_DEREF:
-    if (is_simple_load(node->ty)) {
-      char addr[64];
-      load_from(node->ty, memop_text(addr, gen_memop(node)));
-      return;
-    }
-    gen_expr(node->lhs);
-    load(node->ty);
-    return;
-  case ND_ADDR:
-    gen_addr(node->lhs);
-    return;
-  case ND_ASSIGN:
-    // Storing to a local scalar needs no address computation.
-    if (local_scalar(node->lhs)) {
-      gen_expr(node->rhs);
-      store_to(node->ty, var_operand(node->lhs->var));
-      if (node->lhs->ty->is_atomic)
-        println("  mfence"); // see below
-      return;
-    }
-
-    // Nor does a store to an operand that needs no code, as p->x with p
-    // in a register.
-    MemOp m;
-    if (is_simple_load(node->ty) &&
-        !(node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) &&
-        free_memop(node->lhs, &m)) {
-      char addr[64];
-      gen_expr(node->rhs);
-      store_to(node->ty, memop_text(addr, m));
-      if (node->lhs->ty->is_atomic)
-        println("  mfence");
-      return;
-    }
-
-    gen_addr(node->lhs);
-    push();
+// An assignment, whose value is what was stored
+static void gen_assign(Node *node) {
+  // Storing to a local scalar needs no address computation.
+  if (local_scalar(node->lhs)) {
     gen_expr(node->rhs);
+    store_to(node->ty, var_operand(node->lhs->var));
+    if (node->lhs->ty->is_atomic)
+      println("  mfence"); // see below
+    return;
+  }
 
-    if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
-      if (is_wide(node->lhs->member)) {
-        store_bitfield128(node->lhs->member);
-        return;
-      }
-      println("  mov %%rax, %%r8");
-
-      // If the lhs is a bitfield, we need to read the current value
-      // from memory and merge it with a new value.
-      Member *mem = node->lhs->member;
-      // The mask goes through a register: `and` only takes 32-bit
-      // immediates, too small for the mask of a 32-bit-wide field.
-      uint64_t bits = mem->bit_width == 64 ? -1 : (1UL << mem->bit_width) - 1;
-      println("  mov %%rax, %%rdi");
-      println("  mov $%ld, %%r9", (long)bits);
-      println("  and %%r9, %%rdi");
-      println("  shl $%d, %%rdi", mem->bit_offset);
-
-      println("  mov (%%rsp), %%rax");
-      load_bitfield_unit(mem, "(%rax)");
-
-      println("  mov $%ld, %%r9", (long)~(bits << mem->bit_offset));
-      println("  and %%r9, %%rax");
-      println("  or %%rdi, %%rax");
-      pop("%rdi");
-      store_unit(mem->unit); // the whole unit loaded, not the promoted type
-
-      // The assignment's value is what the field now holds: the new
-      // value cut to its width, sign- or zero-extended.
-      println("  mov %%r8, %%rax");
-      println("  shl $%d, %%rax", 64 - mem->bit_width);
-      if (mem->ty->is_unsigned || mem->ty->kind == TY_BOOL)
-        println("  shr $%d, %%rax", 64 - mem->bit_width);
-      else
-        println("  sar $%d, %%rax", 64 - mem->bit_width);
-      return;
-    }
-
-    store(node->ty);
-
-    // A store to an atomic object is sequentially consistent: no later
-    // load may be done before it, which x86 allows without a fence.
+  // Nor does a store to an operand that needs no code, as p->x with p
+  // in a register.
+  MemOp m;
+  if (is_simple_load(node->ty) &&
+      !(node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) &&
+      free_memop(node->lhs, &m)) {
+    char addr[64];
+    gen_expr(node->rhs);
+    store_to(node->ty, memop_text(addr, m));
     if (node->lhs->ty->is_atomic)
       println("  mfence");
     return;
-  case ND_STMT_EXPR: {
-    // The value of the last statement, if it's an expression, is the
-    // result, so it's computed with gen_expr, not discarded.
-    bool labeled = block_begin(node);
-    for (Node *n = node->body; n; n = n->next) {
-      if (!n->next && n->kind == ND_EXPR_STMT)
-        gen_expr(n->lhs);
-      else
-        gen_stmt(n);
-    }
-    if (labeled)
-      block_end(node);
-    return;
   }
-  case ND_COMMA:
-    gen_discard(node->lhs);
-    gen_expr(node->rhs);
-    return;
-  case ND_CAST:
-    gen_expr(node->lhs);
-    // An int load is already sign-extended to 64 bits.
-    if (is_int_load(node->lhs) && node->ty->size == 8 && is_int_or_ptr(node->ty))
-      return;
-    cast(node->lhs->ty, node->ty);
-    return;
-  case ND_MEMZERO:
-    if (node->var->reg) {
-      println("  mov $0, %s", regs64[node->var->reg - 1]);
+
+  gen_addr(node->lhs);
+  push();
+  gen_expr(node->rhs);
+
+  if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
+    if (is_wide(node->lhs->member)) {
+      store_bitfield128(node->lhs->member);
       return;
     }
+    println("  mov %%rax, %%r8");
 
-    // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
-    println("  mov $%ld, %%rcx", node->var->ty->size);
-    addr_of_local(node->var, "%rdi");
-    println("  mov $0, %%al");
-    println("  rep stosb");
-    return;
-  case ND_COND: {
-    int c = count();
-    gen_branch(node->cond, false, format(".L.else.%d", c));
-    gen_expr(node->then);
-    println("  jmp .L.end.%d", c);
-    println(".L.else.%d:", c);
-    gen_expr(node->els);
-    println(".L.end.%d:", c);
-    return;
-  }
-  case ND_NOT:
-    gen_expr(node->lhs);
-    cmp_zero(node->lhs->ty);
-    println("  sete %%al");
-    println("  movzx %%al, %%rax");
-    return;
-  case ND_BITNOT:
-    gen_expr(node->lhs);
-    if (is_vector(node->ty)) {
-      gen_vector_unary(node);
-      return;
-    }
-    println("  not %%rax");
-    if (is_int128(node->ty))
-      println("  not %%rdx");
-    return;
-  case ND_LOGAND: {
-    int c = count();
-    gen_expr(node->lhs);
-    cmp_zero(node->lhs->ty);
-    println("  je .L.false.%d", c);
-    gen_expr(node->rhs);
-    cmp_zero(node->rhs->ty);
-    println("  je .L.false.%d", c);
-    println("  mov $1, %%rax");
-    println("  jmp .L.end.%d", c);
-    println(".L.false.%d:", c);
-    println("  mov $0, %%rax");
-    println(".L.end.%d:", c);
-    return;
-  }
-  case ND_LOGOR: {
-    int c = count();
-    gen_expr(node->lhs);
-    cmp_zero(node->lhs->ty);
-    println("  jne .L.true.%d", c);
-    gen_expr(node->rhs);
-    cmp_zero(node->rhs->ty);
-    println("  jne .L.true.%d", c);
-    println("  mov $0, %%rax");
-    println("  jmp .L.end.%d", c);
-    println(".L.true.%d:", c);
-    println("  mov $1, %%rax");
-    println(".L.end.%d:", c);
-    return;
-  }
-  case ND_FUNCALL: {
-    if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
-      gen_expr(node->args);
-      println("  mov %%rax, %%rdi");
-      builtin_alloca();
-      return;
-    }
+    // If the lhs is a bitfield, we need to read the current value
+    // from memory and merge it with a new value.
+    Member *mem = node->lhs->member;
+    // The mask goes through a register: `and` only takes 32-bit
+    // immediates, too small for the mask of a 32-bit-wide field.
+    uint64_t bits = mem->bit_width == 64 ? -1 : (1UL << mem->bit_width) - 1;
+    println("  mov %%rax, %%rdi");
+    println("  mov $%ld, %%r9", (long)bits);
+    println("  and %%r9, %%rdi");
+    println("  shl $%d, %%rdi", mem->bit_offset);
 
-    int stack_args = push_args(node);
+    println("  mov (%%rsp), %%rax");
+    load_bitfield_unit(mem, "(%rax)");
 
-    // Calling a function by name is a direct `call f`. Anything else,
-    // like a function pointer, is computed into %rax now, before the
-    // argument registers are loaded, and called through %r10.
-    bool direct = node->lhs->kind == ND_VAR && node->lhs->ty->kind == TY_FUNC;
-    if (!direct)
-      gen_expr(node->lhs);
-
-    int gp = 0, fp = 0;
-
-    // If the return type is a large struct/union, the caller passes
-    // a pointer to a buffer as if it were the first argument.
-    if (node->ret_buffer && is_ret_in_memory(node->ty))
-      pop(argreg64[gp++]);
-
-    for (Node *arg = node->args; arg; arg = arg->next) {
-      Type *ty = arg->ty;
-
-      switch (ty->kind) {
-      case TY_STRUCT:
-      case TY_UNION:
-        if (arg->pass_by_stack)
-          continue;
-
-        if (is_vector16(ty)) {
-          println("  movdqu (%%rsp), %%xmm%d", fp++);
-          println("  add $16, %%rsp");
-          depth -= 2;
-          break;
-        }
-
-        if (has_flonum1(ty))
-          popf(fp++);
-        else
-          pop(argreg64[gp++]);
-
-        if (has_two_parts(ty)) {
-          if (has_flonum2(ty))
-            popf(fp++);
-          else
-            pop(argreg64[gp++]);
-        } else if (ty->size > 8) {
-          // Padding, pushed but in no register
-          println("  add $8, %%rsp");
-          depth--;
-        }
-        break;
-      case TY_FLOAT:
-      case TY_DOUBLE:
-        if (fp < FP_MAX)
-          popf(fp++);
-        break;
-      case TY_LDOUBLE:
-        break;
-      case TY_INT128:
-        if (!arg->pass_by_stack) {
-          pop(argreg64[gp++]);
-          pop(argreg64[gp++]);
-        }
-        break;
-      case TY_VECTOR:
-        if (!arg->pass_by_stack)
-          pop_vec(ty, fp++);
-        break;
-      default:
-        if (gp >= GP_MAX)
-          break;
-        if (is_late_arg(arg))
-          println("%s", simple_operand_to(arg, gp++));
-        else
-          pop(argreg64[gp++]);
-      }
-    }
-
-    // %al tells a variadic callee how many vector registers hold arguments.
-    if (direct) {
-      println("  mov $%d, %%rax", fp);
-      println("  call %s@PLT", node->lhs->var->name);
-    } else {
-      println("  mov %%rax, %%r10");
-      println("  mov $%d, %%rax", fp);
-      println("  call *%%r10");
-    }
-    if (stack_args)
-      println("  add $%d, %%rsp", stack_args * 8);
-
-    depth -= stack_args;
-
-    // It looks like the most significant 48 or 56 bits in RAX may
-    // contain garbage if a function return type is short or bool/char,
-    // respectively. We clear the upper bits here.
-    switch (node->ty->kind) {
-    case TY_BOOL:
-      println("  movzx %%al, %%eax");
-      return;
-    case TY_CHAR:
-      if (node->ty->is_unsigned)
-        println("  movzbl %%al, %%eax");
-      else
-        println("  movsbl %%al, %%eax");
-      return;
-    case TY_SHORT:
-      if (node->ty->is_unsigned)
-        println("  movzwl %%ax, %%eax");
-      else
-        println("  movswl %%ax, %%eax");
-      return;
-    }
-
-    // If the return type is a small struct, a value is returned
-    // using up to two registers.
-    if (node->ret_buffer && !is_ret_in_memory(node->ty)) {
-      copy_ret_buffer(node->ret_buffer);
-      println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
-    }
-
-    return;
-  }
-  case ND_LABEL_VAL:
-    println("  lea %s(%%rip), %%rax", node->unique_label);
-    return;
-  case ND_UNREACHABLE:
-    // Nothing, as gcc and clang have it without optimization: code that
-    // reaches it carries on. gnulib's regex reaches an assume() that is
-    // false in sed's own tests.
-    return;
-  case ND_TRAP:
-    println("  ud2");
-    return;
-  case ND_CLZ:
-    // bsr finds the highest one bit; its index from the top is the count.
-    // (As with gcc, the result for 0 is undefined.)
-    gen_expr(node->lhs);
-    if (node->lhs->ty->size == 8) {
-      println("  bsr %%rax, %%rax");
-      println("  xor $63, %%eax");
-    } else {
-      println("  bsr %%eax, %%eax");
-      println("  xor $31, %%eax");
-    }
-    return;
-  case ND_CTZ:
-    gen_expr(node->lhs);
-    if (node->lhs->ty->size == 8)
-      println("  bsf %%rax, %%rax");
-    else
-      println("  bsf %%eax, %%eax");
-    return;
-  case ND_POPCOUNT:
-    // Counted in parallel within 2-, 4- and 8-bit fields, then summed by
-    // a multiply, without popcnt, which older x86-64 CPUs lack.
-    gen_expr(node->lhs);
-    if (node->lhs->ty->size < 8)
-      println("  mov %%eax, %%eax");
-    println("  mov %%rax, %%rdx");
-    println("  shr $1, %%rdx");
-    println("  mov $%ld, %%rcx", 0x5555555555555555L);
-    println("  and %%rcx, %%rdx");
-    println("  sub %%rdx, %%rax");
-    println("  mov $%ld, %%rcx", 0x3333333333333333L);
-    println("  mov %%rax, %%rdx");
-    println("  shr $2, %%rdx");
-    println("  and %%rcx, %%rax");
-    println("  and %%rcx, %%rdx");
-    println("  add %%rdx, %%rax");
-    println("  mov %%rax, %%rdx");
-    println("  shr $4, %%rdx");
-    println("  add %%rdx, %%rax");
-    println("  mov $%ld, %%rcx", 0x0f0f0f0f0f0f0f0fL);
-    println("  and %%rcx, %%rax");
-    println("  mov $%ld, %%rcx", 0x0101010101010101L);
-    println("  imul %%rcx, %%rax");
-    println("  shr $56, %%rax");
-    return;
-  case ND_BSWAP:
-    gen_expr(node->lhs);
-    if (node->ty->size == 8) {
-      println("  bswap %%rax");
-    } else if (node->ty->size == 4) {
-      println("  bswap %%eax");
-    } else {
-      println("  bswap %%eax");
-      println("  shr $16, %%eax");
-    }
-    return;
-  case ND_FENCE:
-    println("  mfence");
-    return;
-  case ND_OVERFLOW: {
-    // a and b are 64-bit (see gnu_builtin()), so a op b is computed
-    // exactly in 128 bits, in %rdx:%rax. It fits *res's type if that
-    // type's value of its low bits, extended back to 128 bits, is the
-    // same. (Every exact result is less than 2^128 and at least -2^127,
-    // so equal bits mean equal values.)
-    bool signed_a = !node->lhs->ty->is_unsigned;
-    bool signed_b = !node->rhs->ty->is_unsigned;
-    gen_expr(node->cas_addr);
-    push();
-    gen_expr(node->lhs);
-    push();
-    gen_expr(node->rhs);
-    println("  mov %%rax, %%rcx");
+    println("  mov $%ld, %%r9", (long)~(bits << mem->bit_offset));
+    println("  and %%r9, %%rax");
+    println("  or %%rdi, %%rax");
     pop("%rdi");
-    println("  mov %%rdi, %%rax");
+    store_unit(mem->unit); // the whole unit loaded, not the promoted type
 
-    if (node->val == ND_MUL) {
-      // The unsigned product, less 2^64 * b for a negative a and
-      // 2^64 * a for a negative b
-      println("  mul %%rcx");
-      if (signed_a) {
-        println("  test %%rdi, %%rdi");
-        println("  jns 1f");
-        println("  sub %%rcx, %%rdx");
-        println("1:");
-      }
-      if (signed_b) {
-        println("  test %%rcx, %%rcx");
-        println("  jns 1f");
-        println("  sub %%rdi, %%rdx");
-        println("1:");
-      }
-    } else {
-      // Each operand's high 64 bits: copies of its sign, or 0
-      if (signed_a) {
-        println("  mov %%rdi, %%rdx");
-        println("  sar $63, %%rdx");
-      } else {
-        println("  xor %%edx, %%edx");
-      }
-      if (signed_b) {
-        println("  mov %%rcx, %%rsi");
-        println("  sar $63, %%rsi");
-      } else {
-        println("  xor %%esi, %%esi");
-      }
-      if (node->val == ND_ADD) {
-        println("  add %%rcx, %%rax");
-        println("  adc %%rsi, %%rdx");
-      } else {
-        println("  sub %%rcx, %%rax");
-        println("  sbb %%rsi, %%rdx");
-      }
-    }
+    // The assignment's value is what the field now holds: the new
+    // value cut to its width, sign- or zero-extended.
+    println("  mov %%r8, %%rax");
+    println("  shl $%d, %%rax", 64 - mem->bit_width);
+    if (mem->ty->is_unsigned || mem->ty->kind == TY_BOOL)
+      println("  shr $%d, %%rax", 64 - mem->bit_width);
+    else
+      println("  sar $%d, %%rax", 64 - mem->bit_width);
+    return;
+  }
 
-    Type *ty = node->cas_addr->ty->base;
-    pop("%rsi");
-    println("  mov %s, (%%rsi)", reg_ax(ty->size));
+  store(node->ty);
 
-    // *res's value, extended to 128 bits in %r9:%r8
-    switch (ty->size) {
-    case 1:
-      println(ty->is_unsigned ? "  movzbl %%al, %%r8d" : "  movsbq %%al, %%r8");
+  // A store to an atomic object is sequentially consistent: no later
+  // load may be done before it, which x86 allows without a fence.
+  if (node->lhs->ty->is_atomic)
+    println("  mfence");
+}
+
+// A function call, or alloca(), which is done in place
+static void gen_funcall(Node *node) {
+  if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
+    gen_expr(node->args);
+    println("  mov %%rax, %%rdi");
+    builtin_alloca();
+    return;
+  }
+
+  int stack_args = push_args(node);
+
+  // Calling a function by name is a direct `call f`. Anything else,
+  // like a function pointer, is computed into %rax now, before the
+  // argument registers are loaded, and called through %r10.
+  bool direct = node->lhs->kind == ND_VAR && node->lhs->ty->kind == TY_FUNC;
+  if (!direct)
+    gen_expr(node->lhs);
+
+  int gp = 0, fp = 0;
+
+  // If the return type is a large struct/union, the caller passes
+  // a pointer to a buffer as if it were the first argument.
+  if (node->ret_buffer && is_ret_in_memory(node->ty))
+    pop(argreg64[gp++]);
+
+  for (Node *arg = node->args; arg; arg = arg->next) {
+    Type *ty = arg->ty;
+
+    switch (ty->kind) {
+    case TY_STRUCT:
+    case TY_UNION:
+      if (arg->pass_by_stack)
+        continue;
+
+      if (is_vector16(ty)) {
+        println("  movdqu (%%rsp), %%xmm%d", fp++);
+        println("  add $16, %%rsp");
+        depth -= 2;
+        break;
+      }
+
+      if (has_flonum1(ty))
+        popf(fp++);
+      else
+        pop(argreg64[gp++]);
+
+      if (has_two_parts(ty)) {
+        if (has_flonum2(ty))
+          popf(fp++);
+        else
+          pop(argreg64[gp++]);
+      } else if (ty->size > 8) {
+        // Padding, pushed but in no register
+        println("  add $8, %%rsp");
+        depth--;
+      }
       break;
-    case 2:
-      println(ty->is_unsigned ? "  movzwl %%ax, %%r8d" : "  movswq %%ax, %%r8");
+    case TY_FLOAT:
+    case TY_DOUBLE:
+      if (fp < FP_MAX)
+        popf(fp++);
       break;
-    case 4:
-      println(ty->is_unsigned ? "  mov %%eax, %%r8d" : "  movslq %%eax, %%r8");
+    case TY_LDOUBLE:
+      break;
+    case TY_INT128:
+      if (!arg->pass_by_stack) {
+        pop(argreg64[gp++]);
+        pop(argreg64[gp++]);
+      }
+      break;
+    case TY_VECTOR:
+      if (!arg->pass_by_stack)
+        pop_vec(ty, fp++);
       break;
     default:
-      println("  mov %%rax, %%r8");
+      if (gp >= GP_MAX)
+        break;
+      if (is_late_arg(arg))
+        println("%s", simple_operand_to(arg, gp++));
+      else
+        pop(argreg64[gp++]);
     }
-    if (ty->is_unsigned) {
-      println("  xor %%r9d, %%r9d");
-    } else {
-      println("  mov %%r8, %%r9");
-      println("  sar $63, %%r9");
-    }
-    println("  xor %%rax, %%r8");
-    println("  xor %%rdx, %%r9");
-    println("  or %%r9, %%r8");
-    println("  setne %%al");
-    println("  movzbl %%al, %%eax");
+  }
+
+  // %al tells a variadic callee how many vector registers hold arguments.
+  if (direct) {
+    println("  mov $%d, %%rax", fp);
+    println("  call %s@PLT", node->lhs->var->name);
+  } else {
+    println("  mov %%rax, %%r10");
+    println("  mov $%d, %%rax", fp);
+    println("  call *%%r10");
+  }
+  if (stack_args)
+    println("  add $%d, %%rsp", stack_args * 8);
+
+  depth -= stack_args;
+
+  // It looks like the most significant 48 or 56 bits in RAX may
+  // contain garbage if a function return type is short or bool/char,
+  // respectively. We clear the upper bits here.
+  switch (node->ty->kind) {
+  case TY_BOOL:
+    println("  movzx %%al, %%eax");
+    return;
+  case TY_CHAR:
+    if (node->ty->is_unsigned)
+      println("  movzbl %%al, %%eax");
+    else
+      println("  movsbl %%al, %%eax");
+    return;
+  case TY_SHORT:
+    if (node->ty->is_unsigned)
+      println("  movzwl %%ax, %%eax");
+    else
+      println("  movswl %%ax, %%eax");
     return;
   }
-  case ND_FRAME_ADDR:
-    // Every function keeps its caller's %rbp at 0(%rbp) (see the
-    // prologue), so frames are followed up the chain.
-    println("  mov %%rbp, %%rax");
-    for (int i = 0; i < node->val; i++)
-      println("  mov (%%rax), %%rax");
-    return;
-  case ND_VA_ARG:
-    gen_va_arg(node);
-    return;
-  case ND_CAS: {
-    // The values are compared and swapped as bits: a float or a double
-    // goes through %rax too. A long double, 16 bytes, goes through
-    // cmpxchg16b, which compares %rdx:%rax and stores %rcx:%rbx (%rbx
-    // may hold a register variable, so it's saved).
-    Type *ty = node->cas_addr->ty->base;
-    int sz = ty->size;
-    gen_expr(node->cas_addr);
-    push();
-    gen_expr(node->cas_new);
 
-    if (ty->kind == TY_LDOUBLE) {
-      println("  sub $16, %%rsp");
-      println("  fstpt (%%rsp)");
-      depth += 2;
-      gen_expr(node->cas_old);
-      println("  mov %%rax, %%r8");
-      println("  mov %%rbx, %%r9");
-      println("  mov (%%rsp), %%rbx");
-      println("  mov 8(%%rsp), %%rcx");
-      println("  add $16, %%rsp");
-      depth -= 2;
-      pop("%rdi"); // addr
-      println("  mov (%%r8), %%rax");
-      println("  mov 8(%%r8), %%rdx");
-      println("  lock cmpxchg16b (%%rdi)");
-      println("  mov %%r9, %%rbx");
-      println("  sete %%cl");
-      println("  je 1f");
-      println("  mov %%rax, (%%r8)");
-      println("  mov %%rdx, 8(%%r8)");
+  // If the return type is a small struct, a value is returned
+  // using up to two registers.
+  if (node->ret_buffer && !is_ret_in_memory(node->ty)) {
+    copy_ret_buffer(node->ret_buffer);
+    println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
+  }
+
+}
+
+// __builtin_add_overflow() and the like: stores a op b to *res, and is
+// 1 if it didn't fit
+static void gen_overflow(Node *node) {
+  // a and b are 64-bit (see gnu_builtin()), so a op b is computed
+  // exactly in 128 bits, in %rdx:%rax. It fits *res's type if that
+  // type's value of its low bits, extended back to 128 bits, is the
+  // same. (Every exact result is less than 2^128 and at least -2^127,
+  // so equal bits mean equal values.)
+  bool signed_a = !node->lhs->ty->is_unsigned;
+  bool signed_b = !node->rhs->ty->is_unsigned;
+  gen_expr(node->cas_addr);
+  push();
+  gen_expr(node->lhs);
+  push();
+  gen_expr(node->rhs);
+  println("  mov %%rax, %%rcx");
+  pop("%rdi");
+  println("  mov %%rdi, %%rax");
+
+  if (node->val == ND_MUL) {
+    // The unsigned product, less 2^64 * b for a negative a and
+    // 2^64 * a for a negative b
+    println("  mul %%rcx");
+    if (signed_a) {
+      println("  test %%rdi, %%rdi");
+      println("  jns 1f");
+      println("  sub %%rcx, %%rdx");
       println("1:");
-      println("  movzbl %%cl, %%eax");
-      return;
     }
+    if (signed_b) {
+      println("  test %%rcx, %%rcx");
+      println("  jns 1f");
+      println("  sub %%rdi, %%rdx");
+      println("1:");
+    }
+  } else {
+    // Each operand's high 64 bits: copies of its sign, or 0
+    if (signed_a) {
+      println("  mov %%rdi, %%rdx");
+      println("  sar $63, %%rdx");
+    } else {
+      println("  xor %%edx, %%edx");
+    }
+    if (signed_b) {
+      println("  mov %%rcx, %%rsi");
+      println("  sar $63, %%rsi");
+    } else {
+      println("  xor %%esi, %%esi");
+    }
+    if (node->val == ND_ADD) {
+      println("  add %%rcx, %%rax");
+      println("  adc %%rsi, %%rdx");
+    } else {
+      println("  sub %%rcx, %%rax");
+      println("  sbb %%rsi, %%rdx");
+    }
+  }
 
-    if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE)
-      println("  movq %%xmm0, %%rax"); // a float's bits are in %eax
-    push();
+  Type *ty = node->cas_addr->ty->base;
+  pop("%rsi");
+  println("  mov %s, (%%rsi)", reg_ax(ty->size));
+
+  // *res's value, extended to 128 bits in %r9:%r8
+  switch (ty->size) {
+  case 1:
+    println(ty->is_unsigned ? "  movzbl %%al, %%r8d" : "  movsbq %%al, %%r8");
+    break;
+  case 2:
+    println(ty->is_unsigned ? "  movzwl %%ax, %%r8d" : "  movswq %%ax, %%r8");
+    break;
+  case 4:
+    println(ty->is_unsigned ? "  mov %%eax, %%r8d" : "  movslq %%eax, %%r8");
+    break;
+  default:
+    println("  mov %%rax, %%r8");
+  }
+  if (ty->is_unsigned) {
+    println("  xor %%r9d, %%r9d");
+  } else {
+    println("  mov %%r8, %%r9");
+    println("  sar $63, %%r9");
+  }
+  println("  xor %%rax, %%r8");
+  println("  xor %%rdx, %%r9");
+  println("  or %%r9, %%r8");
+  println("  setne %%al");
+  println("  movzbl %%al, %%eax");
+}
+
+// A compare-and-swap: if *addr holds *old, stores new there and is 1;
+// if not, stores *addr to *old and is 0
+static void gen_cas(Node *node) {
+  // The values are compared and swapped as bits: a float or a double
+  // goes through %rax too. A long double, 16 bytes, goes through
+  // cmpxchg16b, which compares %rdx:%rax and stores %rcx:%rbx (%rbx
+  // may hold a register variable, so it's saved).
+  Type *ty = node->cas_addr->ty->base;
+  int sz = ty->size;
+  gen_expr(node->cas_addr);
+  push();
+  gen_expr(node->cas_new);
+
+  if (ty->kind == TY_LDOUBLE) {
+    println("  sub $16, %%rsp");
+    println("  fstpt (%%rsp)");
+    depth += 2;
     gen_expr(node->cas_old);
     println("  mov %%rax, %%r8");
-    println("  mov (%%r8), %s", reg_ax(sz));
-    pop("%rdx"); // new
+    println("  mov %%rbx, %%r9");
+    println("  mov (%%rsp), %%rbx");
+    println("  mov 8(%%rsp), %%rcx");
+    println("  add $16, %%rsp");
+    depth -= 2;
     pop("%rdi"); // addr
-
-    println("  lock cmpxchg %s, (%%rdi)", reg_dx(sz));
+    println("  mov (%%r8), %%rax");
+    println("  mov 8(%%r8), %%rdx");
+    println("  lock cmpxchg16b (%%rdi)");
+    println("  mov %%r9, %%rbx");
     println("  sete %%cl");
     println("  je 1f");
-    println("  mov %s, (%%r8)", reg_ax(sz));
+    println("  mov %%rax, (%%r8)");
+    println("  mov %%rdx, 8(%%r8)");
     println("1:");
     println("  movzbl %%cl, %%eax");
     return;
   }
-  case ND_EXCH: {
-    gen_expr(node->lhs);
-    push();
-    gen_expr(node->rhs);
-    pop("%rdi");
 
-    int sz = node->lhs->ty->base->size;
-    println("  xchg %s, (%%rdi)", reg_ax(sz));
-    return;
-  }
-  }
+  if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE)
+    println("  movq %%xmm0, %%rax"); // a float's bits are in %eax
+  push();
+  gen_expr(node->cas_old);
+  println("  mov %%rax, %%r8");
+  println("  mov (%%r8), %s", reg_ax(sz));
+  pop("%rdx"); // new
+  pop("%rdi"); // addr
 
-  if (is_vector(node->lhs->ty)) {
-    gen_vector_binary(node);
-    return;
-  }
+  println("  lock cmpxchg %s, (%%rdi)", reg_dx(sz));
+  println("  sete %%cl");
+  println("  je 1f");
+  println("  mov %s, (%%r8)", reg_ax(sz));
+  println("1:");
+  println("  movzbl %%cl, %%eax");
+}
 
-  // Binary operators on float, double and long double operands
+// Binary operators on float, double and long double operands
+static void gen_float_binary(Node *node) {
   switch (node->lhs->ty->kind) {
   case TY_FLOAT:
   case TY_DOUBLE: {
@@ -3344,13 +3035,10 @@ static void gen_expr(Node *node) {
     error_tok(node->tok, "invalid expression");
   }
   }
+}
 
-  if (is_int128(node->lhs->ty)) {
-    gen_int128_binary(node);
-    return;
-  }
-
-  // Binary operators on integers and pointers
+// Binary operators on integers and pointers
+static void gen_int_binary(Node *node) {
   char *ax, *di, *dx;
 
   if (is_64bit(node->lhs->ty)) {
@@ -3456,6 +3144,349 @@ static void gen_expr(Node *node) {
   }
 
   error_tok(node->tok, "invalid expression");
+}
+
+// Generates code for expression `node`, which leaves its value in %rax
+// (an integer, a pointer, or a struct's address), %xmm0 (a float, double
+// or vector), %rdx:%rax (an __int128) or on the x87 stack (a long double).
+static void gen_expr(Node *node) {
+  emit_loc(node->tok);
+
+  if (node->kind != ND_NUM && is_foldable(node)) {
+    println("  mov $%ld, %%rax", fold(node));
+    return;
+  }
+
+  // gen_expr() has three parts, in this order: the node kinds that aren't
+  // binary operators (this switch: values, memory, ?:, && and ||, calls,
+  // builtins and atomics), then binary operators on floating-point
+  // operands (gen_float_binary()), then binary operators on integers and
+  // pointers (gen_int_binary()).
+  switch (node->kind) {
+  case ND_NULL_EXPR:
+    return;
+  case ND_NUM: {
+    switch (node->ty->kind) {
+    case TY_FLOAT: {
+      union { float f32; uint32_t u32; } u = { *node->fval };
+      println("  mov $%u, %%eax  # float %Lf", u.u32, *node->fval);
+      println("  movq %%rax, %%xmm0");
+      return;
+    }
+    case TY_DOUBLE: {
+      union { double f64; uint64_t u64; } u = { *node->fval };
+      println("  mov $%lu, %%rax  # double %Lf", u.u64, *node->fval);
+      println("  movq %%rax, %%xmm0");
+      return;
+    }
+    case TY_LDOUBLE: {
+      uint64_t u64[2];
+      write_ldouble((char *)u64, *node->fval);
+      println("  mov $%lu, %%rax  # long double %Lf", u64[0], *node->fval);
+      println("  mov %%rax, -16(%%rsp)");
+      println("  mov $%lu, %%rax", u64[1]);
+      println("  mov %%rax, -8(%%rsp)");
+      println("  fldt -16(%%rsp)");
+      return;
+    }
+    }
+
+    println("  mov $%ld, %%rax", node->val);
+    if (is_int128(node->ty))
+      println("  cqo");
+    return;
+  }
+  case ND_NEG:
+    gen_expr(node->lhs);
+    if (is_vector(node->ty)) {
+      gen_vector_unary(node);
+      return;
+    }
+
+    switch (node->ty->kind) {
+    case TY_FLOAT:
+      println("  mov $1, %%rax");
+      println("  shl $31, %%rax");
+      println("  movq %%rax, %%xmm1");
+      println("  xorps %%xmm1, %%xmm0");
+      return;
+    case TY_DOUBLE:
+      println("  mov $1, %%rax");
+      println("  shl $63, %%rax");
+      println("  movq %%rax, %%xmm1");
+      println("  xorpd %%xmm1, %%xmm0");
+      return;
+    case TY_LDOUBLE:
+      println("  fchs");
+      return;
+    case TY_INT128:
+      neg128("%rax", "%rdx");
+      return;
+    }
+
+    println("  neg %%rax");
+    return;
+  case ND_VAR:
+    if (local_scalar(node)) {
+      load_from(node->ty, var_operand(node->var));
+      return;
+    }
+    gen_addr(node);
+    load(node->ty);
+    return;
+  case ND_MEMBER: {
+    Member *mem = node->member;
+
+    // A scalar member is loaded from base + offset in one instruction,
+    // e.g. `mov 8(%rax), %rax` for p->x, or `mov -24(%rbp), %rax` for
+    // s.x when s is a local struct.
+    if (is_aggregate(node->ty) || mem->offset != (int32_t)mem->offset) {
+      gen_addr(node);
+      if (!is_aggregate(node->ty)) {
+        if (mem->is_bitfield)
+          load_bitfield_unit(mem, "(%rax)");
+        else
+          load_from(node->ty, "(%rax)");
+      }
+    } else {
+      char addr[64];
+      memop_text(addr, gen_memop(node));
+      // A bit-field's whole unit, not its promoted type (see add_type())
+      if (mem->is_bitfield)
+        load_bitfield_unit(mem, addr);
+      else
+        load_from(node->ty, addr);
+    }
+
+    if (mem->is_bitfield)
+      extract_bitfield(mem);
+    return;
+  }
+  case ND_DEREF:
+    if (is_simple_load(node->ty)) {
+      char addr[64];
+      load_from(node->ty, memop_text(addr, gen_memop(node)));
+      return;
+    }
+    gen_expr(node->lhs);
+    load(node->ty);
+    return;
+  case ND_ADDR:
+    gen_addr(node->lhs);
+    return;
+  case ND_ASSIGN:
+    gen_assign(node);
+    return;
+  case ND_STMT_EXPR: {
+    // The value of the last statement, if it's an expression, is the
+    // result, so it's computed with gen_expr, not discarded.
+    bool labeled = block_begin(node);
+    for (Node *n = node->body; n; n = n->next) {
+      if (!n->next && n->kind == ND_EXPR_STMT)
+        gen_expr(n->lhs);
+      else
+        gen_stmt(n);
+    }
+    if (labeled)
+      block_end(node);
+    return;
+  }
+  case ND_COMMA:
+    gen_discard(node->lhs);
+    gen_expr(node->rhs);
+    return;
+  case ND_CAST:
+    gen_expr(node->lhs);
+    // An int load is already sign-extended to 64 bits.
+    if (is_int_load(node->lhs) && node->ty->size == 8 && is_int_or_ptr(node->ty))
+      return;
+    cast(node->lhs->ty, node->ty);
+    return;
+  case ND_MEMZERO:
+    if (node->var->reg) {
+      println("  mov $0, %s", regs64[node->var->reg - 1]);
+      return;
+    }
+
+    // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
+    println("  mov $%ld, %%rcx", node->var->ty->size);
+    addr_of_local(node->var, "%rdi");
+    println("  mov $0, %%al");
+    println("  rep stosb");
+    return;
+  case ND_COND: {
+    int c = count();
+    gen_branch(node->cond, false, format(".L.else.%d", c));
+    gen_expr(node->then);
+    println("  jmp .L.end.%d", c);
+    println(".L.else.%d:", c);
+    gen_expr(node->els);
+    println(".L.end.%d:", c);
+    return;
+  }
+  case ND_NOT:
+    gen_expr(node->lhs);
+    cmp_zero(node->lhs->ty);
+    println("  sete %%al");
+    println("  movzx %%al, %%rax");
+    return;
+  case ND_BITNOT:
+    gen_expr(node->lhs);
+    if (is_vector(node->ty)) {
+      gen_vector_unary(node);
+      return;
+    }
+    println("  not %%rax");
+    if (is_int128(node->ty))
+      println("  not %%rdx");
+    return;
+  case ND_LOGAND: {
+    int c = count();
+    gen_expr(node->lhs);
+    cmp_zero(node->lhs->ty);
+    println("  je .L.false.%d", c);
+    gen_expr(node->rhs);
+    cmp_zero(node->rhs->ty);
+    println("  je .L.false.%d", c);
+    println("  mov $1, %%rax");
+    println("  jmp .L.end.%d", c);
+    println(".L.false.%d:", c);
+    println("  mov $0, %%rax");
+    println(".L.end.%d:", c);
+    return;
+  }
+  case ND_LOGOR: {
+    int c = count();
+    gen_expr(node->lhs);
+    cmp_zero(node->lhs->ty);
+    println("  jne .L.true.%d", c);
+    gen_expr(node->rhs);
+    cmp_zero(node->rhs->ty);
+    println("  jne .L.true.%d", c);
+    println("  mov $0, %%rax");
+    println("  jmp .L.end.%d", c);
+    println(".L.true.%d:", c);
+    println("  mov $1, %%rax");
+    println(".L.end.%d:", c);
+    return;
+  }
+  case ND_FUNCALL:
+    gen_funcall(node);
+    return;
+  case ND_LABEL_VAL:
+    println("  lea %s(%%rip), %%rax", node->unique_label);
+    return;
+  case ND_UNREACHABLE:
+    // Nothing, as gcc and clang have it without optimization: code that
+    // reaches it carries on. gnulib's regex reaches an assume() that is
+    // false in sed's own tests.
+    return;
+  case ND_TRAP:
+    println("  ud2");
+    return;
+  case ND_CLZ:
+    // bsr finds the highest one bit; its index from the top is the count.
+    // (As with gcc, the result for 0 is undefined.)
+    gen_expr(node->lhs);
+    if (node->lhs->ty->size == 8) {
+      println("  bsr %%rax, %%rax");
+      println("  xor $63, %%eax");
+    } else {
+      println("  bsr %%eax, %%eax");
+      println("  xor $31, %%eax");
+    }
+    return;
+  case ND_CTZ:
+    gen_expr(node->lhs);
+    if (node->lhs->ty->size == 8)
+      println("  bsf %%rax, %%rax");
+    else
+      println("  bsf %%eax, %%eax");
+    return;
+  case ND_POPCOUNT:
+    // Counted in parallel within 2-, 4- and 8-bit fields, then summed by
+    // a multiply, without popcnt, which older x86-64 CPUs lack.
+    gen_expr(node->lhs);
+    if (node->lhs->ty->size < 8)
+      println("  mov %%eax, %%eax");
+    println("  mov %%rax, %%rdx");
+    println("  shr $1, %%rdx");
+    println("  mov $%ld, %%rcx", 0x5555555555555555L);
+    println("  and %%rcx, %%rdx");
+    println("  sub %%rdx, %%rax");
+    println("  mov $%ld, %%rcx", 0x3333333333333333L);
+    println("  mov %%rax, %%rdx");
+    println("  shr $2, %%rdx");
+    println("  and %%rcx, %%rax");
+    println("  and %%rcx, %%rdx");
+    println("  add %%rdx, %%rax");
+    println("  mov %%rax, %%rdx");
+    println("  shr $4, %%rdx");
+    println("  add %%rdx, %%rax");
+    println("  mov $%ld, %%rcx", 0x0f0f0f0f0f0f0f0fL);
+    println("  and %%rcx, %%rax");
+    println("  mov $%ld, %%rcx", 0x0101010101010101L);
+    println("  imul %%rcx, %%rax");
+    println("  shr $56, %%rax");
+    return;
+  case ND_BSWAP:
+    gen_expr(node->lhs);
+    if (node->ty->size == 8) {
+      println("  bswap %%rax");
+    } else if (node->ty->size == 4) {
+      println("  bswap %%eax");
+    } else {
+      println("  bswap %%eax");
+      println("  shr $16, %%eax");
+    }
+    return;
+  case ND_FENCE:
+    println("  mfence");
+    return;
+  case ND_OVERFLOW:
+    gen_overflow(node);
+    return;
+  case ND_FRAME_ADDR:
+    // Every function keeps its caller's %rbp at 0(%rbp) (see the
+    // prologue), so frames are followed up the chain.
+    println("  mov %%rbp, %%rax");
+    for (int i = 0; i < node->val; i++)
+      println("  mov (%%rax), %%rax");
+    return;
+  case ND_VA_ARG:
+    gen_va_arg(node);
+    return;
+  case ND_CAS:
+    gen_cas(node);
+    return;
+  case ND_EXCH: {
+    gen_expr(node->lhs);
+    push();
+    gen_expr(node->rhs);
+    pop("%rdi");
+
+    int sz = node->lhs->ty->base->size;
+    println("  xchg %s, (%%rdi)", reg_ax(sz));
+    return;
+  }
+  }
+
+  if (is_vector(node->lhs->ty)) {
+    gen_vector_binary(node);
+    return;
+  }
+
+  if (is_flonum(node->lhs->ty)) {
+    gen_float_binary(node);
+    return;
+  }
+
+  if (is_int128(node->lhs->ty)) {
+    gen_int128_binary(node);
+    return;
+  }
+
+  gen_int_binary(node);
 }
 
 //---------- asm statements with operands ------------------------------------
