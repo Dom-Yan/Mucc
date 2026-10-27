@@ -80,10 +80,12 @@ chmod +x mucc
 <!-- For a release: add it at the top of this list, and give it its
      entry in changelog.html. Nothing else on the site names a release. -->
 <ul>
-  <li><b>In development:</b> the next release is 1.8 times as fast as 1.4.0
-    on <code>sqlite3.c</code>, makes code as fast as <code>gcc -O0</code>'s,
-    and is <b>2.8 MB</b> instead of 8.8, with its headers and C library
-    compressed inside it. It also fixes 17 reported bugs. See the
+  <li><b>October 27, 2026:</b> <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.4.1">Mucc 1.4.1</a>
+    compiles <code>sqlite3.c</code> 1.6 times as fast as 1.4.0, makes code
+    as fast as <code>gcc -O0</code>'s, and is <b>2.8 MB</b> instead of 8.8,
+    with its headers and C library compressed inside it. It closes 17
+    reported issues, and <code>make fuzz</code> tests it with random
+    programs for as long as you let it run. See the
     <a href="changelog.html">changelog</a>.</li>
   <li><b>October 14, 2026:</b> <a href="https://github.com/Dom-Yan/Mucc/releases/tag/v1.4.0">Mucc 1.4.0</a>
     runs on and makes programs for 64-bit ARM Linux (the Raspberry Pi 4 and
@@ -119,7 +121,7 @@ chmod +x mucc
     programs for both: <code>--target=aarch64-linux</code> on an x86-64
     machine, or the other way round.</li>
   <li><b>Small enough to read.</b> A few tens of thousands of lines of C, one
-    file per stage, split into sections, that one person can read from end
+    file or a few per stage, split into sections, that one person can read from end
     to end.</li>
   <li><b>Real C, for real programs.</b> C17 by default, C23 with
     <code>-std=c23</code>, and the GNU extensions real code uses. SQLite, Lua,

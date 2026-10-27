@@ -56,8 +56,11 @@ guide.
 
 ## Updates
 
-Thank you for starring Mucc and watching its development! There is currently a hefty patch coming soon that's going to fix performance issues, cutting down the binary size and some other bugs that were found. It comes out on November 10, 2026.
-
+Thank you for starring Mucc and watching its development! Mucc 1.4.1 is
+out (October 27, 2026): it's 2.8 MB instead of 8.8, compiles
+`sqlite3.c` 1.6 times as fast as 1.4.0, makes faster code, and closes
+17 reported issues. The [changelog](https://dom-yan.github.io/Mucc/changelog.html)
+has the details.
 
 ## License
 

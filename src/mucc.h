@@ -70,7 +70,7 @@
 
 //---------- System headers and small utilities ------------------------------
 
-#define MUCC_VERSION "1.4.0"
+#define MUCC_VERSION "1.4.1"
 
 // POSIX 2008 with its XSI part, which has realpath() (with musl, only then)
 #define _XOPEN_SOURCE 700
