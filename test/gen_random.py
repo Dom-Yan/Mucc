@@ -26,6 +26,23 @@
 # Implementation-defined behavior, like converting 300 to signed char, is
 # allowed: mucc and gcc agree on it for x86-64 Linux. So when the two
 # compilers print different things, one of them has a bug.
+#
+# What the generator doesn't make yet
+#
+# mucc passes everything this makes (test/fuzz.sh runs it without end),
+# so new bugs are in what it can't make yet. Each of these is a session's
+# work: add it, check it with `test/difftest.sh --check-ub 500`, then
+# `make fuzz` and `make fuzz MODE=arch`.
+#
+#   - unions, and structs inside structs
+#   - long double, __int128, _Bool, char arrays, enums
+#   - pointers to locals, pointers to pointers, pointer arithmetic
+#   - more than 8 parameters (the rest go on the stack), and varargs
+#     functions that read their arguments with va_arg
+#   - goto, and labels in loops
+#   - compound literals, designated initializers, static locals
+#   - volatile, and side effects inside expressions (with sequence
+#     points kept)
 import random
 import re
 import sys
@@ -116,18 +133,26 @@ class Var:
 
 class Struct:
     """members: list of (name, kind, type, extra), kind in 'int', 'bit'
-    (extra = width), 'dbl', 'arr' (extra = length)."""
+    (extra = width), 'dbl', 'flt', 'arr' (extra = length).
+
+    Some structs are only floats and doubles, one to four: the calling
+    conventions pass those in floating-point registers (on ARM64, as a
+    "homogeneous floating-point aggregate" when all are one type), the
+    case compilers most often get wrong."""
     def __init__(self, name):
         self.name = name
         self.members = []
-        for i in range(R.randint(1, 6)):
-            k = R.choice(['int', 'int', 'bit', 'dbl', 'arr'])
+        fp_only = R.random() < 0.3
+        for i in range(R.randint(1, 4) if fp_only else R.randint(1, 6)):
+            k = R.choice(['dbl', 'flt'] if fp_only else ['int', 'int', 'bit', 'dbl', 'flt', 'arr'])
             if k == 'bit':
                 self.members.append((f'm{i}', 'bit', R.choice(['int', 'unsigned int']), R.randint(1, 31)))
             elif k == 'arr':
                 self.members.append((f'm{i}', 'arr', int_type(), R.randint(1, 4)))
             elif k == 'dbl':
                 self.members.append((f'm{i}', 'dbl', 'double', 0))
+            elif k == 'flt':
+                self.members.append((f'm{i}', 'flt', 'float', 0))
             else:
                 self.members.append((f'm{i}', 'int', int_type(), 0))
 
@@ -147,7 +172,7 @@ class Struct:
         for _, kind, ty, extra in self.members:
             if kind == 'arr':
                 vals.append('{' + ', '.join(int_lit(ty) for _ in range(extra)) + '}')
-            elif kind == 'dbl':
+            elif kind in ('dbl', 'flt'):  # every dbl_lit() fits in a float
                 vals.append(dbl_lit())
             elif kind == 'bit':
                 vals.append(str(R.randint(0, (1 << (extra - 1)) - 1)))
@@ -189,6 +214,8 @@ static long safe_neg_long(long a) { return a == LONG_MIN_ ? a : -a; }
 
 // double -> long is undefined when out of range, so clamp.
 static long d2l(double d) { return d > -1e15 && d < 1e15 ? (long)d : 0; }
+// and double -> float when out of float's range.
+static float d2f(double d) { return d > -1e30 && d < 1e30 ? (float)d : 0; }
 
 // NaN's sign bit can differ between constant folding and run time, and
 // so can zero's: gcc folds `0.0 - x` to `-x`, which is -0 for x = 0.
@@ -324,12 +351,14 @@ class Gen:
     def dbl_expr(self, d):
         if d <= 0 or R.random() < 0.3:
             cands = ['lit', 'int']
-            if self.of_kind('dbl'): cands += ['var'] * 3
-            dbl_members = [(s, m) for s in self.of_kind('struct') for m in s.ty.members if m[1] == 'dbl']
+            fp_vars = self.of_kind('dbl') + self.of_kind('flt')
+            if fp_vars: cands += ['var'] * 3
+            dbl_members = [(s, m) for s in self.of_kind('struct') for m in s.ty.members
+                           if m[1] in ('dbl', 'flt')]
             if dbl_members: cands += ['mem']
             c = R.choice(cands)
             if c == 'var':
-                return R.choice(self.of_kind('dbl')).name
+                return R.choice(fp_vars).name
             if c == 'mem':
                 s, m = R.choice(dbl_members)
                 return f'{s.name}.{m[0]}'
@@ -354,14 +383,14 @@ class Gen:
     #---------- Lvalues
 
     def lvalue(self, simple=False):
-        """Returns (code, kind, type). kind is 'int', 'bit', 'dbl' or 'struct'.
+        """Returns (code, kind, type). kind is 'int', 'bit', 'dbl', 'flt' or 'struct'.
         With simple=True, only names and struct members: no index or
         pointer that a function call on the right could change."""
         cands = []
         for v in self.scope:
             if not v.writable:
                 continue
-            if v.kind in ('int', 'dbl'):
+            if v.kind in ('int', 'dbl', 'flt'):
                 cands.append((v.name, v.kind, v.ty))
             elif v.kind == 'struct':
                 cands.append((v.name, 'struct', v.ty))
@@ -392,6 +421,9 @@ class Gen:
             return
         if kind == 'dbl':
             self.emit(f'{code} = {self.dbl_expr(3)};')
+            return
+        if kind == 'flt':
+            self.emit(f'{code} = d2f({self.dbl_expr(3)});')
             return
 
         r = R.random()
@@ -424,6 +456,8 @@ class Gen:
                 args.append(self.int_expr(3)[0])
             elif p.kind == 'dbl':
                 args.append(self.dbl_expr(2))
+            elif p.kind == 'flt':
+                args.append(f'd2f({self.dbl_expr(2)})')
             elif p.kind == 'ptr':
                 targets = [v.name for v in self.globals if v.kind == 'int' and v.ty == p.ty]
                 args.append(f'&{R.choice(targets)}')
@@ -448,7 +482,7 @@ class Gen:
                 self.emit(f'{R.choice(same).name} = {call};')
             else:
                 self.emit(f'{call};')
-        elif f.ret == 'double':
+        elif f.ret in ('double', 'float'):
             self.emit(f'pd({call});')
         else:
             lv = self.lvalue(simple=True)
@@ -471,9 +505,12 @@ class Gen:
                 t = int_type()
                 v = Var(self.fresh('l'), 'int', t)
                 self.emit(f'{t} {v.name} = {self.int_expr(3)[0]};')
-            elif r < 0.75:
+            elif r < 0.7:
                 v = Var(self.fresh('l'), 'dbl', 'double')
                 self.emit(f'double {v.name} = {self.dbl_expr(2)};')
+            elif r < 0.75:
+                v = Var(self.fresh('l'), 'flt', 'float')
+                self.emit(f'float {v.name} = d2f({self.dbl_expr(2)});')
             elif r < 0.9:
                 t, n = int_type(), R.randint(1, 5)
                 v = Var(self.fresh('l'), 'arr', t, n)
@@ -600,15 +637,18 @@ class Gen:
             r = R.random()
             if r < 0.7:
                 params.append(Var(self.fresh('a'), 'int', int_type()))
-            elif r < 0.85:
+            elif r < 0.8:
                 params.append(Var(self.fresh('a'), 'dbl', 'double'))
+            elif r < 0.85:
+                params.append(Var(self.fresh('a'), 'flt', 'float'))
             elif r < 0.93:
                 params.append(Var(self.fresh('a'), 'struct', R.choice(self.structs)))
             else:
                 ints = [v for v in self.globals if v.kind == 'int']
                 params.append(Var(self.fresh('a'), 'ptr', R.choice(ints).ty))
         r = R.random()
-        ret = int_type() if r < 0.6 else 'double' if r < 0.75 else 'void' if r < 0.9 else R.choice(self.structs)
+        ret = (int_type() if r < 0.6 else 'double' if r < 0.7 else 'float' if r < 0.75
+               else 'void' if r < 0.85 else R.choice(self.structs))
 
         def spell(t):
             return f'struct {t.name}' if isinstance(t, Struct) else t
@@ -628,6 +668,8 @@ class Gen:
             self.emit(f'return {R.choice(same)};' if same else f'return (struct {ret.name}){ret.init()};')
         elif ret == 'double':
             self.emit(f'return {self.dbl_expr(3)};')
+        elif ret == 'float':
+            self.emit(f'return d2f({self.dbl_expr(3)});')
         elif ret != 'void':
             self.emit(f'return {self.int_expr(4)[0]};')
         del self.scope[saved:]
@@ -650,7 +692,7 @@ class Gen:
                     if kind == 'arr':
                         for i in range(extra):
                             self.emit(f'pu((unsigned long){v.name}.{name}[{i}]);')
-                    elif kind == 'dbl':
+                    elif kind in ('dbl', 'flt'):
                         self.emit(f'pd({v.name}.{name});')
                     else:
                         self.emit(f'pu((unsigned long){v.name}.{name});')
