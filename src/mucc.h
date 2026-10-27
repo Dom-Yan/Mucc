@@ -675,6 +675,7 @@ bool is_integer(Type *ty);
 bool is_int128(Type *ty);
 bool is_complex(Type *ty);
 Type *complex_type(Type *part);
+extern bool any_complex_type;
 Type *complex_part(Type *ty);
 bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);

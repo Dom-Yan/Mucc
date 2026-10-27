@@ -3617,7 +3617,8 @@ Token *function(Token *tok, Type *basety, VarAttr *attr) {
     vla_cur->next = fn->body->body;
     fn->body->body = vla_head.next;
   }
-  fn->body = lower_complex(fn->body);
+  if (any_complex_type)
+    fn->body = lower_complex(fn->body);
   fn->locals = locals;
   leave_scope();
   resolve_goto_labels();

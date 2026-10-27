@@ -478,8 +478,12 @@ Type *struct_type(void) {
 // _Complex float, double or long double: laid out as a struct of the real
 // and imaginary parts, which is also how the psABI passes it (and
 // returns it, but for long double; see cgen.c). The parts have no names,
-// so `z.re` is an error; parser.c reaches them through `members`. There
+// so `z.re` is an error; complex.c reaches them through `members`. There
 // is one type for each part type, so they compare as the same.
+// any_complex_type says if one was made: if not, which is most programs,
+// the parser skips lower_complex().
+bool any_complex_type;
+
 Type *complex_type(Type *part) {
   static Type *types[3];
   int i = part->kind == TY_FLOAT ? 0 : part->kind == TY_DOUBLE ? 1 : 2;
@@ -488,6 +492,7 @@ Type *complex_type(Type *part) {
 
   Type *ty = new_type(TY_STRUCT, part->size * 2, part->align);
   ty->is_complex = true;
+  any_complex_type = true;
   Member *re = arena_alloc(sizeof(Member));
   Member *im = arena_alloc(sizeof(Member));
   re->ty = im->ty = part;
