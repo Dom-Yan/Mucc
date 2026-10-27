@@ -69,7 +69,7 @@ common changes go.</p>
   <tr><th>Stage</th><th>File</th><th>Does</th></tr>
   <tr><td>1</td><td><code>token.c</code></td><td>source text to tokens</td></tr>
   <tr><td>2</td><td><code>preprocess.c</code></td><td>macros, <code>#include</code>, <code>#if</code></td></tr>
-  <tr><td>3</td><td><code>parser.c</code>, <code>type.c</code></td><td>tokens to a typed syntax tree</td></tr>
+  <tr><td>3</td><td><code>parser.c</code> (with <code>init.c</code>, <code>expr.c</code>, <code>builtin.c</code>, <code>complex.c</code>, <code>warn.c</code>), <code>type.c</code></td><td>tokens to a typed syntax tree</td></tr>
   <tr><td>4</td><td><code>cgen.c</code>, <code>cgen_arm64.c</code></td><td>syntax tree to x86-64 or ARM64 assembly</td></tr>
   <tr><td>5</td><td><code>asm.c</code></td><td>assembly to an ELF object</td></tr>
   <tr><td>6</td><td><code>link.c</code></td><td>objects and archives to a static executable</td></tr>

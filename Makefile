@@ -9,11 +9,12 @@
 # -O2 makes the installed mucc about 40% faster than an unoptimized build.
 CFLAGS=-std=c11 -O2 -g -fno-common -Wall -Wno-switch
 
-# All compiler source is in src/. OBJNAMES is the bare object names
-# (main.o, ...), shared by the stage 1, 2 and 3 builds.
+# All compiler source is in src/, and HDRS its headers. OBJNAMES is the
+# bare object names (main.o, ...), shared by the stage 1, 2 and 3 builds.
 SRCS=$(wildcard src/*.c)
 OBJS=$(SRCS:.c=.o)
 OBJNAMES=$(notdir $(OBJS))
+HDRS=$(wildcard src/*.h)
 
 TEST_SRCS=$(wildcard test/*.c)
 
@@ -67,7 +68,7 @@ PREFIX=/usr/local
 mucc: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(OBJS): src/mucc.h
+$(OBJS): $(HDRS)
 
 test/%$(X).exe: mucc test/%.c $(COMMON)
 	./mucc --libc=$(LIBC) -Iinclude -Itest $(call test_flags,$*) -c -o test/$*$(X).o test/$*.c
@@ -137,7 +138,7 @@ difftest: mucc
 $(S2)/mucc: $(OBJNAMES:%=$(S2)/%)
 	$(link_mucc)
 
-$(S2)/%.o: mucc src/%.c src/mucc.h $(MUSL_DEP)
+$(S2)/%.o: mucc src/%.c $(HDRS) $(MUSL_DEP)
 	mkdir -p $(S2)/test
 	./mucc --libc=$(LIBC) -Iinclude -c -o $@ src/$*.c
 
@@ -156,7 +157,7 @@ $(S2)/script/%: $(S2)/mucc
 # If the compiler is truly self-hosting, the stage 2 compiler must produce
 # byte-for-byte the same object files as the stage 1 compiler did.
 
-$(S3)/%.o: $(S2)/mucc src/%.c src/mucc.h
+$(S3)/%.o: $(S2)/mucc src/%.c $(HDRS)
 	mkdir -p $(S3)
 	./$(S2)/mucc --libc=$(LIBC) -Iinclude -c -o $@ src/$*.c
 
@@ -262,7 +263,7 @@ build/files.o: mucc build/files.s
 build/mucc: $(OBJNAMES:%=build/obj/%) build/files.o
 	./mucc --libc=mucc $(LDFLAGS_SINGLE) -o $@ $^
 
-build/obj/%.o: mucc src/%.c src/mucc.h $(MUSL_BUILD)/lib/libc.a
+build/obj/%.o: mucc src/%.c $(HDRS) $(MUSL_BUILD)/lib/libc.a
 	mkdir -p build/obj
 	./mucc --libc=mucc -Iinclude -c -o $@ src/$*.c
 
@@ -273,7 +274,7 @@ build/files-%.s: mucc build/musl-%/lib/libc.a $(wildcard include/*.h include/sys
 build/files-%.o: mucc build/files-%.s
 	./mucc --target=$*-linux -c -o $@ build/files-$*.s
 
-build/mucc-%: mucc build/musl-%/lib/libc.a build/files-%.o $(SRCS) src/mucc.h
+build/mucc-%: mucc build/musl-%/lib/libc.a build/files-%.o $(SRCS) $(HDRS)
 	mkdir -p build/obj-$*
 	for f in $(OBJNAMES:.o=); do \
 	  ./mucc --target=$*-linux --libc=mucc -Iinclude -c -o build/obj-$*/$$f.o src/$$f.c || exit 1; \

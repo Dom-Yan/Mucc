@@ -1120,7 +1120,7 @@ static void parse_args(int argc, char **argv) {
     }
 
     // These make fabs a call to the library's again, not a builtin (see
-    // funcall() in parser.c), and are otherwise ignored, below.
+    // funcall() in expr.c), and are otherwise ignored, below.
     if (!strcmp(argv[i], "-fno-builtin") || !strncmp(argv[i], "-fno-builtin-fabs", 17) ||
         !strcmp(argv[i], "-ffreestanding"))
       opt_fno_builtin = true;

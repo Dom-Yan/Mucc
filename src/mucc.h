@@ -15,6 +15,8 @@
 //   1 token.c       source text -> Token list
 //   2 preprocess.c  Token list -> Token list, with macros expanded
 //   3 parser.c      Token list -> Obj (functions, globals) and Node (AST),
+//                   with init.c, expr.c, builtin.c, complex.c and warn.c
+//                   (see parser.h)
 //     type.c        typed by add_type()
 //   4 cgen.c        AST -> x86-64 assembly text (with what both share)
 //     cgen_arm64.c  AST -> ARM64 assembly text
@@ -44,13 +46,13 @@
 //                           it's used before the C library's own
 //   a command-line option   main.c "Argument parsing", parse_args(); one
 //                           that changes nothing goes in ignored_options[]
-//   a __builtin_ function   parser.c "GNU builtins": gnu_builtin_names[]
-//                           and gnu_builtin(); one that takes a type, in
-//                           "Primary expressions", primary()
+//   a __builtin_ function   builtin.c gnu_builtin_names[] and
+//                           gnu_builtin(); one that takes a type, in
+//                           expr.c "Primary expressions", primary()
 //   an __attribute__        parser.c "GNU attributes", apply_attribute()
 //                           and is_known_attribute()
-//   a warning               parser.c "Warnings"; a named one (-W<name>)
-//                           also in diag.c named_warnings[]
+//   a warning               warn.c; a named one (-W<name>) also in
+//                           diag.c named_warnings[]
 //   a new AST node kind     NodeKind below, type.c add_type(), and cgen.c
 //                           and cgen_arm64.c gen_expr() or gen_stmt()
 //   an x86 instruction      asm.c "Instructions", insns[]

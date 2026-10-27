@@ -1529,7 +1529,7 @@ static Token *embed(Token *hash, Token *tok) {
 
   // The bytes are one token, as a list "1,2,3" would be millions: an
   // initializer copies them into its data (see "Initializers" in
-  // parser.c), and elsewhere they become that list (expand_embed()). Its
+  // init.c), and elsewhere they become that list (expand_embed()). Its
   // place is the "embed" after the "#", so the token isn't taken for a
   // directive or a macro name.
   Token *bytes_tok = copy_token(hash->next);

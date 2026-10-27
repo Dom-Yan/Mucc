@@ -1334,7 +1334,7 @@ static void all_ones(int reg) {
 }
 
 // A cast to or from a vector keeps the bits (see check_vector_cast() in
-// parser.c), but for a number to a larger vector, which the parser makes
+// expr.c), but for a number to a larger vector, which the parser makes
 // only of a number of the element type: every element is it, as in `v + 1`.
 static void cast_vector(Type *from, Type *to) {
   if (is_vector(from) && is_vector(to))

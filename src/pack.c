@@ -898,10 +898,8 @@ int run_pack(int argc, char **argv) {
       costs[m].dist[i] = 6;
   }
   for (int pass = 0; pass < 2; pass++) {
-    for (int i = 0; i < nunits; i++) {
-      Unit *dict = dicts[units[i]->model];
+    for (int i = 0; i < nunits; i++)
       parse_unit(units[i], &costs[units[i]->model], dict_hash[units[i]->model]);
-    }
     for (int m = 0; m < NMODELS; m++)
       parse_unit(dicts[m], &costs[m], NULL);
     for (int m = 0; m < NMODELS; m++) {
