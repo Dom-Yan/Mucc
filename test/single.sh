@@ -99,7 +99,10 @@ check '-M'
 # A link its own linker can't do goes to the system's ld, which is given
 # copies of the embedded crt1.o, libc.a, ..., removed afterwards. (The
 # linker script places only .text: the program links, but wouldn't run.)
-if command -v ld > /dev/null; then
+# The system's ld links only for its own CPU, so a binary for another,
+# run under qemu, skips this.
+if command -v ld > /dev/null &&
+    [ "$(mucc -dumpmachine | cut -d- -f1)" = "$(uname -m)" ]; then
   mkdir $tmp/t
   echo 'int main(void) { return 3; }' > $tmp/m.c
   echo 'SECTIONS { . = 0x400000 + SIZEOF_HEADERS; .text : { *(.text*) } }' > $tmp/s.ld
