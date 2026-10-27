@@ -85,6 +85,7 @@ build scripts that pass them work. An unknown flag is an error.</p>
   <tr><td><code>-I</code>, <code>-isystem</code>, <code>-iquote</code>, <code>-idirafter</code>, <code>-nostdinc</code></td><td>Include directories</td></tr>
   <tr><td><code>-D</code>, <code>-U</code>, <code>-include</code>, <code>-imacros</code></td><td>Macros</td></tr>
   <tr><td><code>-dM -E</code></td><td>Print every macro defined at the end</td></tr>
+  <tr><td><code>-P</code></td><td>With <code>-E</code>, leave out the <code>#</code> line markers</td></tr>
   <tr><td><code>-Wp,<i>a</i>,<i>b</i></code></td><td>Pass options to the preprocessor</td></tr>
   <tr><td><code>-M</code>, <code>-MM</code>, <code>-MD</code>, <code>-MMD</code>, <code>-MF</code>, <code>-MT</code>, <code>-MQ</code>, <code>-MP</code>, <code>-MG</code></td><td>Dependency files</td></tr>
 </table></div>
@@ -110,7 +111,7 @@ build scripts that pass them work. An unknown flag is an error.</p>
 <div class="table-wrap"><table>
   <tr><th>Option</th><th>What it does</th></tr>
   <tr><td><code>-g</code>, <code>-g0</code></td><td>Debug info (DWARF) on or off</td></tr>
-  <tr><td><code>-fpic</code>, <code>-fPIC</code>, <code>-fno-pic</code></td><td>Position-independent code</td></tr>
+  <tr><td><code>-fpic</code>, <code>-fPIC</code>, <code>-fno-pic</code>, <code>-fno-PIC</code></td><td>Position-independent code</td></tr>
   <tr><td><code>--target=</code>, <code>-target</code></td><td>Build for x86-64 or ARM64 (any GNU triple)</td></tr>
   <tr><td><code>-msse3</code> to <code>-msse4.2</code>, <code>-maes</code>, <code>-mpclmul</code>, <code>-mpopcnt</code></td><td>Define gcc's macros for these extensions (<code>__SSE4_2__</code> and those before it, ...), so code takes its paths for them. The code mucc makes doesn't change.</td></tr>
   <tr><td><code>-march=</code>, <code>-mtune=</code>, <code>-mcpu=</code></td><td>Accepted, and change nothing: mucc only emits instructions every x86-64 (or ARMv8-A) CPU has, <code>-march=native</code> included</td></tr>
@@ -120,8 +121,8 @@ build scripts that pass them work. An unknown flag is an error.</p>
 <div class="table-wrap"><table>
   <tr><th>Option</th><th>What it does</th></tr>
   <tr><td><code>-Wa,<i>a</i>,<i>b</i></code>, <code>-Xassembler <i>a</i></code></td><td>Pass options to <code>as</code>. The built-in assembler takes none: it ignores <code>--noexecstack</code>, <code>-g</code> and <code>--64</code> quietly and warns about others.</td></tr>
-  <tr><td><code>-fno-integrated-as</code></td><td>Use the system's <code>as</code></td></tr>
-  <tr><td><code>-fno-as-fallback</code></td><td>Never use the system's <code>as</code>, even for what the built-in one doesn't know</td></tr>
+  <tr><td><code>-fno-integrated-as</code></td><td>Use the system's <code>as</code> (<code>-fintegrated-as</code>, the default, uses the built-in one)</td></tr>
+  <tr><td><code>-fno-as-fallback</code></td><td>Never use the system's <code>as</code>, even for what the built-in one doesn't know (<code>-fas-fallback</code> is the default)</td></tr>
 </table></div>
 
 <h2 id="linking">Linking<a class="anchor" href="#linking">&para;</a></h2>
@@ -139,9 +140,10 @@ build scripts that pass them work. An unknown flag is an error.</p>
 <h2 id="information">Information<a class="anchor" href="#information">&para;</a></h2>
 <div class="table-wrap"><table>
   <tr><th>Option</th><th>What it does</th></tr>
-  <tr><td><code>--version</code>, <code>-dumpversion</code>, <code>-dumpmachine</code></td><td>Version and target</td></tr>
+  <tr><td><code>--version</code>, <code>-dumpversion</code>, <code>-dumpfullversion</code>, <code>-dumpmachine</code></td><td>Version and target</td></tr>
+  <tr><td><code>--help</code></td><td>The most used options, and a link to this page</td></tr>
   <tr><td><code>-v</code>, <code>-###</code></td><td>Show what mucc runs</td></tr>
-  <tr><td><code>-print-search-dirs</code>, <code>-print-file-name=</code>, <code>-print-multiarch</code></td><td>Where mucc looks for things</td></tr>
+  <tr><td><code>-print-search-dirs</code>, <code>-print-file-name=</code>, <code>-print-prog-name=</code>, <code>-print-multiarch</code></td><td>Where mucc looks for things</td></tr>
 </table></div>
 
 <h2 id="tools">Tools<a class="anchor" href="#tools">&para;</a></h2>
