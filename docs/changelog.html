@@ -127,6 +127,14 @@ Downloads for each release are on the
     <a href="https://github.com/Dom-Yan/Mucc/issues/15">#15</a>).</li>
   <li><code>make bench SQLITE3_C=path/to/sqlite3.c</code> times SQLite's
     amalgamation too, with tcc if it's installed.</li>
+  <li><code>make fuzz</code> tests mucc with random programs until it's
+    stopped, against gcc, against itself for the other CPU, or with
+    broken input it must not crash on, and keeps what it finds
+    (<a href="contributing.html#fuzzing">Fuzzing</a>). The random
+    programs now have floats, and structs of only floating-point
+    members.</li>
+  <li>The parser, which was one file of 9,600 lines, is six, by topic
+    (<code>src/parser.h</code> lists them).</li>
   <li>A new license: Mucc is now under the Mucc License (was MIT).
     It's still free for any use, and programs built with mucc are
     unaffected, but works made from Mucc must credit Dom-Yan, keep
