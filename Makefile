@@ -136,6 +136,11 @@ MODE=diff
 fuzz: mucc $(if $(filter arch,$(MODE)),build/musl-aarch64/lib/libc.a)
 	test/fuzz.sh $(MODE)
 
+# The start of a day's work: what fuzzing found, make check, mucc's speed
+# against the last day, what to do next, then fuzzing. See test/daily.sh.
+daily: mucc
+	@$(if $(filter command line,$(origin MODE)),MODE=$(MODE)) test/daily.sh
+
 # Stage 2 (mucc compiled by mucc)
 #
 # Every stage 2 object depends on ./mucc, so stage 1 always builds first.
@@ -344,5 +349,5 @@ clean:
 	rm -f $(filter-out $(ASM_SOURCES),$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
-.PHONY: test t check fuzz clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
+.PHONY: test t check fuzz daily clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
   test-libc test-single test-programs test-bootstrap test-cross bench format

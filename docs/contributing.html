@@ -76,6 +76,7 @@ make -j check    # the tests and a short difftest, while working
 make -j test-all # plus self-hosting, musl, the single binary, and cross-compiling
 make difftest    # random programs, compared against gcc
 make fuzz        # the same, without end (see Fuzzing)
+make daily       # a day's start: fuzz finds, make check, speed, then fuzz
 make bench       # the numbers in Performance</code></pre>
 <p>With <code>-j</code> the tests run at once. Each prints one line, and
 all it printed only if it fails.</p>
