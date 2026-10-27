@@ -459,9 +459,33 @@ static void add_default_include_paths(char *argv0) {
 
 //---------- Argument parsing ------------------------------------------------
 
+// The usage line on an error; with --help (status 0), the options most
+// used too, and where the rest are.
 static void usage(int status) {
-  fprintf(stderr, "mucc [ -o <path> ] <file>\n");
-  exit(status);
+  if (status) {
+    fprintf(stderr, "mucc [ -o <path> ] <file>\n");
+    exit(status);
+  }
+  printf("Usage: mucc [options] file...\n"
+         "\n"
+         "  -o <file>              Write the output to <file>\n"
+         "  -c, -S, -E             Stop after compiling, after making assembly,\n"
+         "                         or after preprocessing\n"
+         "  -std=c17, -std=c23     The C standard (c17 is the default)\n"
+         "  -I, -D, -U             Include directories and macros\n"
+         "  -g                     Debug info for gdb\n"
+         "  -Wall, -Werror, -w     Warnings\n"
+         "  -l<lib>, -L<dir>       Libraries\n"
+         "  --libc=system          Link against the system's glibc, not the\n"
+         "                         bundled musl\n"
+         "  --target=aarch64-linux Make programs for the other CPU\n"
+         "                         (or x86_64-linux)\n"
+         "  -ar, -ranlib           mucc's archiver\n"
+         "  --version              The version\n"
+         "\n"
+         "mucc takes gcc's other options too. All of them:\n"
+         "https://dom-yan.github.io/Mucc/options.html\n");
+  exit(0);
 }
 
 static bool opt_v; // -v: print the version (and with no inputs, only that)

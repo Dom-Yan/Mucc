@@ -77,8 +77,8 @@ TMPDIR=$tmp/nothere $mucc -o $tmp/tmpdir $tmp/tmpdir.c 2>&1 |
     grep -q "cannot create a temporary file $tmp/nothere/mucc-"
 check 'TMPDIR'
 
-# --help
-$mucc --help 2>&1 | grep -q mucc
+# --help: the common options on stdout, and where the rest are
+$mucc --help 2> /dev/null | grep -q 'options.html' && $mucc --help > /dev/null
 check --help
 
 # --version
