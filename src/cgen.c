@@ -78,7 +78,7 @@ static bool free_memop(Node *node, MemOp *m);
 // Every line of assembly goes through println(). It used to call glibc's
 // vfprintf, which was about 30% of all compile time, so it has its own
 // small formatter that knows only what this file and cgen_arm64.c use:
-// %s, %c, %d, %u, %ld, %lu, %+ld, %Lf and %%. Anything else is an
+// %s, %c, %d, %u, %ld, %lu, %+ld, %Lg and %%. Anything else is an
 // internal error.
 
 // Makes room for n more bytes in out_buf.
@@ -155,13 +155,13 @@ void println(char *fmt, ...) {
     if (*p == '%') {
       *q++ = '%';
       p++;
-    } else if (*p == 's' || (p[0] == 'L' && p[1] == 'f')) {
+    } else if (*p == 's' || (p[0] == 'L' && p[1] == 'g')) {
       char *s;
       if (*p == 's') {
         s = va_arg(ap, char *);
         p++;
       } else {
-        s = format("%Lf", va_arg(ap, long double));
+        s = format("%Lg", va_arg(ap, long double));
         p += 2;
       }
       size_t n = strlen(s);
@@ -3169,20 +3169,20 @@ static void gen_expr(Node *node) {
     switch (node->ty->kind) {
     case TY_FLOAT: {
       union { float f32; uint32_t u32; } u = { *node->fval };
-      println("  mov $%u, %%eax  # float %Lf", u.u32, *node->fval);
+      println("  mov $%u, %%eax  # float %Lg", u.u32, *node->fval);
       println("  movq %%rax, %%xmm0");
       return;
     }
     case TY_DOUBLE: {
       union { double f64; uint64_t u64; } u = { *node->fval };
-      println("  mov $%lu, %%rax  # double %Lf", u.u64, *node->fval);
+      println("  mov $%lu, %%rax  # double %Lg", u.u64, *node->fval);
       println("  movq %%rax, %%xmm0");
       return;
     }
     case TY_LDOUBLE: {
       uint64_t u64[2];
       write_ldouble((char *)u64, *node->fval);
-      println("  mov $%lu, %%rax  # long double %Lf", u64[0], *node->fval);
+      println("  mov $%lu, %%rax  # long double %Lg", u64[0], *node->fval);
       println("  mov %%rax, -16(%%rsp)");
       println("  mov $%lu, %%rax", u64[1]);
       println("  mov %%rax, -8(%%rsp)");
