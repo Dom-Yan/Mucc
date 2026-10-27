@@ -75,6 +75,7 @@ make t T=arith   # one of them: test/arith.c (T=errors.sh: test/errors.sh)
 make -j check    # the tests and a short difftest, while working
 make -j test-all # plus self-hosting, musl, the single binary, and cross-compiling
 make difftest    # random programs, compared against gcc
+make fuzz        # the same, without end (see Fuzzing)
 make bench       # the numbers in Performance</code></pre>
 <p>With <code>-j</code> the tests run at once. Each prints one line, and
 all it printed only if it fails.</p>
@@ -93,6 +94,19 @@ undefined behavior, compiles each with mucc and with gcc, and compares what
 they print. Any difference is a bug. For ARM64, under qemu:</p>
 <pre><code>GCC='aarch64-linux-gnu-gcc -static' \
   MUCC='./mucc --target=aarch64-linux --libc=mucc' test/difftest.sh 2000</code></pre>
+
+<h3 id="fuzzing">Fuzzing<a class="anchor" href="#fuzzing">&para;</a></h3>
+<p><code>make fuzz</code> runs until Ctrl-C, and the next run starts where
+the last one stopped. Each bug it finds is a file in <code>fuzz/</code>,
+with a <code>.txt</code> that says what went wrong:</p>
+<pre><code>make fuzz             # mucc against gcc; a failure is shrunk by test/reduce.py
+make fuzz MODE=arch   # mucc for x86-64 against mucc for ARM64, under qemu
+make fuzz MODE=crash  # test/*.c broken at random: mucc must never crash or hang</code></pre>
+<p>To fix one, make the program in <code>fuzz/</code> a test, fix mucc
+until it passes, and run <code>make test-all</code>. When fuzzing finds
+nothing, the bugs left are in what the generator can't make yet. Teach it
+one thing from the list at the top of <code>test/gen_random.py</code>, or
+<code>test/mutate.py</code> a new way to break code, and fuzz again.</p>
 
 <h3 id="real-programs">Real Programs<a class="anchor" href="#real-programs">&para;</a></h3>
 <p><code>test/thirdparty/*.sh</code> each download a real program, build it

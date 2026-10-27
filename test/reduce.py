@@ -20,6 +20,8 @@ import sys
 import tempfile
 
 TMP = tempfile.mkdtemp(prefix='mucc-reduce-')
+# MUCC names another mucc, as in test/difftest.sh
+MUCC = os.environ.get('MUCC', './mucc').split()
 
 
 def run(cmd, timeout=10):
@@ -45,7 +47,7 @@ def interesting(lines):
     # the sanitizers below don't catch in C. (No -w here: it would
     # silence this error too.)
     g = build_and_run(['gcc', '-O0', '-Werror=return-type'], src, os.path.join(TMP, 'g'))
-    d = build_and_run(['./mucc'], src, os.path.join(TMP, 'd'))
+    d = build_and_run(MUCC, src, os.path.join(TMP, 'd'))
     if g is None or d is None or g == d:
         return False
 

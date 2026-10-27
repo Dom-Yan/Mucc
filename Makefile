@@ -129,6 +129,13 @@ N=300
 difftest: mucc
 	test/difftest.sh $(N)
 
+# Fuzzing that runs until Ctrl-C and resumes where it stopped: MODE=diff
+# (mucc against gcc), arch (x86-64 against ARM64) or crash (broken input
+# mustn't crash mucc). Bugs it finds go in fuzz/. See test/fuzz.sh.
+MODE=diff
+fuzz: mucc $(if $(filter arch,$(MODE)),build/musl-aarch64/lib/libc.a)
+	test/fuzz.sh $(MODE)
+
 # Stage 2 (mucc compiled by mucc)
 #
 # Every stage 2 object depends on ./mucc, so stage 1 always builds first.
@@ -337,5 +344,5 @@ clean:
 	rm -f $(filter-out $(ASM_SOURCES),$(wildcard test/*.s))
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
-.PHONY: test t check clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
+.PHONY: test t check fuzz clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
   test-libc test-single test-programs test-bootstrap test-cross bench format

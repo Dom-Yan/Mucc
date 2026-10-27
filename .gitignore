@@ -19,3 +19,4 @@ hello.c
 /stage3
 /build
 /difftest-failures
+/fuzz
