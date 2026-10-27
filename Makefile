@@ -323,6 +323,10 @@ uninstall:
 
 # Misc.
 
+# Formats the lines changed since HEAD (see .clang-format).
+format:
+	git clang-format HEAD -- src runtime
+
 # test/asm-forms.s, asm-forms-arm64.s and asm-directives.s are source
 # files (see test/asm.sh); other .s files in test/ are build output.
 ASM_SOURCES=test/asm-forms.s test/asm-forms-arm64.s test/asm-directives.s
@@ -333,4 +337,4 @@ clean:
 	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
 
 .PHONY: test t check clean test-stage2 selfhost install uninstall difftest libc libc-aarch64 libc-x86_64 \
-  test-libc test-single test-programs test-bootstrap test-cross bench
+  test-libc test-single test-programs test-bootstrap test-cross bench format

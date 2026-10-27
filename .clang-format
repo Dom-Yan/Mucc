@@ -1,0 +1,27 @@
+# Mucc's C style. Format the lines a change touches with `make format`
+# (git clang-format); hand-aligned tables are left as they are.
+BasedOnStyle: LLVM
+IndentWidth: 2
+ColumnLimit: 80
+UseTab: Never
+BreakBeforeBraces: Attach
+PointerAlignment: Right
+IndentCaseLabels: false
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Never
+AlignConsecutiveMacros: false
+AlignTrailingComments: {Kind: Leave}
+AlignOperands: Align
+AlignAfterOpenBracket: Align
+BinPackArguments: true
+BinPackParameters: true
+SortIncludes: Never
+ReflowComments: false
+SpaceBeforeParens: ControlStatements
+Cpp11BracedListStyle: true
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+IndentPPDirectives: None
